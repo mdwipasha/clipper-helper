@@ -1,0 +1,162 @@
+# Progress and ETA
+
+**Product requirement (D-15):** for every operation that can take more than ~2 seconds, the user must always be able to see **(1) what is happening, (2) how far along it is, (3) roughly how long is left, (4) what they can do about it** (cancel, wait, retry). No bare spinners.
+
+## 1. Principles
+
+1. **Honest over precise.** Show ranges or rounded values; say "Menghitung estimasi…" until the estimate is trustworthy.
+2. **Stage-based.** Operations are sequences of named stages; the user sees the current stage name and the overall bar.
+3. **Monotonic bar.** Overall progress never goes backwards; ETA may change but is damped.
+4. **Actionable errors.** Every error has a plain-language message and a next step (catalog §8).
+5. **Persistent.** Progress state survives window close/minimize; Windows toast on completion when the app is in the background.
+6. **One source of truth.** The Rust core computes progress and ETA; the UI renders what it receives.
+
+## 2. Operations and stages
+
+Default stage weights are *initial* estimates of time share on a mid-spec laptop; they are replaced by calibrated values (§4.3) after the first runs.
+
+### 2.1 `generate`
+| Stage id | User-facing text (id) | Work unit | Initial weight |
+|----------|----------------------|-----------|----------------|
+| `probe` | Memeriksa link video… | indeterminate (timeout 30 s) | 2% |
+| `download` | Mengunduh potongan video | bytes (estimated total) or media-seconds | 33% |
+| `prepare_preview` *(only if needed)* | Menyiapkan pratinjau | media-seconds | 5% |
+| `extract_audio` | Menyiapkan audio | media-seconds | 5% |
+| `transcribe` | Membuat transkrip ({model}) | audio-seconds | 50% |
+| `build` | Menyusun caption dan layout | indeterminate (<2 s) | 5% |
+
+### 2.2 `export`
+| Stage id | Text (id) | Unit | Weight |
+|----------|-----------|------|--------|
+| `ticket` | Memeriksa kredit & izin export… | indeterminate (approval request timeout 15 s; distinct from ticket TTL of 15 min) | 2% |
+| `analyze_audio` *(if normalize on)* | Menganalisis volume audio | media-seconds | 8% |
+| `render` | Merender video | output frames (or output-seconds) | 82% |
+| `verify` | Memeriksa hasil | indeterminate | 5% |
+| `finalize` | Menyimpan file | indeterminate | 3% |
+
+### 2.3 Others
+`model_download` (bytes), `component_update` (bytes per component), `app_update` (bytes), `first_run_benchmark` (steps: CPU probe, encoder test, speech test — "Menyiapkan aplikasi untuk laptop kamu", ≈10–30 s with step list).
+
+## 3. Event contract (Rust → UI)
+
+```ts
+type JobEvent = {
+  jobId: string; kind: 'generate' | 'export' | 'model_download' | 'component_update' | 'app_update' | 'benchmark';
+  state: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
+  stage: { id: string; index: number; count: number; labelKey: string; labelArgs?: Record<string, string | number> };
+  stageProgress: { done: number; total: number | null; unit: 'bytes' | 'media_seconds' | 'frames' | 'audio_seconds' | 'steps' };
+  overall: { percent: number };                           // 0..100, monotonic
+  rate?: { value: number; unit: string; smoothed: true }; // e.g. 6.2e6 bytes/s, 1.4 x realtime, 24 fps
+  eta?: { seconds: number; lowSeconds: number; highSeconds: number; confidence: 'low' | 'medium' | 'high' } | null;
+  detail?: Record<string, string | number>;               // e.g. {encoder:'h264_nvenc'}
+  error?: { code: string; messageKey: string; retryable: boolean; actionKeys: string[] };
+  ts: number;                                             // monotonic ms
+};
+```
+Emit rules: at most **4 events/second** per job (coalesce); always emit on stage/state change; emit a heartbeat every 2 s while running even if numbers did not change (so the UI can show "still working" and detect stalls).
+
+## 4. Measuring progress and estimating time
+
+### 4.1 Progress sources
+| Stage | How progress is read |
+|-------|----------------------|
+| `download` | Structured bytes from the downloader if available; otherwise FFmpeg `time=`/`-progress` output vs requested duration (spike S1 decides). Total bytes ≈ format bitrate × duration (flagged "perkiraan"). |
+| `extract_audio`, `analyze_audio`, `prepare_preview`, `render` | FFmpeg `-progress pipe:1`: `out_time_us` ÷ expected duration (render: `frame` ÷ total frames), plus `speed` and `fps`. |
+| `transcribe` | whisper.cpp `--print-progress` percent × audio duration. |
+| `model_download`, `component_update`, `app_update` | Bytes received ÷ `Content-Length` (verify hash after; resumable). |
+| indeterminate stages | Elapsed time + stage name; timeouts produce `E_*` errors. |
+
+### 4.2 ETA algorithm
+For the running stage *s* with total work `W`, done `D`:
+- Live rate `r_live` = EMA (α = 0.2) of instantaneous rate over 2 s windows (download uses median of last 10 s to resist bursts).
+- Prior rate `r_prior` = median of the last 10 `stage_stats` for this device profile and variant (model/encoder); if none, benchmark-derived; if none, built-in default table by device class.
+- Blend: `w = clamp((D/W) / 0.15, 0, 1)`; `r = w·r_live + (1−w)·r_prior` (after ≥3 s of data; before that use `r_prior`).
+- `remaining_s = (W − D) / r`.
+- Future stages: `remaining_k = W_k / r_prior_k`, where `W_k` is derived from known quantities (range duration, output duration, expected download size).
+- **ETA = Σ remaining** (running + future). Range: `[0.85·ETA, 1.3·ETA]` when confidence is low/medium, narrower when high.
+- **Confidence:** low until ≥10 s of data *and* ≥5% of the stage done *or* a calibrated prior exists; high when `r_live` has been stable (coefficient of variation < 0.25) for ≥20 s.
+- **Overall percent:** `Σ(completed stage weights) + weight_current × (D/W)`, with weights = calibrated expected time share. Clamped to be non-decreasing.
+
+### 4.3 Calibration
+After every completed stage, store `(device_profile, stage, variant, work_units, wall_ms)` in `stage_stats`. First-run benchmark seeds the priors. Telemetry (opt-in) may report `stage_ms` by device class to improve built-in defaults. Re-run benchmark after GPU driver/hardware change or from settings.
+
+## 5. Display rules
+
+| Rule | Behavior |
+|------|----------|
+| Refresh | UI updates ETA text at most 1×/s. |
+| Damping | Ignore ETA changes < 10% unless > 5 s; do not increase ETA by > 20% within 5 s unless the stage changed or a stall was detected. |
+| Rounding | < 10 s: "beberapa detik lagi" · 10–60 s: round to 5 s · 1–10 min: round to 15 s · > 10 min: round to 1 min. |
+| Low confidence | Show "Menghitung estimasi…" (first seconds) or a range: "sekitar 2–4 menit lagi". |
+| Stalls | No progress for 15 s while running: "Koneksi lambat / proses belum bergerak — masih mencoba…" with Cancel; 60 s: offer Retry. |
+| Totals unknown | Show indeterminate bar + elapsed time + stage name. |
+| Rate text | Download: "6,2 MB/dtk"; transcribe/render: "1,4× kecepatan normal" or "24 fps". |
+
+## 6. UI components
+
+1. **Operation panel** (in the flow screen): stage list with ✓ done / ● current / ○ upcoming; overall bar with %; line "Tahap 3 dari 5 · Membuat transkrip (Small) · 42% · sekitar 1 mnt 30 dtk lagi"; details toggle (rate, encoder/model, file size so far); **Batal** button.
+2. **Global activity tray** (top bar): compact chip per running job (icon, %, ETA) so users can navigate while it runs.
+3. **Toast / Windows notification** on success or failure when the window is not focused.
+4. **First-run wizard** with the benchmark and component downloads, each with its own bar.
+
+**Copy examples (id):**
+- Download: "Mengunduh potongan video · 42 MB dari ±118 MB · 6,2 MB/dtk · sekitar 15 dtk lagi"
+- Transcribe: "Membuat transkrip (model Small) · 1,3× kecepatan normal · sekitar 40 dtk lagi"
+- Render: "Merender video · frame 820 dari 1.800 · encoder NVIDIA (h264_nvenc) · sekitar 20 dtk lagi"
+- Ticket: "Memeriksa kredit… Export ini memakai 1 kredit (sisa 2)."
+- Done: "Selesai! File tersimpan di Videos\ClipperHelper. Buka folder · Salin caption & hashtag"
+
+## 7. Cancel, pause, resume
+
+| Stage | Cancel | Resume |
+|-------|--------|--------|
+| `probe` | Abort request | n/a |
+| `download` | Kill process tree; keep partial file | Resume from partial when supported, else restart stage |
+| `extract_audio`, `prepare_preview`, `analyze_audio` | Kill; delete temp output | Restart stage |
+| `transcribe` | Kill; discard partial (or keep whisper checkpoint if supported) | Restart stage (cache hit if finished earlier) |
+| `ticket` | Abort; if the server already processed it, the next attempt with the same idempotency key returns the same result | – |
+| `render` | Kill; delete temp output | Restart render (free: entitlement exists) |
+| `verify`/`finalize` | Not cancellable (very short) | – |
+
+Cancelling **after** a ticket was issued shows: "Kredit sudah dipakai untuk proyek ini. Kamu bisa export ulang gratis." A job interrupted by crash/reboot is offered for resume at next launch using the persisted `jobs` row.
+
+## 8. Error catalog
+
+User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists default actions.
+
+| Code | Meaning | Retryable | Actions |
+|------|---------|-----------|---------|
+| `E_NET_OFFLINE` | No internet | yes | Retry · Check connection |
+| `E_NET_TIMEOUT` | Request/download timed out | yes | Retry |
+| `E_YT_URL_INVALID` | Not a supported YouTube video URL | no | Fix link |
+| `E_YT_UNAVAILABLE` | Private, deleted, members-only, age-restricted or region-blocked | no | Try another video / local file |
+| `E_YT_LIVE_NOT_ENDED` | Stream still live (VOD not ready) | yes | Try again after the stream ends |
+| `E_YT_EXTRACT_FAILED` | Downloader can't read the video (platform changed) | yes | **Update downloader** · Retry · Use local file |
+| `E_YT_RATE_LIMITED` | Platform asked to slow down / verify | yes | Wait a few minutes · Retry |
+| `E_RANGE_INVALID` / `E_RANGE_TOO_LONG` | Start/end invalid or over the cap | no | Adjust range |
+| `E_DISK_LOW` / `E_DISK_FULL` | Not enough free space | yes | Free space · Clean cache |
+| `E_COMPONENT_MISSING` | Required sidecar/model missing or hash mismatch | yes | Repair (re-download) |
+| `E_MODEL_DOWNLOAD_FAILED` | Speech model download failed | yes | Retry (resumes) |
+| `E_TRANSCRIBE_FAILED` / `E_TRANSCRIBE_OOM` | Speech step failed / out of memory | yes | Switch to smaller model · Retry |
+| `E_ENCODER_UNAVAILABLE` | No working video encoder found after trying the full fallback chain (hardware → software) | yes (manual) | Update GPU driver · Install Media Feature Pack (Windows N/KN) · Export diagnostics |
+| `E_RENDER_FAILED` | FFmpeg error | yes | Retry (free) · Export diagnostics |
+| `E_VERIFY_FAILED` | Output failed post-render checks | yes | Review checklist · Retry |
+| `E_AUTH_EXPIRED` | Session expired | yes | Sign in again |
+| `E_NO_CREDITS` | Daily credits used up | no (until reset) | Buy pass · Show reset time |
+| `E_DEVICE_LIMIT` / `E_DEVICE_INVALID` | Too many devices / device revoked | no | Manage devices |
+| `E_DEVICE_LIMIT_FREE` | Free-tier cap for this PC reached | no | Sign in with your own account / buy pass |
+| `E_REEXPORT_CAP` | Too many re-exports of this clip today | no | Try tomorrow / contact support |
+| `E_ACCOUNT_SUSPENDED` | Account suspended | no | Contact support |
+| `E_APP_OUTDATED` | App below minimum version | yes | Update now |
+| `E_SERVER_UNAVAILABLE` | Backend down/maintenance | yes | Retry later |
+| `E_TICKET_INVALID` | Ticket failed verification (clock/tamper) | yes | Retry · Update app |
+| `E_PAYMENT_PENDING` / `E_PAYMENT_FAILED` / `E_PAYMENT_EXPIRED` | Checkout states | varies | Continue payment / Try again |
+| `E_TEMPLATE_INVALID` | Template/schema validation failed | no | Fix template |
+| `E_UNKNOWN` | Unexpected | yes | Retry · Export diagnostics |
+
+## 9. Testing the progress system
+
+- **ETA simulator:** feed recorded rate traces (steady, bursty, stalling, slow-start) into the estimator; assert monotonic percent, bounded ETA flapping, and error ≤ 25% at 30% progress on steady traces.
+- **Contract tests:** each stage emits `stage change → progress… → success/failure` with heartbeats; events ≤ 4/s.
+- **Fake sidecars:** scripts that print FFmpeg/whisper/yt-dlp style progress (and bad output) to test parsers, stalls and cancel.
+- **Manual checklist:** disconnect network mid-download; kill FFmpeg mid-render; fill the disk; cancel after ticket; reboot during generate; verify every state shows a clear message and a next step.
