@@ -1,0 +1,10 @@
+# yt-dlp failure fixture: deleted
+# URL: https://www.youtube.com/watch?v=dQw4w9WgXcX
+# Exit code: 1
+# Command: yt-dlp -J --no-playlist --no-warnings --ignore-config <url>
+
+--- STDOUT ---
+null
+
+--- STDERR ---
+ERROR: [youtube] dQw4w9WgXcX: This video is unavailable

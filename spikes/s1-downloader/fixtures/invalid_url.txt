@@ -1,0 +1,10 @@
+# yt-dlp failure fixture: invalid_url
+# URL: https://www.youtube.com/watch?v=XXXXXXXXXXX
+# Exit code: 1
+# Command: yt-dlp -J --no-playlist --no-warnings --ignore-config <url>
+
+--- STDOUT ---
+null
+
+--- STDERR ---
+ERROR: [youtube] XXXXXXXXXXX: This video is unavailable

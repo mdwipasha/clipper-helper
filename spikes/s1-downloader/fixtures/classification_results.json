@@ -1,0 +1,64 @@
+[
+  {
+    "name": "ongoing_live",
+    "url": "https://www.youtube.com/watch?v=QSPPyA1736U",
+    "classification": "E_NET_TIMEOUT",
+    "expected_code": "E_YT_LIVE_NOT_ENDED",
+    "match": false,
+    "timeout": true
+  },
+  {
+    "name": "members_only",
+    "url": "https://www.youtube.com/watch?v=KBdGeakRgqg",
+    "exit_code": 1,
+    "classification": "E_YT_UNAVAILABLE",
+    "stderr_summary": "ERROR: [youtube] KBdGeakRgqg: Join this channel to get access to members-only content like this video, and other exclusive perks.\n",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "name": "deleted",
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcX",
+    "exit_code": 1,
+    "classification": "E_YT_UNAVAILABLE",
+    "stderr_summary": "ERROR: [youtube] dQw4w9WgXcX: This video is unavailable\n",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "name": "private",
+    "url": "https://www.youtube.com/watch?v=_bHqBy5fmUM",
+    "exit_code": 1,
+    "classification": "E_YT_UNAVAILABLE",
+    "stderr_summary": "ERROR: [youtube] _bHqBy5fmUM: This video is unavailable\n",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "name": "age_restricted",
+    "url": "https://www.youtube.com/watch?v=6kLq3WMV1nU",
+    "exit_code": 1,
+    "classification": "E_YT_UNAVAILABLE",
+    "stderr_summary": "ERROR: [youtube] 6kLq3WMV1nU: Sign in to confirm your age. This video may be inappropriate for some users. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "name": "invalid_url",
+    "url": "https://www.youtube.com/watch?v=XXXXXXXXXXX",
+    "exit_code": 1,
+    "classification": "E_YT_UNAVAILABLE",
+    "stderr_summary": "ERROR: [youtube] XXXXXXXXXXX: This video is unavailable\n",
+    "expected_code": "E_YT_URL_INVALID",
+    "match": false
+  },
+  {
+    "name": "playlist_url",
+    "url": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+    "exit_code": 0,
+    "classification": "SUCCESS",
+    "stderr_summary": "",
+    "expected_code": "E_YT_URL_INVALID",
+    "match": false
+  }
+]
