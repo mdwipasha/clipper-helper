@@ -1,64 +1,83 @@
 [
   {
-    "name": "ongoing_live",
-    "url": "https://www.youtube.com/watch?v=QSPPyA1736U",
-    "classification": "E_NET_TIMEOUT",
+    "fixture": "members_only.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "classified_reason": "members_only",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "members_only",
+    "match": true
+  },
+  {
+    "fixture": "age_restricted.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "classified_reason": "age_restricted",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "age_restricted",
+    "match": true
+  },
+  {
+    "fixture": "ongoing_live.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_LIVE_NOT_ENDED",
+    "classified_reason": "ongoing_live",
     "expected_code": "E_YT_LIVE_NOT_ENDED",
-    "match": false,
-    "timeout": true
-  },
-  {
-    "name": "members_only",
-    "url": "https://www.youtube.com/watch?v=KBdGeakRgqg",
-    "exit_code": 1,
-    "classification": "E_YT_UNAVAILABLE",
-    "stderr_summary": "ERROR: [youtube] KBdGeakRgqg: Join this channel to get access to members-only content like this video, and other exclusive perks.\n",
-    "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "ongoing_live",
     "match": true
   },
   {
-    "name": "deleted",
-    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcX",
-    "exit_code": 1,
-    "classification": "E_YT_UNAVAILABLE",
-    "stderr_summary": "ERROR: [youtube] dQw4w9WgXcX: This video is unavailable\n",
+    "fixture": "private.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "classified_reason": "private",
     "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "private",
     "match": true
   },
   {
-    "name": "private",
-    "url": "https://www.youtube.com/watch?v=_bHqBy5fmUM",
-    "exit_code": 1,
-    "classification": "E_YT_UNAVAILABLE",
-    "stderr_summary": "ERROR: [youtube] _bHqBy5fmUM: This video is unavailable\n",
+    "fixture": "deleted.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "classified_reason": "deleted",
     "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "deleted",
     "match": true
   },
   {
-    "name": "age_restricted",
-    "url": "https://www.youtube.com/watch?v=6kLq3WMV1nU",
-    "exit_code": 1,
-    "classification": "E_YT_UNAVAILABLE",
-    "stderr_summary": "ERROR: [youtube] 6kLq3WMV1nU: Sign in to confirm your age. This video may be inappropriate for some users. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https",
+    "fixture": "region_blocked.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "classified_reason": "region_blocked",
     "expected_code": "E_YT_UNAVAILABLE",
+    "expected_reason": "region_blocked",
     "match": true
   },
   {
-    "name": "invalid_url",
-    "url": "https://www.youtube.com/watch?v=XXXXXXXXXXX",
-    "exit_code": 1,
-    "classification": "E_YT_UNAVAILABLE",
-    "stderr_summary": "ERROR: [youtube] XXXXXXXXXXX: This video is unavailable\n",
+    "fixture": "premiere_not_started.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_LIVE_NOT_ENDED",
+    "classified_reason": "premiere_not_started",
+    "expected_code": "E_YT_LIVE_NOT_ENDED",
+    "expected_reason": "premiere_not_started",
+    "match": true
+  },
+  {
+    "fixture": "bot_challenge.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_EXTRACT_FAILED",
+    "classified_reason": "bot_challenge",
+    "expected_code": "E_YT_EXTRACT_FAILED",
+    "expected_reason": "bot_challenge",
+    "match": true
+  },
+  {
+    "fixture": "invalid_url.txt",
+    "status": "VERIFIED",
+    "classified_code": "E_YT_URL_INVALID",
+    "classified_reason": "unsupported_domain",
     "expected_code": "E_YT_URL_INVALID",
-    "match": false
-  },
-  {
-    "name": "playlist_url",
-    "url": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
-    "exit_code": 0,
-    "classification": "SUCCESS",
-    "stderr_summary": "",
-    "expected_code": "E_YT_URL_INVALID",
-    "match": false
+    "expected_reason": "unsupported_domain",
+    "match": true
   }
 ]
