@@ -39,7 +39,7 @@ When code and docs disagree, fix one of them **in the same PR**.
 | D-09 | **No automatic refunds.** Failed/cancelled exports are retried free via the entitlement; admins can adjust | Removes refund-abuse paths. |
 | D-10 | **Supabase (Singapore)** is authoritative for auth, plans, credits, payments. App verifies **signed export tickets** | Server owns money; client never trusted. |
 | D-11 | **LGPL FFmpeg build + hardware encoders first**; x264 only after legal review | Licensing safety (see ARCHITECTURE §15). |
-| D-12 | **yt-dlp + JS runtime (Deno)** as downloader, updated independently via a signed manifest | YouTube breaks extractors often; the downloader must be hot-updatable. |
+| D-12 | **yt-dlp + QuickJS-NG JS runtime** as downloader, updated independently via a signed manifest | YouTube breaks extractors often; the downloader must be hot-updatable. QuickJS-NG (MIT, 1.87 MB) chosen in S1; Deno may ship later as a fallback via signed manifest. |
 | D-13 | Preview via **official YouTube embed through a bridge page**, with storyboard-thumbnail fallback; verified in spike S2 | Compliant preview without downloading the full VOD. |
 | D-14 | A versioned **Composition JSON** is the single source of truth for preview and render | Guarantees preview == export; testable. |
 | D-15 | Every long operation must show **stage, progress and time estimate** | Product requirement; see PROGRESS_AND_ETA.md. |
@@ -81,4 +81,4 @@ clipper-helper/
 | Entitlement | Server record that a user already paid for specific segments of a source video |
 | Export ticket | Short-lived, server-signed permission to render one composition |
 | Pass | 30-day paid plan with a higher daily credit allowance |
-| Sidecar | External binary shipped/managed by the app (yt-dlp, FFmpeg, whisper.cpp, Deno) |
+| Sidecar | External binary shipped/managed by the app (yt-dlp, FFmpeg, whisper.cpp, QuickJS-NG) |

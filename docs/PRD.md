@@ -58,7 +58,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | FR-SRC-1 | M | Accept `watch`, `live`, `shorts`, `youtu.be` URLs; normalize to a video id. Playlists/channels rejected with a clear message. |
 | FR-SRC-2 | M | Fetch metadata (title, channel, duration, thumbnail, live state). Specific messages for: ongoing live, private/deleted, members-only, age-restricted, region-blocked, premiere not started. |
 | FR-SRC-3 | M | Preview with the official player (embed) with current-time readout. If embedding fails, fall back to storyboard thumbnails + timecode inputs. |
-| FR-SRC-4 | M | Range picker: "set start/end here", timecode inputs, ±1 s/±5 s nudges, shows duration. Max range **10 min** *(config)*. Validates 0 ≤ start < end ≤ video duration. |
+| FR-SRC-4 | M | Range picker: "set start/end here", timecode inputs, ±1 s/±5 s nudges, shows duration. Max range **10 min** *(config)*. Validates 0 ≤ start < end ≤ video duration. Displays estimated download time at range selection: "Perkiraan unduh: ~N menit" (based on measured download rate × range duration). |
 | FR-SRC-5 | S | Open a local video file as the source; same flow after range. Serves as resilience when the downloader breaks. **Decision rule (Q4):** after S1, if the downloader shows fragility (frequent extractor failures or throttling), promote to Must and schedule in M2; otherwise first post-MVP item. |
 
 ### Generate
@@ -141,7 +141,7 @@ Targets marked ◇ are **provisional** until the M0 benchmark on a representativ
 | Area | Requirement |
 |------|-------------|
 | Responsiveness | Cold start to interactive ≤ 3 s ◇. UI never blocks on sidecars. |
-| Throughput | Provisional goals ◇: transcript ≈ real-time or faster with the default model on mid-spec; 60 s export ≲ 2× real-time with hardware encoding. |
+| Throughput | Provisional goals ◇: download ≈ 1.8–1.9× real-time in copy mode (measured on DEV fiber: 10 min range ≈ 5 min; mid-spec TBD; optimization open in S1c); transcript ≈ real-time or faster with the default model on mid-spec; 60 s export ≲ 2× real-time with hardware encoding. |
 | Progress clarity | Every operation > 2 s shows stage, progress and ETA (see PROGRESS_AND_ETA.md). |
 | Reliability | Jobs resumable after crash/reboot; no corrupt outputs (write temp → verify → move). |
 | Resource use | Heavy stages limited to hardware-appropriate concurrency; editor ≲ 600 MB RAM ◇. |

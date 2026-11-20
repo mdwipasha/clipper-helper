@@ -19,7 +19,7 @@ Default stage weights are *initial* estimates of time share on a mid-spec laptop
 | Stage id | User-facing text (id) | Work unit | Initial weight |
 |----------|----------------------|-----------|----------------|
 | `probe` | Memeriksa link video… | indeterminate (timeout 30 s) | 2% |
-| `download` | Mengunduh potongan video | bytes (estimated total) or media-seconds | 33% |
+| `download` | Mengunduh potongan video | media-seconds (startup 6–11 s is indeterminate: "Menyiapkan unduhan…") | 33% |
 | `prepare_preview` *(only if needed)* | Menyiapkan pratinjau | media-seconds | 5% |
 | `extract_audio` | Menyiapkan audio | media-seconds | 5% |
 | `transcribe` | Membuat transkrip ({model}) | audio-seconds | 50% |
@@ -60,7 +60,7 @@ Emit rules: at most **4 events/second** per job (coalesce); always emit on stage
 ### 4.1 Progress sources
 | Stage | How progress is read |
 |-------|----------------------|
-| `download` | Structured bytes from the downloader if available; otherwise FFmpeg `time=`/`-progress` output vs requested duration (spike S1 decides). Total bytes ≈ format bitrate × duration (flagged "perkiraan"). |
+| `download` | FFmpeg `time=`/`speed=` output parsed from yt-dlp's internal FFmpeg invocation (≈1.4–1.9 events/s in copy mode). The 6–11 s startup (extraction + JS challenge resolution) is indeterminate — show "Menyiapkan unduhan…". Total duration = requested range duration. Reference implementation: `spikes/s1-downloader/progress_parser.py` (spec for Rust parser; port its unit-test cases). |
 | `extract_audio`, `analyze_audio`, `prepare_preview`, `render` | FFmpeg `-progress pipe:1`: `out_time_us` ÷ expected duration (render: `frame` ÷ total frames), plus `speed` and `fps`. |
 | `transcribe` | whisper.cpp `--print-progress` percent × audio duration. |
 | `model_download`, `component_update`, `app_update` | Bytes received ÷ `Content-Length` (verify hash after; resumable). |
@@ -111,14 +111,14 @@ After every completed stage, store `(device_profile, stage, variant, work_units,
 | Stage | Cancel | Resume |
 |-------|--------|--------|
 | `probe` | Abort request | n/a |
-| `download` | Kill process tree; keep partial file | Resume from partial when supported, else restart stage |
+| `download` | Kill process tree; delete partial file (.part) | Restart stage (download is NOT resumable; restart overwrites the .part file from scratch) |
 | `extract_audio`, `prepare_preview`, `analyze_audio` | Kill; delete temp output | Restart stage |
 | `transcribe` | Kill; discard partial (or keep whisper checkpoint if supported) | Restart stage (cache hit if finished earlier) |
 | `ticket` | Abort; if the server already processed it, the next attempt with the same idempotency key returns the same result | – |
 | `render` | Kill; delete temp output | Restart render (free: entitlement exists) |
 | `verify`/`finalize` | Not cancellable (very short) | – |
 
-Cancelling **after** a ticket was issued shows: "Kredit sudah dipakai untuk proyek ini. Kamu bisa export ulang gratis." A job interrupted by crash/reboot is offered for resume at next launch using the persisted `jobs` row.
+Cancelling during `download` warns: "Proses unduh akan dihentikan dan harus diulang dari awal jika dilanjutkan." Cancelling **after** a ticket was issued shows: "Kredit sudah dipakai untuk proyek ini. Kamu bisa export ulang gratis." A job interrupted by crash/reboot is offered for resume at next launch using the persisted `jobs` row (non-resumable stages like download restart from 0%).
 
 ## 8. Error catalog
 
@@ -129,10 +129,11 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_NET_OFFLINE` | No internet | yes | Retry · Check connection |
 | `E_NET_TIMEOUT` | Request/download timed out | yes | Retry |
 | `E_YT_URL_INVALID` | Not a supported YouTube video URL | no | Fix link |
-| `E_YT_UNAVAILABLE` | Private, deleted, members-only, age-restricted or region-blocked | no | Try another video / local file |
-| `E_YT_LIVE_NOT_ENDED` | Stream still live (VOD not ready) | yes | Try again after the stream ends |
-| `E_YT_EXTRACT_FAILED` | Downloader can't read the video (platform changed) | yes | **Update downloader** · Retry · Use local file |
-| `E_YT_RATE_LIMITED` | Platform asked to slow down / verify | yes | Wait a few minutes · Retry |
+| `E_YT_UNAVAILABLE` | Video unavailable on YouTube. Carries a `reason` enum (`members_only` \| `age_restricted` \| `region_blocked` \| `private` \| `deleted` \| `unknown`) to choose the exact Indonesian message per PRD FR-SRC-2 | no | Try another video / local file |
+| `E_YT_LIVE_NOT_ENDED` | Stream still live or premiere not started (VOD not ready) | yes | Try again after the stream ends |
+| `E_YT_BOT_CHECK` | "Sign in to confirm you're not a bot" anti-bot challenge | no (not immediately) | Wait a few minutes · Change network/VPN · (Not fixed by updating downloader) |
+| `E_YT_RATE_LIMITED` | Platform rate limit / HTTP 403 or 429 (after silent re-probe retry fails) | yes | Wait a few minutes · Retry |
+| `E_YT_EXTRACT_FAILED` | Downloader can't read the video (unknown classification falls here; raw text in redacted logs only) | yes | **Update downloader** · Retry · Use local file |
 | `E_RANGE_INVALID` / `E_RANGE_TOO_LONG` | Start/end invalid or over the cap | no | Adjust range |
 | `E_DISK_LOW` / `E_DISK_FULL` | Not enough free space | yes | Free space · Clean cache |
 | `E_COMPONENT_MISSING` | Required sidecar/model missing or hash mismatch | yes | Repair (re-download) |
@@ -153,6 +154,16 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_PAYMENT_PENDING` / `E_PAYMENT_FAILED` / `E_PAYMENT_EXPIRED` | Checkout states | varies | Continue payment / Try again |
 | `E_TEMPLATE_INVALID` | Template/schema validation failed | no | Fix template |
 | `E_UNKNOWN` | Unexpected | yes | Retry · Export diagnostics |
+
+### 8.1 YouTube error classification
+1. **Probe JSON first:** inspect `availability` and `live_status`:
+   - `is_upcoming` or ongoing live → `E_YT_LIVE_NOT_ENDED`
+   - Explicit unavailable flags → `E_YT_UNAVAILABLE` with corresponding `reason` (`members_only`, `age_restricted`, `region_blocked`, `private`, `deleted`)
+2. **Stderr patterns:**
+   - Anti-bot verification ("Sign in to confirm you're not a bot") → `E_YT_BOT_CHECK`
+   - HTTP 403 / 429 during download → silently re-probe once; if retry fails → `E_YT_RATE_LIMITED`
+3. **Fallback:**
+   - Any unrecognized extractor error → `E_YT_EXTRACT_FAILED`, saving raw output strictly to redacted local logs (never in user-facing UI or network telemetry).
 
 ## 9. Testing the progress system
 

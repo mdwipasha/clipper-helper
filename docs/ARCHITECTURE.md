@@ -6,7 +6,7 @@
 flowchart LR
   subgraph PC["User's Windows PC"]
     UI["React UI (WebView2)"] <--> CORE["Rust core (Tauri 2)"]
-    CORE --> YTDLP["yt-dlp + JS runtime (Deno)"]
+    CORE --> YTDLP["yt-dlp + JS runtime (QuickJS-NG)"]
     CORE --> FFMPEG["FFmpeg / ffprobe"]
     CORE --> WHISPER["whisper.cpp"]
     CORE --> SQLITE[("SQLite")]
@@ -47,7 +47,7 @@ flowchart LR
 | Typed IPC | Rust-generated TS bindings (e.g. tauri-specta) | One source of truth for commands/events. |
 | Local DB | SQLite (rusqlite or sqlx) | Projects, jobs, artifacts index, ETA stats, outbox. |
 | Secure storage | Windows Credential Manager (`keyring` crate) | Refresh tokens, device secret. |
-| Downloader | **yt-dlp** sidecar + **Deno** JS runtime | YouTube now needs an external JS runtime for full support; yt-dlp supports Deno (enabled by default), QuickJS and Node (`--js-runtimes` to select); Bun support is deprecated by yt-dlp — do not use Bun. The QuickJS evaluation in S1 stays (smaller binary). Verify runtime support against current yt-dlp docs at pin time. |
+| Downloader | **yt-dlp** sidecar + **QuickJS-NG** JS runtime | Approach A (`--download-sections`, copy mode) chosen in S1. `--force-keyframes-at-cuts` is **forbidden** (with an LGPL FFmpeg it silently falls back to the mpeg4 encoder). Official `yt-dlp.exe` release (bundles EJS); pin version `2026.10.26` + SHA-256 (`f5389d…7a7d`). QuickJS-NG (`qjs.exe` v0.18.0, MIT, 1.87 MB) via `--js-runtimes "quickjs:<bin_dir>\qjs.exe"`. Deno is **not** bundled but may ship later as a fallback JS runtime via the signed component manifest. Node is supported. Bun is deprecated by yt-dlp — do not use. |
 | Media | **FFmpeg + ffprobe** sidecars (LGPL build) | Cut, reframe, burn-in ASS captions, encode, probe. |
 | Speech-to-text | **whisper.cpp** sidecar (CPU build; optional Vulkan build) | Local, MIT, good Indonesian support; model chosen by hardware probe. |
 | Captions | ASS subtitles burned by FFmpeg (libass); preview with the same renderer (e.g. libass-WASM/JASSUB) | Preview == export. |
@@ -97,8 +97,8 @@ flowchart LR
 | Stage | Tool | Work unit | Cache key |
 |-------|------|-----------|-----------|
 | probe | yt-dlp `-J` | – (indeterminate, ≤30 s timeout) | – |
-| download | yt-dlp `--download-sections` *or* resolver + own FFmpeg (decided in spike S1) | bytes (estimate from format bitrate × duration) or media-seconds | sha256(provider, video_id, start, end, format selector) |
-| prepare preview | FFmpeg (only if codec not playable in WebView2) | media-seconds | sha256(source artifact, preset) |
+| download | yt-dlp `--download-sections` (copy mode); reuses probe JSON via `--load-info-json` (saves ~6 s extraction). Probe JSON is a **temp file** (contains signed URLs, ~6 h TTL) — delete after the stage, never log or sync. On 403 from URL expiry: silent re-probe once and retry; only then surface `E_YT_RATE_LIMITED`. | media-seconds (from FFmpeg `time=`/`speed=` output, ~1.4–1.9 ev/s; 6–11 s startup is indeterminate — show "Menyiapkan unduhan…") | sha256(provider, video_id, start, end, format selector) |
+| prepare preview | FFmpeg (only when source codec is not H.264/AAC — e.g. VP9/AV1-only sources); proxy transcode via `h264_mf` at an explicit bitrate (placeholder for S1c/S4). Final export always uses the original file. | media-seconds | sha256(source artifact, preset) |
 | extract audio | FFmpeg → 16 kHz mono WAV | media-seconds | sha256(source artifact) |
 | transcribe | whisper.cpp (`--print-progress`) | audio-seconds | sha256(audio, model, language, vad) |
 | build | Rust | – (<2 s) | – |
@@ -106,7 +106,8 @@ flowchart LR
 Rules:
 - **One generate at a time.** Heavy stages run with hardware-appropriate concurrency (default 1).
 - Download format preference: H.264 ≤1080p + AAC (plays natively in WebView2, no proxy). Fall back to other codecs + proxy.
-- Padding: request the range ±2 s so keyframe alignment cannot clip the requested moment; store `sourceOffsetMs` so segments map back to **absolute VOD time** (needed by entitlements).
+- Copy-mode output may contain pre-roll packets before the requested start (negative PTS, discard flag). The exact relationship between file t=0 and absolute VOD time (`absoluteStartMs`) is **PENDING verification in S1c** — keep it marked unverified. Store `absoluteStartMs` for VOD-time mapping. Keep a configurable **±5 s** of "editing handles" around the chosen range for trim fine-tuning.
+- Copy-mode download measured at **~1.8–1.9× real-time** on fast fiber (DEV machine; mid-spec TBD). YouTube-side pacing appears to be the bottleneck. Optimization open (S1c).
 - Failures are stage-scoped; retry resumes from the last good artifact.
 
 ### 5.2 Export (credit-gated)
@@ -134,8 +135,10 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 ## 6. YouTube source handling
 
 - **URL intake:** parse in Rust; allow only `youtube.com`, `www.youtube.com`, `m.youtube.com`, `youtu.be`; extract an 11-char video id; build the canonical `https://www.youtube.com/watch?v=<id>` URL. Never pass user text to a shell.
-- **yt-dlp flags (baseline, confirm in S1):** `--no-playlist --no-warnings --newline --ignore-config`, JS runtime pointed at the bundled Deno, `--ffmpeg-location` pointed at the bundled FFmpeg, format selector preferring `avc1`+`m4a` ≤1080p.
-- **Progress observability:** sectioned downloads go through FFmpeg and may not produce structured byte progress. Spike S1 picks between (A) yt-dlp downloads sections and we parse its output, or (B) yt-dlp only **resolves** URLs and our FFmpeg downloads with `-progress pipe:1` (precise `out_time`). Choice criterion #1: reliable progress + ETA. Beware YouTube throttling of un-chunked requests when using (B).
+- **yt-dlp flags:** `--no-playlist --no-warnings --newline --ignore-config`, `--js-runtimes "quickjs:<bin_dir>\qjs.exe"`, `--ffmpeg-location <bin_dir>`, `--load-info-json <probe_json>` (reuses the `-J` output), format selector `bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/b[vcodec^=avc1][height<=1080]/bv*[height<=1080]+ba/b[height<=1080]`, `--download-sections "*<start>-<end>"`. **Never** pass `--force-keyframes-at-cuts` (see §3).
+- **Probe/download split:** probe with yt-dlp `-J`, save output to a temporary workspace file, and reuse it for download via `--load-info-json` (saves ~6 s extraction and challenge execution). The JSON contains signed URLs that expire (~6 h TTL): keep it strictly as a temp file in the workspace, delete it after the stage, and never log or sync it. On a 403 HTTP error during download caused by expired URLs, silently re-probe once and retry; only surface `E_YT_RATE_LIMITED` if the retry also fails.
+- **Progress observability (S1 decision — Approach A):** yt-dlp's internal FFmpeg emits `time=`/`speed=` lines at ~1.4–1.9 events/s in copy mode. The 6–11 s startup (extraction + JS challenge resolution) is indeterminate. Reference implementation: `spikes/s1-downloader/progress_parser.py` (port to Rust with the same unit-test cases).
+- **Preview proxy for non-AVC1 sources:** when the downloaded stream is not H.264/AAC (e.g. VP9/AV1-only streams), generate a preview proxy with FFmpeg using `h264_mf` at an explicit bitrate (`-b:v <bitrate>` placeholder: exact value to come from S1c/S4). The editor and UI preview play this proxy; final export always renders from the original source file. In the Generate stage table (§5.1), `prepare_preview` applies only to this case.
 - **Preview strategy (priority order):**
   1. **Official embed through a bridge page** on our own HTTPS origin (`player.<domain>`), loaded in an iframe inside the app. It wraps the IFrame API and relays `currentTime/duration/state` via `postMessage`. Rationale: YouTube embeds fail with "Error 153" when the embedding page sends no acceptable Referer/origin; custom app schemes are a known trigger. The bridge supplies a real HTTPS origin and `referrerpolicy="strict-origin-when-cross-origin"`; consider `youtube-nocookie.com`.
   2. **Storyboard thumbnails** (sprite sheets listed by yt-dlp metadata) + timecode inputs — no video playback.
@@ -144,7 +147,7 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 
 ## 7. Composition and render
 
-- **Composition JSON** (DATA_MODEL §7) is canonical: sources, timeline segments (source-relative ms + absolute offset), layout, captions (word timings), overlays, audio, template reference. Coordinates are **normalized 0–1** so they are resolution-independent.
+- **Composition JSON** (DATA_MODEL §7) is canonical: sources, timeline segments (source-relative ms + absolute offset), layout, captions (word timings), overlays, audio, template reference. Coordinates are **normalized 0–1** so they are resolution-independent. Time mapping note: copy-mode downloads may contain pre-roll packets before the requested start (negative PTS, discard flag); the exact meaning of file t=0 versus absolute VOD time (`absoluteStartMs`) is PENDING verification in S1c (unverified). Timeline segments map back to absolute VOD time via `absoluteStartMs` for entitlement matching.
 - **Canonicalization + hash:** keys sorted, numbers normalized → `comp_hash` (SHA-256). Included in the export ticket.
 - **Render builder (Rust):** composition → FFmpeg filtergraph + ASS file.
   - `fill`: crop rect → scale to 1080×1920.
@@ -173,7 +176,7 @@ First run (and "Re-run benchmark" in settings): probe CPU model/cores/AVX2, RAM,
 
 ```
 %LOCALAPPDATA%\ClipperHelper\
-├─ bin\        # versioned sidecars (yt-dlp, deno, ffmpeg, whisper) + manifest cache
+├─ bin\        # versioned sidecars (yt-dlp, quickjs, ffmpeg, whisper) + manifest cache
 ├─ models\     # speech models (sha256-verified)
 ├─ cache\      # content-addressed artifacts (downloads, audio, transcripts, proxies, waveforms)
 ├─ projects\   # per-project folder: composition.json, thumbnails
@@ -247,7 +250,8 @@ Cost drivers: Supabase plan, CDN requests, Sentry volume, payment fees. No per-m
 |-----------|---------|-------------------|
 | Tauri, React, Tailwind, Zustand, TanStack Query | MIT/Apache-2.0 | Notices in About screen. |
 | yt-dlp | Unlicense | Platform ToS risk is separate from copyright license (see PRD risks). |
-| Deno | MIT | Large binary; evaluate QuickJS as a smaller supported alternative in S1. |
+| Deno | MIT | Not bundled in MVP; may ship later as a fallback JS runtime via the signed component manifest. |
+| QuickJS-NG | MIT | Bundled JS runtime for yt-dlp (`qjs.exe`, 1.87 MB). Pin version + SHA-256 in component manifest. |
 | whisper.cpp + OpenAI Whisper weights | MIT | Verify model file checksums; keep notices. |
 | FFmpeg | **LGPL-2.1+ or GPL depending on build** | **Decision D-11:** ship an **LGPL build** without GPL libraries; call it as a separate process; include license text and a way to obtain the corresponding source for the exact build; confirm the build has libass/freetype/fontconfig (ISC/FTL-class licenses) and no `--enable-gpl`/`--enable-nonfree`. |
 | x264 / x265 | GPL | **Not bundled** unless legal review approves (also consider H.264 patent licensing). Hardware encoders (NVENC/QSV/AMF) and Windows Media Foundation encode avoid shipping an encoder. |

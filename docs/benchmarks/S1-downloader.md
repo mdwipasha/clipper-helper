@@ -1,8 +1,8 @@
 # Spike S1 Benchmark & Decision: Downloader & JS Runtime
 
 **Status:** Completed  
-**Date:** 2026-11-19  
-**Tested on:** Windows 10/11 x64  
+**Date:** 2026-11-19 (Extended with S1b on 2026-11-20)  
+**Tested on:** DEV Machine (Windows 11 Pro, AMD Ryzen 5 PRO 5650U, 32 GB RAM, Biznet Optical Fiber — *not the mid-spec target laptop profile*)  
 **Target video:** `https://www.youtube.com/watch?v=QOJIILaJKNc` (Replay Live Stream VOD, 1080p60 avc1 + m4a)
 
 ---

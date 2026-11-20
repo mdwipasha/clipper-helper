@@ -19,7 +19,8 @@ Milestones are ordered by **dependency and risk**, not by dates. Do not start a 
 
 | Spike | Question | Output / decision |
 |-------|----------|-------------------|
-| **S1 Downloader** | Does `yt-dlp --download-sections` give reliable progress and fast ranged downloads on the target network? Or is "resolve with yt-dlp, download with our FFmpeg" better? Is Deno needed/what size? QuickJS viable? Can yt-dlp failures be classified into private / members-only / age-restricted / region-blocked / deleted / premiere-not-started / ongoing-live? | Chosen approach (A/B), pinned yt-dlp+runtime versions, progress parser, format selector, download speed/throttling notes, sample yt-dlp error outputs saved as text fixtures to drive `E_YT_*` mapping tests |
+| **S1 Downloader** *(done)* | Does `yt-dlp --download-sections` give reliable progress and fast ranged downloads on the target network? Or is "resolve with yt-dlp, download with our FFmpeg" better? Is Deno needed/what size? QuickJS viable? Can yt-dlp failures be classified into private / members-only / age-restricted / region-blocked / deleted / premiere-not-started / ongoing-live? | **Done** (see `docs/benchmarks/S1-downloader.md`). Approach A in copy mode with QuickJS-NG chosen; `--force-keyframes-at-cuts` forbidden; probe/download split via `--load-info-json`; progress from FFmpeg `time=`; sample failure fixtures and `E_YT_*` classification recorded. |
+| **S1c Downloader Refinement** | Can throughput be optimized beyond ~1.8×? What is the exact time-mapping accuracy of file t=0 vs `absoluteStartMs` with copy-mode pre-roll? What explicit bitrate preset should preview proxy use? | Throughput optimization decision, verified time-mapping formula with test clip, hardened failure fixtures, preview proxy bitrate constant |
 | **S2 Preview** | Does the official YouTube embed work inside WebView2? Does the HTTPS **bridge page** avoid Error 153-class failures? Is storyboard fallback good enough? | Preview strategy confirmed; bridge page spec; fallback UX |
 | **S3 Speech** | Which whisper.cpp build/model gives acceptable Indonesian quality and speed on a **representative mid-spec laptop**? Word-timestamp quality (DTW) and VAD? Is Vulkan worth it? | Default model + backend, rate priors, accuracy notes in `docs/benchmarks/` |
 | **S4 Render** | Which encoders work (NVENC/QSV/AMF/MF)? ASS burn-in correctness with bundled fonts? Export time for 60 s 1080×1920? | Encoder priority list, render preset, time priors |
@@ -61,7 +62,7 @@ Test fixtures: short clips we own or that are freely licensed. Never commit down
 ## 5. M1 — Core local pipeline (no accounts)
 
 Scope: Tauri skeleton, typed IPC, SQLite, job runner (stages, cache, resume, cancel), hardware probe + first-run wizard, component installer (dev manifest), URL intake + probe, preview (per S2), range picker, generate pipeline, minimal editor (trim, fill layout, captions auto, no templates), render + verify, full progress/ETA, error catalog plumbing. Use a **`TicketProvider` interface** with a fake implementation so M3 can swap in the real one without touching the render code.
-**Exit:** a mid-spec laptop goes link → exported 9:16 captioned clip; every stage shows stage/progress/ETA; cancel/resume works; failures show catalog messages.
+**Exit:** a mid-spec laptop goes link → exported 9:16 captioned clip; every stage shows stage/progress/ETA; cancel/resume works; failures show catalog messages; sync test passes (known marker in source; preview and export align within ±1 frame; captions align with speech).
 
 ## 6. M2 — Editor, templates, checklist
 
@@ -95,4 +96,4 @@ Authenticode signing, NSIS/MSI installer, Tauri updater + channels, signed compo
 
 ## 12. Open questions log
 
-Add items here instead of guessing (see AGENTS.md §4). Initial list: PRD §11 (Q1–Q6); S1–S7 outcomes; whether to ship QuickJS instead of Deno; x264 legal decision; final pass price/credits; support channel and SLA.
+Add items here instead of guessing (see AGENTS.md §4). Initial list: PRD §11 (Q1–Q6); S1–S7 outcomes; whether to ship QuickJS instead of Deno (resolved in S1: QuickJS-NG chosen); x264 legal decision; final pass price/credits; support channel and SLA.

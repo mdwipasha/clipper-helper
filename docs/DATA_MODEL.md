@@ -397,7 +397,7 @@ interface Composition {
   sources: Array<{
     id: string; provider: 'youtube' | 'local_file'; videoId: string;   // local_file: content fingerprint
     path: string;                               // POSIX-style, relative to workspace root; must match ^(cache|projects)/[A-Za-z0-9._/-]+$ (see ARCHITECTURE §9)
-    absoluteStartMs: number;                    // where this file starts in the original VOD (after keyframe alignment)
+    absoluteStartMs: number;                    // where this file starts in the original VOD (PENDING S1c: exact relationship between file t=0 and this value in copy-mode pre-roll)
     durationMs: number; width: number; height: number; fps: number;
   }>;
   timeline: Array<{ id: string; sourceId: string; inMs: number; outMs: number }>; // source-relative; ordered; ≤ max_segments
