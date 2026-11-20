@@ -1,3 +1,5 @@
 [STATUS: VERIFIED]
+[CAPTURE_DATE: 2026-11-20]
+[SOURCE_URL: synthetic (https://notyoutube.com/watch?v=123)]
 [SIGNAL: URL intake validation failed before yt-dlp]
 ERROR: Input URL host 'notyoutube.com' is not in allowed list [youtube.com, www.youtube.com, m.youtube.com, youtu.be]

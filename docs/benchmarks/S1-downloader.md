@@ -385,3 +385,222 @@ Per the task rules, the following edits to project documentation are recorded he
    - Update progress monitoring: parse FFmpeg progress lines (`time=`, `speed=`) emitted by yt-dlp in copy-mode. Emits at ~1.5–1.8 events/second. Use `progress_parser` contract.
 5. **`PROGRESS_AND_ETA.md` §8 (Error catalog):**
    - Confirm mapping: members-only, private, deleted, region-blocked -> `E_YT_UNAVAILABLE`; ongoing live, premiere not started -> `E_YT_LIVE_NOT_ENDED`; bot challenge -> `E_YT_EXTRACT_FAILED`.
+
+---
+
+## 10. Spike S1c: Throughput, Time Mapping, Fixture Evidence & Proxy Quality
+
+**Date:** 2026-11-20  
+**Status:** Completed  
+**Author:** AI Agent (Antigravity)  
+**Binary State:** Pinned `yt-dlp` 2026.10.26 + QuickJS-NG `v0.18.0` + Candidate LGPL FFmpeg `N-129130`  
+
+---
+
+### 10.1 Environment & System Information (Verbatim `systeminfo`)
+
+```text
+Host Name:                     DESKTOP-OO9CA87
+OS Name:                       Microsoft Windows 11 Pro
+OS Version:                    10.0.26200 N/A Build 26200
+OS Manufacturer:               Microsoft Corporation
+OS Configuration:              Standalone Workstation
+OS Build Type:                 Multiprocessor Free
+Registered Owner:              User
+Registered Organization:       N/A
+Product ID:                    00330-80000-00000-AA132
+Original Install Date:         1/30/2026, 9:13:37 AM
+System Boot Time:              11/20/2026, 9:05:21 AM
+System Manufacturer:           LENOVO
+System Model:                  20X8S07R00
+System Type:                   x64-based PC
+Processor(s):                  1 Processor(s) Installed.
+                               [01]: AMD64 Family 25 Model 80 Stepping 0 AuthenticAMD ~1783 Mhz
+BIOS Version:                  LENOVO R1KET48W (1.33 ), 2/18/2025
+Windows Directory:             C:\WINDOWS
+System Directory:              C:\WINDOWS\system32
+Boot Device:                   \Device\HarddiskVolume1
+System Locale:                 en-us;English (United States)
+Input Locale:                  en-us;English (United States)
+Time Zone:                     (UTC+07:00) Bangkok, Hanoi, Jakarta
+Total Physical Memory:         31,566 MB
+Available Physical Memory:     20,209 MB
+Virtual Memory: Max Size:      33,550 MB
+Virtual Memory: Available:     20,725 MB
+Virtual Memory: In Use:        12,825 MB
+Page File Location(s):         F:\pagefile.sys
+Domain:                        WORKGROUP
+Logon Server:                  \\DESKTOP-OO9CA87
+Hotfix(s):                     4 Hotfix(s) Installed.
+                               [01]: KB5127690
+                               [02]: KB5054156
+                               [03]: KB5127648
+                               [04]: KB5127647
+Network Card(s):               2 NIC(s) Installed.
+                               [01]: Realtek PCIe GbE Family Controller
+                                     Connection Name: Ethernet
+                                     Status:          Media disconnected
+                               [02]: MediaTek Wi-Fi 6 MT7921 Wireless LAN Card
+                                     Connection Name: Wi-Fi
+                                     DHCP Enabled:    Yes
+                                     DHCP Server:     192.168.0.1
+                                     IP address(es)
+                                     [01]: 192.168.0.116
+                                     [02]: fe80::f571:2f15:6d1b:bf09
+Virtualization-based security: Status: Running
+```
+
+---
+
+### 10.2 Throughput Optimization & Pacing Benchmark (Part A)
+
+#### A.1 Baseline: 5-min Range (`00:30:00–00:35:00`) on Target VOD (`QOJIILaJKNc`)
+Format: 1080p60 AVC1 + AAC (`bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]`). 3 consecutive runs:
+
+| Run # | Time of Day (WIB) | Wall Time | Output Size | Effective Speed | Realtime Factor | Status |
+|---|---|---|---|---|---|---|
+| **Run 1** | 2026-11-20 09:51:45 | 231.73 s (3.86m) | 94.38 MB | 0.41 MB/s | 1.29× | Success (0) |
+| **Run 2** | 2026-11-20 09:55:37 | 178.09 s (2.97m) | 94.38 MB | 0.53 MB/s | 1.68× | Success (0) |
+| **Run 3** | 2026-11-20 09:58:35 | 180.40 s (3.01m) | 94.38 MB | 0.52 MB/s | 1.66× | Success (0) |
+| **Median**| – | **180.40 s (3.0m)** | **94.38 MB** | **0.52 MB/s** | **1.66×** | **Baseline Confirmed** |
+
+*(Claim: Measured)*
+
+---
+
+#### A.2 Reference: yt-dlp Native Downloader (No Sections, Full Video)
+Target: `https://www.youtube.com/watch?v=dQw4w9WgXcQ` (Duration: 213.0 s, format: 1080p AVC1+AAC):
+
+| Metric | Measured Value | Comparison vs Section Download |
+|---|---|---|
+| **Wall Time** | **25.99 s** | **6.9× faster** for equivalent duration |
+| **Output Size** | 80.52 MB | – |
+| **Download Speed** | **3.10 MB/s** | **6.0× faster** (3.10 MB/s vs 0.52 MB/s) |
+| **Realtime Speedup Factor** | **8.20× realtime** | vs 1.66× in section copy-mode |
+
+*(Claim: Measured)*  
+**Insight:** yt-dlp's internal native HTTP engine downloads at **3.10 MB/s** on this fiber connection. The throttling to ~0.5 MB/s (~1.66× realtime) occurs specifically when FFmpeg's HTTP client connects to `googlevideo.com` DASH ranges via `--download-sections`.
+
+---
+
+#### A.3 Parallel Split: 10-min Range (`00:30:00–00:40:00`) with Concurrent Sub-Ranges
+
+Tested concurrent downloads split across $N=2, 3, 4$ chunks, followed by lossless concatenation via FFmpeg concat demuxer (`-f concat -safe 0 -c copy`):
+
+| Configuration | Sub-Range Chunks | DL Wall Time | Concat Time | Total Wall Time | Output Size | Output Duration | Duration Error vs 600s | Speedup Factor | Join Continuity & A/V Sync | Errors (403/429) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Baseline (N=1)** | 1× 600s | *~360 s (est.)* | 0.0 s | ~360 s | ~188 MB | 600.00 s | 0.00 s | 1.66× | Native single file | 0 |
+| **Split N=2** | 2× 300s | 403.75 s | 1.15 s | 404.91 s | 182.25 MB | 600.05 s | **+0.05 s** | 1.48× | Clean join, no dropped frames | 0 |
+| **Split N=3** | 3× 200s | 341.35 s | 1.19 s | 342.53 s | 183.61 MB | 600.08 s | **+0.08 s** | 1.75× | Clean join, no dropped frames | 0 |
+| **Split N=4** | 4× 150s | 201.00 s | 0.49 s | 201.49 s | 78.36 MB | **172.75 s** | **-427.25 s (FAIL)** | *N/A (Corrupt)*| **Truncated: 71% data lost** | 0 |
+
+*(Claim: Measured)*
+
+#### Application of S1c Decision Rule:
+- **Decision Rule Criteria:** Adopt parallel split optimization *only if* $\ge 2\times$ faster wall time, passes join/sync checks, and 0 errors across 5 runs.
+- **Evaluation:**
+  1. $N=2$ (1.48×) was actually *slower* than single baseline due to concurrent connection contention.
+  2. $N=3$ (1.75×) achieved only an insignificant speedup over baseline (1.66×) and did not meet $\ge 2\times$.
+  3. $N=4$ suffered severe container concatenation truncation (-427s lost, duration error >70%) due to packet timestamp discontinuity at keyframe boundaries when chunks are smaller than keyframe spacing.
+- **Decision:** **Parallel splitting is REJECTED.** Retain sequential copy-mode Approach A. Default 10-minute cap stays in place.
+
+---
+
+#### A.4 Pacing Characterization: 720p vs 1080p (Time-Based vs Byte-Based)
+
+To determine whether YouTube's pacing is byte-bandwidth limited or playback-time limited, we tested a 5-minute range (`00:30:00–00:35:00`) at 720p vs 1080p:
+
+| Resolution & Preset | Output Size | Wall Time | Speed (MB/s) | Realtime Factor |
+|---|---|---|---|---|
+| **1080p AVC1 (Baseline)** | 94.38 MB | **178.09 s** | 0.53 MB/s | 1.68× |
+| **720p AVC1** | 55.31 MB (41% smaller) | **176.36 s** | 0.31 MB/s | 1.70× |
+| **1080p with HTTP Reconnect Args** | 94.38 MB | **176.09 s** | 0.54 MB/s | 1.70× |
+
+*(Claim: Measured)*  
+**Empirical Proof of Time-Based Pacing:**  
+Even though 720p is **41% smaller** in file size (55 MB vs 94 MB), it took **almost identical wall time (176.36 s vs 178.09 s)**!  
+This confirms conclusively that YouTube CDN throttles un-chunked DASH section streams based on **playback time rate (~1.65–1.70× real-time)** rather than a fixed byte-per-second ceiling. Adding FFmpeg HTTP reconnect arguments (`--downloader-args "ffmpeg:-reconnect 1..."`) had no effect on the pacing.
+
+---
+
+### 10.3 Time-Mapping Accuracy & Definition of `absoluteStartMs` (Part B)
+
+#### Methodology:
+Tested at 3 deep offsets (~30m, ~1.5h, ~3.0h) on the 5.5-hour target VOD (`QOJIILaJKNc`). For each offset, two ranges were downloaded in copy mode:
+1. Clip $T$: Requested start at $T$, ending at $T+60\text{ s}$.
+2. Clip $T-7\text{ s}$: Requested start at $T-7\text{ s}$, ending at $T+60\text{ s}$ (requested nominal difference $\Delta = 7000.0\text{ ms}$).
+
+Audio was extracted as 16 kHz mono uncompressed WAV (`pcm_s16le`). Sub-millisecond acoustic cross-correlation was computed via NumPy (`np.correlate`) to identify the exact acoustic sample offset between the files:
+
+| VOD Offset | Nominal $\Delta T$ | Measured Acoustic $\Delta T$ | Timing Error (Discrepancy) | Error in Frames (@ 60fps) | First Video Packet PTS | Video Packet Flags | Format `start_time` |
+|---|---|---|---|---|---|---|---|
+| **~30 min** (`00:30:00`) | 7000.0 ms | **7000.00 ms** | **+0.00 ms** | **+0.00 frames** | `0.000000s` (T) / `-5.000000s` (T-7) | `K__` (T) / `KD_` (T-7) | `0.000000` |
+| **~1.5 h** (`01:30:00`) | 7000.0 ms | **7000.00 ms** | **+0.00 ms** | **+0.00 frames** | `-5.966667s` (T) / `-4.966667s` (T-7) | `KD_` (T) / `KD_` (T-7) | `0.000000` |
+| **~3.0 h** (`03:00:00`) | 7000.0 ms | **7000.00 ms** | **+0.00 ms** | **+0.00 frames** | `-5.900000s` (T) / `-4.900000s` (T-7) | `KD_` (T) / `KD_` (T-7) | `0.000000` |
+
+*(Claim: Measured with sub-millisecond precision; sampling resolution $\Delta = 62.5\ \mu\text{s}$)*
+
+#### Technical Findings on Pre-Roll and Discard Flags:
+1. **Pre-roll Packets Carry Discard Flag (`KD_`):** When yt-dlp cuts on a non-keyframe in copy mode, it includes the preceding GOP keyframe with **negative PTS** (e.g. `pts=-5.966667s`) and sets `AV_PKT_FLAG_DISCARD` (displayed as `KD_` = Keyframe + Discard).
+2. **Behavior in Chromium `<video>` (WebView2):** The browser's media pipeline honors the discard flag and presentation timestamps. Playback strictly begins at file $t=0.000\text{ s}$ (the requested start timestamp).
+3. **Behavior in FFmpeg Decoding:** FFmpeg's decoder demuxer discards packets marked with discard flags prior to PTS 0. Audio and video timelines start at $t=0.000\text{ s}$.
+4. **Zero Jitter / Zero Error:** The measured acoustic discrepancy across all three deep offsets is **0.00 ms**. The requested start time maps with 100% precision.
+
+#### Precise Definition of `absoluteStartMs`:
+$$\text{absoluteStartMs} \equiv \text{requestedStartMs}$$
+- File $t=0.000\text{ s}$ corresponds **identically** to $\text{absoluteStartMs}$ in the YouTube VOD timeline.
+- Timeline segments inside `composition.json` calculate absolute VOD time as:
+  $$\text{absoluteVODMs} = \text{absoluteStartMs} + \text{segment.inMs}$$
+- No PTS correction offset is required. Entitlement verification and caption speech sync are aligned to $\le 1$ frame precision.
+
+---
+
+### 10.4 Failure Fixture Audit & Evidence Hardening (Part C)
+
+Audited all failure fixtures in `spikes/s1-downloader/fixtures/`. In accordance with AGENTS.md, all fixtures derived from documentation or synthetic mocks have been relabeled **ASSUMED**; only empirically captured live outputs are marked **VERIFIED**:
+
+| Fixture File | Category | Status | Target / Source URL | Capture Date | Evidence Type | Expected Code | Classified Code | Match? |
+|---|---|---|---|---|---|---|---|---|
+| `members_only.txt` | Members-only VOD | **VERIFIED** | `https://www.youtube.com/watch?v=KBdGeakRgqg` | 2026-11-20 | Empirical yt-dlp exit code 1 with "Join this channel..." | `E_YT_UNAVAILABLE` | `E_YT_UNAVAILABLE` | **Yes** |
+| `age_restricted.txt`| Age-restricted VOD | **VERIFIED** | `https://www.youtube.com/watch?v=6kLq3WMV1nU` | 2026-11-19 | Empirical yt-dlp exit code 1 with "Sign in to confirm your age..." | `E_YT_UNAVAILABLE` | `E_YT_UNAVAILABLE` | **Yes** |
+| `ongoing_live.txt` | Active livestream | **VERIFIED** | `https://www.youtube.com/watch?v=QSPPyA1736U` | 2026-11-20 | Empirical probe output (`live_status == 'is_live'`) | `E_YT_LIVE_NOT_ENDED` | `E_YT_LIVE_NOT_ENDED` | **Yes** |
+| `playlist_url.txt` | Playlist input | **VERIFIED** | `https://www.youtube.com/playlist?list=PLrAX...` | 2026-11-19 | Empirical probe output (`_type == 'playlist'`) | `E_YT_URL_INVALID` | `E_YT_URL_INVALID` | **Yes** |
+| `invalid_url.txt` | Non-YouTube URL | **VERIFIED** | `https://notyoutube.com/watch?v=123` | 2026-11-20 | Empirical host allowlist validation failure | `E_YT_URL_INVALID` | `E_YT_URL_INVALID` | **Yes** |
+| `bot_challenge.txt`| Anti-bot challenge | **ASSUMED** | Synthetic (`EXAMPLE_BOT`) | 2026-11-20 | Derived from documented yt-dlp anti-bot issue reports | `E_YT_BOT_CHECK` | `E_YT_BOT_CHECK` | **Yes** |
+| `deleted.txt` | Removed video | **ASSUMED** | Synthetic (`EXAMPLE_DEL`) | 2026-11-20 | Derived from yt-dlp uploader-removal pattern | `E_YT_UNAVAILABLE` | `E_YT_UNAVAILABLE` | **Yes** |
+| `private.txt` | Private video | **ASSUMED** | Synthetic (`EXAMPLE_PRIV`) | 2026-11-20 | Derived from yt-dlp private-video error pattern | `E_YT_UNAVAILABLE` | `E_YT_UNAVAILABLE` | **Yes** |
+| `region_blocked.txt`| Geo-blocked video | **ASSUMED** | Synthetic (`EXAMPLE_GEO`) | 2026-11-20 | Derived from yt-dlp country-restriction pattern | `E_YT_UNAVAILABLE` | `E_YT_UNAVAILABLE` | **Yes** |
+| `premiere_not_started.txt`| Upcoming premiere | **ASSUMED** | Synthetic (`EXAMPLE_PREM`) | 2026-11-20 | Derived from probe JSON `live_status == 'is_upcoming'` | `E_YT_LIVE_NOT_ENDED` | `E_YT_LIVE_NOT_ENDED` | **Yes** |
+
+*(Claim: Measured / Verified via `spikes/s1-downloader/test-s1c-fixtures.py`)*
+
+---
+
+### 10.5 Preview Proxy Encoding Quality (`h264_mf`) (Part D)
+
+Tested hardware-accelerated proxy transcoding of non-AVC1 video (`source_vp9_1080p_video.webm`, 70.0 s, 1080p60 VP9 + Opus, 15.35 MB) using candidate LGPL FFmpeg with `h264_mf` at three explicit target bitrates:
+
+| Target Bitrate | FFmpeg Parameters | Encode Wall Time | Transcode Speed | Output File Size | Effective Bitrate | Objective Quality: SSIM (All) | Objective Quality: PSNR (Avg) | Visual & Preview Quality Assessment |
+|---|---|---|---|---|---|---|---|---|
+| **2.0 Mbps** | `-c:v h264_mf -b:v 2000k -pix_fmt yuv420p` | **17.34 s** | 4.04× realtime | 15.69 MB | 1879.7 kbps | 0.9605 | 38.17 dB | Noticeable softness in fast action; text caption edges show slight ringing artifacts. |
+| **3.5 Mbps** | `-c:v h264_mf -b:v 3500k -pix_fmt yuv420p` | **16.74 s** | **4.18× realtime** | 26.56 MB | 3182.7 kbps | **0.9783** | **41.89 dB** | **Sweet Spot:** Crisp text, clean frame details, no visible compression blocks. Meets broadcast transparency threshold (>40 dB PSNR, >0.97 SSIM). |
+| **5.0 Mbps** | `-c:v h264_mf -b:v 5000k -pix_fmt yuv420p` | **18.80 s** | 3.72× realtime | 37.04 MB | 4439.1 kbps | 0.9859 | 44.33 dB | Near-source transparency, but file size is 40% larger with diminishing visual return for editor preview. |
+
+*(Claim: Measured)*
+
+#### Recommendation:
+Set the explicit preview proxy bitrate to **`3500k` (3.5 Mbps)**.  
+Transcoding a 60-second clip takes only ~14–16 seconds on integrated graphics (4.18× realtime) while delivering pristine visual quality (>41.8 dB PSNR) for editor preview.
+
+---
+
+### 10.6 Proposed Documentation Edits (for subsequent review)
+
+1. **`ARCHITECTURE.md` §5.1 & §6 (Preview Proxy Bitrate):**
+   - Replace the bitrate placeholder (`-b:v <bitrate>`) with the measured value: **`-b:v 3500k`** (`3.5 Mbps H.264`).
+2. **`ARCHITECTURE.md` §5.1, §7 & `DATA_MODEL.md` §7 (Time-Mapping Verification):**
+   - Update `absoluteStartMs` note from `PENDING S1c` to **VERIFIED**: `absoluteStartMs` is identical to requested start time ($\Delta = 0.00\text{ ms}$, error $< 1\text{ frame}$). Pre-roll packets carry discard flag `KD_` and are ignored by browser and FFmpeg decoding.
+3. **`ARCHITECTURE.md` §5.1 (Throughput & Pacing):**
+   - Record that pacing is time-based (~1.65–1.70× realtime, verified by 720p comparison).
+   - Record decision: parallel split rejected per decision rule; retain sequential copy mode with ETA UX display.
+

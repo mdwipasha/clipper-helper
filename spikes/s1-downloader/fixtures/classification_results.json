@@ -1,83 +1,112 @@
 [
   {
     "fixture": "members_only.txt",
+    "category": "members_only",
     "status": "VERIFIED",
+    "url": "https://www.youtube.com/watch?v=KBdGeakRgqg",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Empirical capture with yt-dlp 2026.10.26 against real YouTube members-only VOD",
     "classified_code": "E_YT_UNAVAILABLE",
-    "classified_reason": "members_only",
     "expected_code": "E_YT_UNAVAILABLE",
-    "expected_reason": "members_only",
     "match": true
   },
   {
     "fixture": "age_restricted.txt",
+    "category": "age_restricted",
     "status": "VERIFIED",
+    "url": "https://www.youtube.com/watch?v=6kLq3WMV1nU",
+    "capture_date": "2026-11-19",
+    "evidence_type": "Empirical capture with yt-dlp against age-restricted YouTube music video",
     "classified_code": "E_YT_UNAVAILABLE",
-    "classified_reason": "age_restricted",
     "expected_code": "E_YT_UNAVAILABLE",
-    "expected_reason": "age_restricted",
     "match": true
   },
   {
     "fixture": "ongoing_live.txt",
+    "category": "ongoing_live",
     "status": "VERIFIED",
+    "url": "https://www.youtube.com/watch?v=QSPPyA1736U",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Empirical capture with yt-dlp against active live stream (probe_json.live_status == 'is_live')",
     "classified_code": "E_YT_LIVE_NOT_ENDED",
-    "classified_reason": "ongoing_live",
     "expected_code": "E_YT_LIVE_NOT_ENDED",
-    "expected_reason": "ongoing_live",
     "match": true
   },
   {
-    "fixture": "private.txt",
+    "fixture": "playlist_url.txt",
+    "category": "playlist_url",
     "status": "VERIFIED",
-    "classified_code": "E_YT_UNAVAILABLE",
-    "classified_reason": "private",
-    "expected_code": "E_YT_UNAVAILABLE",
-    "expected_reason": "private",
-    "match": true
-  },
-  {
-    "fixture": "deleted.txt",
-    "status": "VERIFIED",
-    "classified_code": "E_YT_UNAVAILABLE",
-    "classified_reason": "deleted",
-    "expected_code": "E_YT_UNAVAILABLE",
-    "expected_reason": "deleted",
-    "match": true
-  },
-  {
-    "fixture": "region_blocked.txt",
-    "status": "VERIFIED",
-    "classified_code": "E_YT_UNAVAILABLE",
-    "classified_reason": "region_blocked",
-    "expected_code": "E_YT_UNAVAILABLE",
-    "expected_reason": "region_blocked",
-    "match": true
-  },
-  {
-    "fixture": "premiere_not_started.txt",
-    "status": "VERIFIED",
-    "classified_code": "E_YT_LIVE_NOT_ENDED",
-    "classified_reason": "premiere_not_started",
-    "expected_code": "E_YT_LIVE_NOT_ENDED",
-    "expected_reason": "premiere_not_started",
-    "match": true
-  },
-  {
-    "fixture": "bot_challenge.txt",
-    "status": "VERIFIED",
-    "classified_code": "E_YT_EXTRACT_FAILED",
-    "classified_reason": "bot_challenge",
-    "expected_code": "E_YT_EXTRACT_FAILED",
-    "expected_reason": "bot_challenge",
+    "url": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+    "capture_date": "2026-11-19",
+    "evidence_type": "Empirical capture against public YouTube playlist URL",
+    "classified_code": "E_YT_URL_INVALID",
+    "expected_code": "E_YT_URL_INVALID",
     "match": true
   },
   {
     "fixture": "invalid_url.txt",
+    "category": "invalid_url",
     "status": "VERIFIED",
+    "url": "synthetic (https://notyoutube.com/watch?v=123)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Empirical execution of Rust URL host-allowlist check against non-YouTube host",
     "classified_code": "E_YT_URL_INVALID",
-    "classified_reason": "unsupported_domain",
     "expected_code": "E_YT_URL_INVALID",
-    "expected_reason": "unsupported_domain",
+    "match": true
+  },
+  {
+    "fixture": "bot_challenge.txt",
+    "category": "bot_challenge",
+    "status": "ASSUMED",
+    "url": "synthetic (EXAMPLE_BOT)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Derived from documented yt-dlp issue reports and YouTube bot challenge pattern",
+    "classified_code": "E_YT_BOT_CHECK",
+    "expected_code": "E_YT_BOT_CHECK",
+    "match": true
+  },
+  {
+    "fixture": "deleted.txt",
+    "category": "deleted",
+    "status": "ASSUMED",
+    "url": "synthetic (EXAMPLE_DEL)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Derived from yt-dlp standard error patterns for uploader-removed videos",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "fixture": "private.txt",
+    "category": "private",
+    "status": "ASSUMED",
+    "url": "synthetic (EXAMPLE_PRIV)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Derived from yt-dlp standard error patterns for private videos",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "fixture": "region_blocked.txt",
+    "category": "region_blocked",
+    "status": "ASSUMED",
+    "url": "synthetic (EXAMPLE_GEO)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Derived from yt-dlp standard error patterns for geo-blocked videos",
+    "classified_code": "E_YT_UNAVAILABLE",
+    "expected_code": "E_YT_UNAVAILABLE",
+    "match": true
+  },
+  {
+    "fixture": "premiere_not_started.txt",
+    "category": "premiere_not_started",
+    "status": "ASSUMED",
+    "url": "synthetic (EXAMPLE_PREM)",
+    "capture_date": "2026-11-20",
+    "evidence_type": "Derived from YouTube upcoming premiere probe metadata and yt-dlp error string",
+    "classified_code": "E_YT_LIVE_NOT_ENDED",
+    "expected_code": "E_YT_LIVE_NOT_ENDED",
     "match": true
   }
 ]

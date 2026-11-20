@@ -1,4 +1,6 @@
 [STATUS: VERIFIED]
+[CAPTURE_DATE: 2026-11-20]
+[SOURCE_URL: https://www.youtube.com/watch?v=KBdGeakRgqg]
 [COMMAND: yt-dlp --no-playlist --no-warnings --ignore-config -J https://www.youtube.com/watch?v=KBdGeakRgqg]
 [EXIT_CODE: 1]
 ERROR: [youtube] KBdGeakRgqg: Join this channel to get access to members-only content like this video, and other exclusive perks.

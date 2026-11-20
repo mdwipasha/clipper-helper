@@ -1,5 +1,7 @@
-[STATUS: VERIFIED]
-[SIGNAL: probe_json.live_status == 'is_upcoming']
+[STATUS: ASSUMED]
+[CAPTURE_DATE: 2026-11-20]
+[SOURCE_URL: synthetic (EXAMPLE_PREM)]
+[NOTE: Derived from probe JSON live_status == 'is_upcoming']
 [COMMAND: yt-dlp --no-playlist --no-warnings --ignore-config https://www.youtube.com/watch?v=EXAMPLE_PREM]
 [EXIT_CODE: 1]
 ERROR: [youtube] EXAMPLE_PREM: Premieres in 12 hours. This video has not premiered yet.
