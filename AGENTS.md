@@ -51,4 +51,5 @@ Do not "simplify" a check because it looks redundant. If a check seems wrong, op
 - Do not shell out with string concatenation, load remote code, or enable devtools in production builds.
 - Do not use `--cookies-from-browser` or ask users for platform credentials (out of scope; privacy risk).
 - Do not bundle GPL-licensed binaries without a recorded legal decision (`docs/ARCHITECTURE.md §15`).
+- Do not use GPL-only FFmpeg filters (see `docs/benchmarks/gpl-filters-denylist.txt`); render filters must exist in the pinned build's capability JSON; CI fails otherwise.
 - Do not implement features listed as Non-goals / Post-MVP.

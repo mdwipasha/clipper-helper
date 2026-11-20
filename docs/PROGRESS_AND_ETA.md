@@ -139,7 +139,7 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_COMPONENT_MISSING` | Required sidecar/model missing or hash mismatch | yes | Repair (re-download) |
 | `E_MODEL_DOWNLOAD_FAILED` | Speech model download failed | yes | Retry (resumes) |
 | `E_TRANSCRIBE_FAILED` / `E_TRANSCRIBE_OOM` | Speech step failed / out of memory | yes | Switch to smaller model · Retry |
-| `E_ENCODER_UNAVAILABLE` | No working video encoder found after trying the full fallback chain (hardware → software) | yes (manual) | Update GPU driver · Install Media Feature Pack (Windows N/KN) · Export diagnostics |
+| `E_ENCODER_UNAVAILABLE` | No working video encoder found after trying the fallback chain (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`) | yes (manual) | Update GPU driver · Install Media Feature Pack (Windows N/KN) · Export diagnostics |
 | `E_RENDER_FAILED` | FFmpeg error | yes | Retry (free) · Export diagnostics |
 | `E_VERIFY_FAILED` | Output failed post-render checks | yes | Review checklist · Retry |
 | `E_AUTH_EXPIRED` | Session expired | yes | Sign in again |

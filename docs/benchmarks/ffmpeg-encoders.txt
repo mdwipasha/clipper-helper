@@ -1,6 +1,3 @@
-# ffmpeg -encoders output
-# Build: ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
-
 Encoders:
  V..... = Video
  A..... = Audio
@@ -16,15 +13,19 @@ Encoders:
  V....D alias_pix            Alias/Wavefront PIX image
  V....D amv                  AMV Video
  V....D apng                 APNG (Animated Portable Network Graphics) image
+ V....D liboapv              liboapv APV (codec apv)
  V....D asv1                 ASUS V1
  V....D asv2                 ASUS V2
  V....D libaom-av1           libaom AV1 (codec av1)
+ V....D librav1e             librav1e AV1 (codec av1)
+ V..... libsvtav1            SVT-AV1(Scalable Video Technology for AV1) encoder (codec av1)
  V....D av1_d3d12va          D3D12VA av1 encoder (codec av1)
  V....D av1_nvenc            NVIDIA NVENC av1 encoder (codec av1)
  V..... av1_qsv              AV1 (Intel Quick Sync Video acceleration) (codec av1)
  V....D av1_amf              AMD AMF AV1 encoder (codec av1)
  V....D av1_mf               AV1 via MediaFoundation (codec av1)
  V....D av1_vaapi            AV1 (VAAPI) (codec av1)
+ V....D av1_vulkan           AV1 (Vulkan) (codec av1)
  V....D avrp                 Avid 1:1 10-bit RGB Packer
  V..X.D avui                 Avid Meridien Uncompressed
  VF...D bitpacked            Bitpacked
@@ -39,6 +40,7 @@ Encoders:
  VFS..D dxv                  Resolume DXV
  VF...D exr                  OpenEXR image
  V.S..D ffv1                 FFmpeg video codec #1
+ V....D ffv1_vulkan          FFmpeg video codec #1 (Vulkan) (codec ffv1)
  VF...D ffvhuff              Huffyuv FFmpeg variant
  V....D fits                 Flexible Image Transport System
  V....D flashsv              Flash Screen Video
@@ -48,26 +50,30 @@ Encoders:
  V....D h261                 H.261
  V....D h263                 H.263 / H.263-1996
  V.S..D h263p                H.263+ / H.263-1998 / H.263 version 2
- V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)
- V....D libx264rgb           libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 RGB (codec h264)
+ V....D libopenh264          OpenH264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)
  V....D h264_amf             AMD AMF H.264 Encoder (codec h264)
  V....D h264_d3d12va         D3D12VA h264 encoder (codec h264)
  V....D h264_mf              H264 via MediaFoundation (codec h264)
  V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
  V..... h264_qsv             H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (Intel Quick Sync Video acceleration) (codec h264)
  V....D h264_vaapi           H.264/AVC (VAAPI) (codec h264)
+ V....D h264_vulkan          H.264/AVC (Vulkan) (codec h264)
+ V.S..D hap                  Vidvox Hap
  VF...D hdr                  HDR (Radiance RGBE format) image
- V....D libx265              libx265 H.265 / HEVC (codec hevc)
  V....D hevc_amf             AMD AMF HEVC encoder (codec hevc)
  V....D hevc_d3d12va         D3D12VA hevc encoder (codec hevc)
  V....D hevc_mf              HEVC via MediaFoundation (codec hevc)
  V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
  V..... hevc_qsv             HEVC (Intel Quick Sync Video acceleration) (codec hevc)
  V....D hevc_vaapi           H.265/HEVC (VAAPI) (codec hevc)
+ V....D hevc_vulkan          H.265/HEVC (Vulkan) (codec hevc)
+ V....D libkvazaar           libkvazaar H.265 / HEVC (codec hevc)
  VF...D huffyuv              Huffyuv / HuffYUV
  VF...D jpeg2000             JPEG 2000
  VF.... libopenjpeg          OpenJPEG JPEG 2000 (codec jpeg2000)
  VF...D jpegls               JPEG-LS
+ V....D libjxl               libjxl JPEG XL (codec jpegxl)
+ V....D libjxl_anim          libjxl JPEG XL animated (codec jpegxl_anim)
  VF...D ljpeg                Lossless JPEG
  VFS..D magicyuv             MagicYUV video
  VFS..D mjpeg                MJPEG (Motion JPEG)
@@ -78,7 +84,6 @@ Encoders:
  V..... mpeg2_qsv            MPEG-2 video (Intel Quick Sync Video acceleration) (codec mpeg2video)
  V....D mpeg2_vaapi          MPEG-2 (VAAPI) (codec mpeg2video)
  V.S..D mpeg4                MPEG-4 part 2
- V....D libxvid              libxvidcore MPEG-4 part 2 (codec mpeg4)
  V....D msmpeg4v2            MPEG-4 part 2 Microsoft variant version 2
  V....D msmpeg4              MPEG-4 part 2 Microsoft variant version 3 (codec msmpeg4v3)
  V....D msrle                Microsoft RLE
@@ -96,6 +101,7 @@ Encoders:
  VF...D prores               Apple ProRes
  VF...D prores_aw            Apple ProRes (codec prores)
  VFS... prores_ks            Apple ProRes (iCodec Pro) (codec prores)
+ V..... prores_ks_vulkan     Apple ProRes (iCodec Pro) (codec prores)
  VF...D qoi                  QOI (Quite OK Image format) image
  V....D qtrle                QuickTime Animation (RLE) video
  V....D r10k                 AJA Kona 10-bit RGB Codec
@@ -123,6 +129,7 @@ Encoders:
  V....D libvpx-vp9           libvpx VP9 (codec vp9)
  V....D vp9_vaapi            VP9 (VAAPI) (codec vp9)
  V..... vp9_qsv              VP9 video (Intel Quick Sync Video acceleration) (codec vp9)
+ V....D libvvenc             libvvenc H.266 / VVC (codec vvc)
  VF...D wbmp                 WBMP (Wireless Application Protocol Bitmap) image
  V....D libwebp_anim         libwebp WebP image (codec webp)
  V....D libwebp              libwebp WebP image (codec webp)
@@ -158,7 +165,6 @@ Encoders:
  A....D adpcm_yamaha         ADPCM Yamaha
  A....D alac                 ALAC (Apple Lossless Audio Codec)
  A....D libopencore_amrnb    OpenCORE AMR-NB (Adaptive Multi-Rate Narrow-Band) (codec amr_nb)
- A....D libvo_amrwbenc       Android VisualOn AMR-WB (Adaptive Multi-Rate Wide-Band) (codec amr_wb)
  A..... anull                null audio
  A....D aptx                 aptX (Audio Processing Technology for Bluetooth)
  A....D aptx_hd              aptX HD (Audio Processing Technology for Bluetooth)
@@ -168,11 +174,10 @@ Encoders:
  A....D eac3                 ATSC A/52 E-AC-3
  A....D flac                 FLAC (Free Lossless Audio Codec)
  A....D g723_1               G.723.1
- A....D libgsm               libgsm GSM (codec gsm)
- A....D libgsm_ms            libgsm GSM Microsoft variant (codec gsm_ms)
  A..X.D mlp                  MLP (Meridian Lossless Packing)
  A....D mp2                  MP2 (MPEG audio layer 2)
  A....D mp2fixed             MP2 fixed point (MPEG audio layer 2) (codec mp2)
+ A....D libtwolame           libtwolame MP2 (MPEG audio layer 2) (codec mp2)
  A....D libmp3lame           libmp3lame MP3 (MPEG audio layer 3) (codec mp3)
  A....D mp3_mf               MP3 via MediaFoundation (codec mp3)
  A....D nellymoser           Nellymoser Asao
@@ -213,7 +218,6 @@ Encoders:
  A....D roq_dpcm             id RoQ DPCM
  A..X.D s302m                SMPTE 302M
  A....D sbc                  SBC (low-complexity subband codec)
- A....D libspeex             libspeex Speex (codec speex)
  A..X.D truehd               TrueHD
  A....D tta                  TTA (True Audio)
  A..X.D vorbis               Vorbis

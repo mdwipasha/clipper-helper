@@ -24,7 +24,8 @@ Milestones are ordered by **dependency and risk**, not by dates. Do not start a 
 | **S2 Preview** | Does the official YouTube embed work inside WebView2? Does the HTTPS **bridge page** avoid Error 153-class failures? Is storyboard fallback good enough? | Preview strategy confirmed; bridge page spec; fallback UX |
 | **S3 Speech** | Which whisper.cpp build/model gives acceptable Indonesian quality and speed on a **representative mid-spec laptop**? Word-timestamp quality (DTW) and VAD? Is Vulkan worth it? | Default model + backend, rate priors, accuracy notes in `docs/benchmarks/` |
 | **S4 Render** | Which encoders work (NVENC/QSV/AMF/MF)? ASS burn-in correctness with bundled fonts? Export time for 60 s 1080×1920? | Encoder priority list, render preset, time priors |
-| **S5 Licensing** | Which FFmpeg build (LGPL, libass present, no GPL libs) and how to ship notices/source offer? Does the build expose `h264_mf` and the hardware encoders? Is `libopenh264` included under acceptable license terms? | Recorded decision in ARCHITECTURE §15; binary inventory; `ffmpeg -encoders` output saved in `docs/benchmarks/` |
+| **S5 Licensing** *(done)* | Which FFmpeg build (LGPL, libass present, no GPL libs) and how to ship notices/source offer? Does the build expose `h264_mf` and the hardware encoders? Is `libopenh264` included under acceptable license terms? | **Done** (see `docs/benchmarks/S5-ffmpeg.md`, `docs/compliance/FFMPEG.md`, `THIRD_PARTY_NOTICES.md`). Adopted BtbN release shared LGPLv3 (`n9.0.2`, SHA-256 `1fdb837…`, saves 55% download / 54% disk); `h264_mf` honors `-b:v`, `-g`, rate control; `boxblur` absent (GPL-only), replaced by LGPL `gblur`/`avgblur`; automated capability gate in CI (`verify-capabilities.py`). |
+| **S5b Minimal LGPL Build** *(optional, post-M1)* | Can an in-house minimal LGPL build reduce package size (~30–40 MB vs 74 MB) and target pure LGPLv2.1+ (avoiding version3-only libraries while keeping libass and schannel TLS)? Is the CI maintenance cost justified? | S5 recommended adopting BtbN release shared LGPLv3 for MVP (zero CI maintenance; 74 MB is well within R2 budget); evaluate S5b post-M1 if binary footprint reduction or LGPLv2.1 purity is required. |
 | **S6 Platform** | Supabase project (Singapore), Midtrans sandbox round-trip, CI Windows build, signing pipeline (dev cert) | Environments + secrets layout + CI green |
 | **S7 Login** | Google PKCE deep-link flow on Windows; email OTP; CAPTCHA feasibility (Turnstile in webview vs hosted page) | Auth design finalized |
 
@@ -53,7 +54,7 @@ Milestones are ordered by **dependency and risk**, not by dates. Do not start a 
 | Edge Functions | webhook fixtures (valid/forged/duplicate/out-of-order), `begin-export` | Deno tests |
 | E2E | Windows runner: install → fake-auth → generate fixture → export → verify | Tauri WebDriver / scripted smoke |
 | Load | `begin-export` and webhook endpoint | k6 (target: comfortably above projected peak ×10) |
-| Golden render | Composition → FFmpeg args snapshots; ffprobe metadata of fixture output | Snapshot tests |
+| Golden render | Composition → FFmpeg args snapshots; ffprobe metadata of fixture output; assert no GPL-only filters used (denylist: `docs/benchmarks/gpl-filters-denylist.txt`) | Snapshot tests |
 | Security | Checklist in SECURITY §13 | CI + manual |
 | ETA accuracy | Recorded traces; real-world error stats | Simulator + telemetry |
 
@@ -83,7 +84,7 @@ Auth (Google PKCE + OTP), device registration/limits, `get_account_status`, `beg
 
 ## 9. M5 — Hardening and release engineering
 
-Authenticode signing, NSIS/MSI installer, Tauri updater + channels, signed component manifest + rollout/rollback, Sentry (opt-in), telemetry (opt-in) + consent screen, diagnostics bundle, SBOM + license notices screen, rate limits + alerts, load tests, runbooks, security review (second reviewer), privacy policy/terms/refund pages.
+Authenticode signing, NSIS/MSI installer, Tauri updater + channels, signed component manifest + rollout/rollback, Sentry (opt-in), telemetry (opt-in) + consent screen, diagnostics bundle, SBOM + in-app "About/Licenses" screen (displaying `THIRD_PARTY_NOTICES.md` and user replacement instructions for FFmpeg), Cloudflare R2 permanent source mirror (FFmpeg exact source tarball + build info per LGPLv3), rate limits + alerts, load tests, runbooks, security review (second reviewer), privacy policy/terms/refund pages.
 **Exit:** SECURITY §15 checklist complete; clean-machine install/upgrade/rollback tested.
 
 ## 10. M6 — Closed beta and launch

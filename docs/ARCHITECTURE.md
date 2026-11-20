@@ -151,7 +151,7 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 - **Canonicalization + hash:** keys sorted, numbers normalized → `comp_hash` (SHA-256). Included in the export ticket.
 - **Render builder (Rust):** composition → FFmpeg filtergraph + ASS file.
   - `fill`: crop rect → scale to 1080×1920.
-  - `blur_fit`: blurred scaled background + centered contained foreground.
+  - `blur_fit`: blurred scaled background (using LGPL filter `gblur` or `avgblur`; `boxblur` is GPL-only and strictly absent in LGPL builds) + centered contained foreground.
   - `split`: two crops stacked by ratio.
   - Captions: generate ASS (word-highlight via karaoke tags), burn with `ass`/`subtitles` filter, fonts from the bundled set only.
   - Overlays: logo via `overlay`, text via ASS or `drawtext` with bundled fonts.
@@ -159,7 +159,7 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
   - Output: H.264 High, yuv420p, 30 fps default (template may set 60), AAC 48 kHz 128–192 kbps, `+faststart`.
   - **Export presets:** `standard` (quality-targeted, e.g. CRF-based) or `small_file` (bitrate-capped to meet `template.format.maxFileSizeMB` with margin). If the estimated file size at `standard` exceeds the template's size limit, the app selects `small_file` automatically. Users cannot set CRF/bitrate directly in MVP; fps and resolution come from the template. Per-encoder rate-control values live in the Rust render module (mapping table: *fill after S4*).
 - **Preview parity:** UI preview applies the same crop/scale math from the shared module and renders ASS with the same libass-based renderer. **Golden tests** compare composition → FFmpeg-args snapshots and ffprobe metadata of a short fixture render.
-- **Encoder selection:** probe `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` (Windows Media Foundation; Windows N/KN editions need the Media Feature Pack) → `libopenh264` only if S5 confirms an LGPL-compatible build that includes it and its license terms are acceptable → `x264` only after recorded legal approval (§15). If no encoder is available the export fails with `E_ENCODER_UNAVAILABLE` and an actionable message (update GPU driver / install Media Feature Pack / export diagnostics). The UI says which encoder is active.
+- **Encoder selection:** probe `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` (Windows Media Foundation; Windows N/KN editions need the Media Feature Pack) → `E_ENCODER_UNAVAILABLE`. `libopenh264` and `x264` are **unapproved** pending legal counsel review (see docs/compliance/FFMPEG.md §7 and ARCHITECTURE §15). If no encoder is available the export fails with `E_ENCODER_UNAVAILABLE` and an actionable message (update GPU driver / install Media Feature Pack / export diagnostics). The UI says which encoder is active.
 
 ## 8. Hardware profile and adaptive defaults
 
@@ -253,7 +253,7 @@ Cost drivers: Supabase plan, CDN requests, Sentry volume, payment fees. No per-m
 | Deno | MIT | Not bundled in MVP; may ship later as a fallback JS runtime via the signed component manifest. |
 | QuickJS-NG | MIT | Bundled JS runtime for yt-dlp (`qjs.exe`, 1.87 MB). Pin version + SHA-256 in component manifest. |
 | whisper.cpp + OpenAI Whisper weights | MIT | Verify model file checksums; keep notices. |
-| FFmpeg | **LGPL-2.1+ or GPL depending on build** | **Decision D-11:** ship an **LGPL build** without GPL libraries; call it as a separate process; include license text and a way to obtain the corresponding source for the exact build; confirm the build has libass/freetype/fontconfig (ISC/FTL-class licenses) and no `--enable-gpl`/`--enable-nonfree`. |
+| FFmpeg | **LGPLv3** (Decision D-11) | Ship BtbN release-branch shared LGPL build (`n9.0.2-58-g8c7ef49002`, commit `8c7ef49002`, archive SHA-256 `1fdb837def412ad7cc019874b6310156f40179bd30df58d041a82413f800a331`, zip 74.14 MB, extracted 183.05 MB: `ffmpeg.exe`, `ffprobe.exe`, 7 DLLs). Effective license is **LGPLv3** (`--enable-version3`, no `--enable-gpl`, no `--enable-nonfree`). Uses native Windows Schannel TLS. `boxblur` absent (GPL-only), replaced by `gblur`/`avgblur`. Called strictly as a separate process via argument arrays in a Windows Job Object. Source mirrored on Cloudflare R2; user replacement supported per `docs/compliance/FFMPEG.md`. |
 | x264 / x265 | GPL | **Not bundled** unless legal review approves (also consider H.264 patent licensing). Hardware encoders (NVENC/QSV/AMF) and Windows Media Foundation encode avoid shipping an encoder. |
 | libass | ISC | Used via FFmpeg and preview renderer. |
 | Fonts for captions | Use only SIL OFL/Apache fonts (e.g. Montserrat, Poppins, Inter, Anton) | Never bundle commercial fonts; templates can only reference bundled fonts. |

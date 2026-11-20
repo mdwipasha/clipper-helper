@@ -94,7 +94,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | ID | Pri | Requirement |
 |----|-----|-------------|
 | FR-EXP-1 | M | Export 1080×1920 H.264/AAC MP4 with `+faststart` to a chosen folder; filename pattern. |
-| FR-EXP-2 | M | Encoder auto-selected: `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` → `libopenh264` (if S5 confirms) → `x264` (if legally approved) → fail with `E_ENCODER_UNAVAILABLE` and actionable message. User is told which encoder is active and why if slow. |
+| FR-EXP-2 | M | Encoder auto-selected: `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` → fail with `E_ENCODER_UNAVAILABLE` and actionable message (`libopenh264` and `x264` are unapproved pending legal review). User is told which encoder is active and why if slow. |
 | FR-EXP-3 | M | Export needs **online approval** (ticket). Offline → clear message; editing still works offline. |
 | FR-EXP-4 | M | Re-export is free when covered by an entitlement (same source + segments ± tolerance). Caption/layout/template edits never cost credits. |
 | FR-CRD-1 | M | Free plan: **3 credits/day** *(config)*, reset 00:00 WIB, countdown shown. |

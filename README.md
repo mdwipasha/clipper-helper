@@ -38,7 +38,7 @@ When code and docs disagree, fix one of them **in the same PR**.
 | D-08 | Free re-export via an **entitlement** bound to source video + time segments (± tolerance) | Honors "re-edit is free" without letting one credit cover many different clips. |
 | D-09 | **No automatic refunds.** Failed/cancelled exports are retried free via the entitlement; admins can adjust | Removes refund-abuse paths. |
 | D-10 | **Supabase (Singapore)** is authoritative for auth, plans, credits, payments. App verifies **signed export tickets** | Server owns money; client never trusted. |
-| D-11 | **LGPL FFmpeg build + hardware encoders first**; x264 only after legal review | Licensing safety (see ARCHITECTURE §15). |
+| D-11 | **LGPLv3 BtbN shared FFmpeg build + hardware encoders only** (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`); `libopenh264` and `x264` unapproved | Licensing safety and patent caution (see ARCHITECTURE §15, docs/compliance/FFMPEG.md). |
 | D-12 | **yt-dlp + QuickJS-NG JS runtime** as downloader, updated independently via a signed manifest | YouTube breaks extractors often; the downloader must be hot-updatable. QuickJS-NG (MIT, 1.87 MB) chosen in S1; Deno may ship later as a fallback via signed manifest. |
 | D-13 | Preview via **official YouTube embed through a bridge page**, with storyboard-thumbnail fallback; verified in spike S2 | Compliant preview without downloading the full VOD. |
 | D-14 | A versioned **Composition JSON** is the single source of truth for preview and render | Guarantees preview == export; testable. |

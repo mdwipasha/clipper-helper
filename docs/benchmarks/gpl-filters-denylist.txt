@@ -1,0 +1,50 @@
+# GPL-Only FFmpeg Filters Denylist
+# Generated: 2026-11-20 via Spike S5 follow-up
+# Reference build comparison:
+#   GPL: ffmpeg 9.0.2-essentials_build-www.gyan.dev (--enable-gpl)
+#   LGPL: ffmpeg n9.0.2-58-g8c7ef49002-win64-lgpl-shared-9.0 (--disable-gpl, --enable-version3)
+#
+# RULE (AGENTS.md §5, ROADMAP §4):
+# Render filters used in Clipper Helper MUST NOT appear in this denylist.
+# All composition filters must exist in the pinned LGPL build capability JSON.
+# CI golden render snapshot tests assert absence of these filters.
+# Total GPL-only filters identified: 36
+# -----------------------------------------------------------------------------
+# Filter Name            Flags  Direction  Description
+# -----------------------------------------------------------------------------
+blackframe               .S     V->V       Detect frames that are (almost) black.
+boxblur                  T.     V->V       Blur the input.
+colormatrix              TS     V->V       Convert color matrix.
+cover_rect               ..     V->V       Find and cover a user specified object.
+cropdetect               T.     V->V       Auto-detect crop size.
+delogo                   T.     V->V       Remove logo from input video.
+drawvg                   T.     V->V       Draw vector graphics on top of video frames.
+eq                       T.     V->V       Adjust brightness, contrast, gamma, and saturation.
+find_rect                ..     V->V       Find a user specified object.
+fspp                     T.     V->V       Apply Fast Simple Post-processing filter.
+histeq                   T.     V->V       Apply global color histogram equalization.
+hqdn3d                   TS     V->V       Apply a High Quality 3D Denoiser.
+interlace                ..     V->V       Convert progressive video into interlaced.
+kerndeint                ..     V->V       Apply kernel deinterlacing to the input.
+mcdeint                  ..     V->V       Apply motion compensating deinterlacing.
+mpdecimate               ..     V->V       Remove near-duplicate frames.
+mptestsrc                ..     |->V       Generate various test pattern.
+nnedi                    TS     V->V       Apply neural network edge directed interpolation intra-only deinterlacer.
+owdenoise                T.     V->V       Denoise using wavelets.
+perspective              TS     V->V       Correct the perspective of video.
+phase                    T.     V->V       Phase shift fields.
+pp7                      T.     V->V       Apply Postprocessing 7 filter.
+pullup                   ..     V->V       Pullup from field sequence to frames.
+repeatfields             ..     V->V       Hard repeat fields based on MPEG repeat field flag.
+rubberband               ..     A->A       Apply time-stretching and pitch-shifting.
+sab                      T.     V->V       Apply shape adaptive blur.
+signature                ..     N->V       Calculate the MPEG-7 video signature
+smartblur                T.     V->V       Blur the input video without impacting the outlines.
+spp                      T.     V->V       Apply a simple post processing filter.
+stereo3d                 .S     V->V       Convert video stereoscopic 3D view.
+super2xsai               .S     V->V       Scale the input by 2x using the Super2xSaI pixel art algorithm.
+tinterlace               ..     V->V       Perform temporal field interlacing.
+uspp                     TS     V->V       Apply Ultra Simple / Slow Post-processing filter.
+vaguedenoiser            T.     V->V       Apply a Wavelet based Denoiser.
+vidstabdetect            ..     V->V       Extract relative transformations, pass 1 of 2 for stabilization (see vidstabtransform for pass 2).
+vidstabtransform         ..     V->V       Transform the frames, pass 2 of 2 for stabilization (see vidstabdetect for pass 1).
