@@ -1,0 +1,12 @@
+# Ignore build artifacts, media outputs, temporary files and test videos
+output/
+results/
+temp/
+*.mp4
+*.webm
+*.mkv
+*.ass
+*.png
+*.jpg
+__pycache__/
+*.pyc
