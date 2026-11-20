@@ -13,7 +13,7 @@ Clippers in campaign programs earn by publishing short vertical clips cut from l
 
 ## 2. Users and context
 
-- **Primary:** Indonesian clippers producing several clips per day. Windows laptops, **mid-spec** (≈ 4–6 cores, 8–16 GB RAM, integrated GPU typical). YouTube is the main VOD source. Internet quality varies. Comfortable with consumer editors, not command lines.
+- **Primary:** Indonesian clippers producing several clips per day. Windows laptops, **Reference machine R1** as benchmark baseline (Ryzen 5 PRO 5650U, 32 GB RAM; minimum supported floor TBD after 4-thread / 8 GB testing in beta). YouTube is the main VOD source. Internet quality varies. Comfortable with consumer editors, not command lines.
 - **Secondary:** small groups sharing one campaign template.
 
 ## 3. Goals and non-goals (MVP)
@@ -58,7 +58,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | FR-SRC-1 | M | Accept `watch`, `live`, `shorts`, `youtu.be` URLs; normalize to a video id. Playlists/channels rejected with a clear message. |
 | FR-SRC-2 | M | Fetch metadata (title, channel, duration, thumbnail, live state). Specific messages for: ongoing live, private/deleted, members-only, age-restricted, region-blocked, premiere not started. |
 | FR-SRC-3 | M | Preview with the official player (embed) with current-time readout. If embedding fails, fall back to storyboard thumbnails + timecode inputs. |
-| FR-SRC-4 | M | Range picker: "set start/end here", timecode inputs, ±1 s/±5 s nudges, shows duration. Max range **10 min** *(config)*. Validates 0 ≤ start < end ≤ video duration. Displays estimated download time at range selection: "Perkiraan unduh: ~N menit" (based on measured download rate × range duration). |
+| FR-SRC-4 | M | Range picker: "set start/end here", timecode inputs, ±1 s/±5 s nudges, shows duration. Max range **10 min** *(config, proposed beta default 5 min pending user decision)*. Validates 0 ≤ start < end ≤ video duration. Displays estimated download time at range selection: "Perkiraan unduh: ~N menit", computed as `range_seconds / 1.66 + ~10 s startup` (calibrated later from `stage_stats`). |
 | FR-SRC-5 | S | Open a local video file as the source; same flow after range. Serves as resilience when the downloader breaks. **Decision rule (Q4):** after S1, if the downloader shows fragility (frequent extractor failures or throttling), promote to Must and schedule in M2; otherwise first post-MVP item. |
 
 ### Generate
@@ -127,21 +127,21 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | Daily credits | 3 | **TBD** (placeholder 20) |
 | Export quality | Same | Same |
 | Active devices | 2 | 2 |
-| Max range per source | 10 min | 10 min |
+| Max range per source | 5 min *(proposed beta default; hard cap 10 min config)* | 5 min *(proposed beta default; hard cap 10 min config)* |
 | Max clip length | 5 min | 5 min |
 | Price | – | **TBD** (decide after beta willingness-to-pay check) |
 | Rollover | None | None |
 
-Until M4 sets a price (`price_idr` in the `plans` table is `NULL` = not purchasable via checkout), the pass can only be granted by admin SQL functions (intended for beta). Purchase while a pass is active **queues** a new 30-day grant after the current one. Admin grants use the same mechanism.
+Until M4 sets a price (`price_idr` in the `plans` table is `NULL` = not purchasable via checkout), the pass can only be granted by admin SQL functions (intended for beta). Purchase while a pass is active **queues** a new 30-day grant after the current one. Admin grants use the same mechanism. Beta default `max_range_seconds` = 300 (5 min) proposed pending user decision to keep download times ≲ 3 min; the hard maximum remains configurable up to 600 (10 min) in `app_config`.
 
 ## 7. Non-functional requirements
 
-Targets marked ◇ are **provisional** until the M0 benchmark on a representative mid-spec laptop; record results in `docs/benchmarks/`.
+Targets marked ◇ are **provisional** until benchmarks across Reference machine R1 and lower-tier test machines (see `docs/benchmarks/README.md`); R1 is the reference, floor TBD.
 
 | Area | Requirement |
 |------|-------------|
 | Responsiveness | Cold start to interactive ≤ 3 s ◇. UI never blocks on sidecars. |
-| Throughput | Provisional goals ◇: download ≈ 1.8–1.9× real-time in copy mode (measured on DEV fiber: 10 min range ≈ 5 min; mid-spec TBD; optimization open in S1c); transcript ≈ real-time or faster with the default model on mid-spec; 60 s export ≲ 2× real-time with hardware encoding. |
+| Throughput | Provisional goals ◇: download ≈ 1.66× real-time in copy mode (5 min range ≈ 3 min, ~94 MB at 1080p60 on Reference R1; YouTube paces un-chunked DASH by time; yt-dlp native reaches ≈8×; S1d proxy optional post-M1); transcript ≈ real-time or faster with the default model on R1; 60 s export ≲ 2× real-time with hardware encoding. |
 | Progress clarity | Every operation > 2 s shows stage, progress and ETA (see PROGRESS_AND_ETA.md). |
 | Reliability | Jobs resumable after crash/reboot; no corrupt outputs (write temp → verify → move). |
 | Resource use | Heavy stages limited to hardware-appropriate concurrency; editor ≲ 600 MB RAM ◇. |

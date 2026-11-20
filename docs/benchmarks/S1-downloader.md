@@ -2,7 +2,7 @@
 
 **Status:** Completed  
 **Date:** 2026-11-19 (Extended with S1b on 2026-11-20)  
-**Tested on:** DEV Machine (Windows 11 Pro, AMD Ryzen 5 PRO 5650U, 32 GB RAM, Biznet Optical Fiber — *not the mid-spec target laptop profile*)  
+**Tested on:** Reference Machine R1 (Windows 11 Pro, AMD Ryzen 5 PRO 5650U, 32 GB RAM, Biznet Optical Fiber — see docs/benchmarks/README.md; does not define minimum supported spec)  
 **Target video:** `https://www.youtube.com/watch?v=QOJIILaJKNc` (Replay Live Stream VOD, 1080p60 avc1 + m4a)
 
 ---
@@ -573,6 +573,13 @@ Audited all failure fixtures in `spikes/s1-downloader/fixtures/`. In accordance 
 | `premiere_not_started.txt`| Upcoming premiere | **ASSUMED** | Synthetic (`EXAMPLE_PREM`) | 2026-11-20 | Derived from probe JSON `live_status == 'is_upcoming'` | `E_YT_LIVE_NOT_ENDED` | `E_YT_LIVE_NOT_ENDED` | **Yes** |
 
 *(Claim: Measured / Verified via `spikes/s1-downloader/test-s1c-fixtures.py`)*
+
+> [!IMPORTANT]
+> **Fixture Replacement Requirement for Beta:**
+> Exactly 5 fixtures are VERIFIED and 5 are ASSUMED (`bot_challenge`, `deleted`, `private`, `region_blocked`, and `premiere_not_started`). The 5 ASSUMED fixtures must be systematically replaced with empirical captures during the M6 closed beta via redacted error telemetry (`error_code` + `reason`).
+>
+> **Timestamp Note on Video ID `QSPPyA1736U`:**
+> `QSPPyA1736U` is referenced as "finished live" in §4.2 and "ongoing live" in §10.4. Timestamp verification reconciles both: during the initial test at 2026-11-20 00:15 WIB, the stream was broadcast live (`live_status: 'is_live'`), correctly triggering `E_YT_LIVE_NOT_ENDED`. In a subsequent test at 00:45 WIB after the broadcast concluded, it returned `live_status: 'was_live'` and was successfully downloaded as a standard VOD.
 
 ---
 

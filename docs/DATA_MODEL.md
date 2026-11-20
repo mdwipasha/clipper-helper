@@ -188,7 +188,7 @@ create table public.app_config (
 insert into public.app_config(key, value) values
  ('min_app_version', '"0.0.0"'),
  ('maintenance',     '{"enabled":false,"message":null}'),
- ('limits',          '{"max_range_seconds":600,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7}'),
+ ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
  ('ticket',          '{"ttl_seconds":900,"active_kid":null,"next_kid":null}'),
  ('flags',           '{}');
 
@@ -397,7 +397,7 @@ interface Composition {
   sources: Array<{
     id: string; provider: 'youtube' | 'local_file'; videoId: string;   // local_file: content fingerprint
     path: string;                               // POSIX-style, relative to workspace root; must match ^(cache|projects)/[A-Za-z0-9._/-]+$ (see ARCHITECTURE §9)
-    absoluteStartMs: number;                    // where this file starts in the original VOD (PENDING S1c: exact relationship between file t=0 and this value in copy-mode pre-roll)
+    absoluteStartMs: number;                    // where this file starts in the original VOD; working definition: absoluteStartMs = requestedStartMs (S1c verified relative audio sync; M1 sync test gates absolute alignment)
     durationMs: number; width: number; height: number; fps: number;
   }>;
   timeline: Array<{ id: string; sourceId: string; inMs: number; outMs: number }>; // source-relative; ordered; ≤ max_segments
