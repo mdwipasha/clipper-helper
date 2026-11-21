@@ -14,12 +14,24 @@ BIN_BLAS = os.path.join(BASE_DIR, "bin", "whisper-blas-bin-x64", "Release", "whi
 
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 AUDIO_DIR = os.path.join(BASE_DIR, "audio")
-REF_FILE = os.path.join(BASE_DIR, "references", "ground_truth.json")
+REFS_DIR = os.path.join(BASE_DIR, "references")
+DRAFT_MEDIUM_FILE = os.path.join(REFS_DIR, "draft_medium.json")
 RESULTS_DIR = os.path.join(BASE_DIR, "results", "matrix")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-with open(REF_FILE, "r", encoding="utf-8") as f:
-    GROUND_TRUTH = json.load(f)
+DRAFT_MEDIUM = {}
+if os.path.exists(DRAFT_MEDIUM_FILE):
+    with open(DRAFT_MEDIUM_FILE, "r", encoding="utf-8") as f:
+        DRAFT_MEDIUM = json.load(f)
+
+def get_reference_for_sample(sample_id):
+    final_txt = os.path.join(REFS_DIR, f"final_{sample_id}.txt")
+    if os.path.exists(final_txt):
+        with open(final_txt, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("---") and not line.startswith("[")]
+            return " ".join(lines), "human_final"
+    # fallback to draft_medium
+    return DRAFT_MEDIUM.get(sample_id, ""), "medium_draft"
 
 SAMPLES = [
     ("gaming_slang", "Gaming Slang (Deceit 2)"),
@@ -37,7 +49,7 @@ MODELS = {
 VAD_MODEL = os.path.join(MODELS_DIR, "ggml-silero-v6.2.0.bin")
 
 def evaluate_run(res, sample_id):
-    ref_text = GROUND_TRUTH.get(sample_id, "")
+    ref_text, ref_kind = get_reference_for_sample(sample_id)
     words = []
     hyp_text = ""
     zero_dur_count = 0
@@ -72,6 +84,7 @@ def evaluate_run(res, sample_id):
             has_outro_hallucination = True
 
     return {
+        "ref_kind": ref_kind,
         "wer": round(wer * 100, 2),
         "cer": round(cer * 100, 2),
         "words_count": len(words),
