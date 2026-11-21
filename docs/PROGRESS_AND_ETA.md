@@ -16,16 +16,23 @@
 Default stage weights are *initial* estimates of time share on a mid-spec laptop; they are replaced by calibrated values (§4.3) after the first runs.
 
 ### 2.1 `generate`
+Free local operation. Download-only: fetches the chosen range and constructs the initial composition without captions.
 | Stage id | User-facing text (id) | Work unit | Initial weight |
 |----------|----------------------|-----------|----------------|
-| `probe` | Memeriksa link video… | indeterminate (timeout 30 s) | 2% |
-| `download` | Mengunduh potongan video | media-seconds (startup 6–11 s is indeterminate: "Menyiapkan unduhan…") | 33% |
-| `prepare_preview` *(only if needed)* | Menyiapkan pratinjau | media-seconds | 5% |
-| `extract_audio` | Menyiapkan audio | media-seconds | 5% |
-| `transcribe` | Membuat transkrip ({model}) | audio-seconds | 50% |
-| `build` | Menyusun caption dan layout | indeterminate (<2 s) | 5% |
+| `probe` | Memeriksa link video… | indeterminate (timeout 30 s) | 5% |
+| `download` | Mengunduh potongan video | media-seconds (startup 6–11 s is indeterminate: "Menyiapkan unduhan…") | 85% |
+| `prepare_preview` *(only if needed)* | Menyiapkan pratinjau | media-seconds | 8% |
+| `build` | Menyiapkan editor | indeterminate (<2 s) | 2% |
 
-### 2.2 `export`
+### 2.2 `captions`
+Free local operation. Triggered after trimming: transcribes ONLY the trimmed segment(s) (+ ~2 s padding).
+| Stage id | User-facing text (id) | Work unit | Initial weight |
+|----------|----------------------|-----------|----------------|
+| `extract_audio` | Menyiapkan audio clip… | audio-seconds | 10% |
+| `transcribe` | Membuat caption ({model})… | audio-seconds | 85% |
+| `map` | Menyelaraskan teks… | indeterminate (<1 s) | 5% |
+
+### 2.3 `export`
 | Stage id | Text (id) | Unit | Weight |
 |----------|-----------|------|--------|
 | `ticket` | Memeriksa kredit & izin export… | indeterminate (approval request timeout 15 s; distinct from ticket TTL of 15 min) | 2% |
@@ -34,14 +41,14 @@ Default stage weights are *initial* estimates of time share on a mid-spec laptop
 | `verify` | Memeriksa hasil | indeterminate | 5% |
 | `finalize` | Menyimpan file | indeterminate | 3% |
 
-### 2.3 Others
+### 2.4 Others
 `model_download` (bytes), `component_update` (bytes per component), `app_update` (bytes), `first_run_benchmark` (steps: CPU probe, encoder test, speech test — "Menyiapkan aplikasi untuk laptop kamu", ≈10–30 s with step list).
 
 ## 3. Event contract (Rust → UI)
 
 ```ts
 type JobEvent = {
-  jobId: string; kind: 'generate' | 'export' | 'model_download' | 'component_update' | 'app_update' | 'benchmark';
+  jobId: string; kind: 'generate' | 'captions' | 'export' | 'model_download' | 'component_update' | 'app_update' | 'benchmark';
   state: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
   stage: { id: string; index: number; count: number; labelKey: string; labelArgs?: Record<string, string | number> };
   stageProgress: { done: number; total: number | null; unit: 'bytes' | 'media_seconds' | 'frames' | 'audio_seconds' | 'steps' };
@@ -61,8 +68,10 @@ Emit rules: at most **4 events/second** per job (coalesce); always emit on stage
 | Stage | How progress is read |
 |-------|----------------------|
 | `download` | FFmpeg `time=`/`speed=` output parsed from yt-dlp's internal FFmpeg invocation (≈1.4–1.9 events/s in copy mode). The 6–11 s startup (extraction + JS challenge resolution) is indeterminate — show "Menyiapkan unduhan…". Total duration = requested range duration. Reference implementation: `spikes/s1-downloader/progress_parser.py` (spec for Rust parser; port its unit-test cases). |
-| `extract_audio`, `analyze_audio`, `prepare_preview`, `render` | FFmpeg `-progress pipe:1`: `out_time_us` ÷ expected duration (render: `frame` ÷ total frames), plus `speed` and `fps`. |
-| `transcribe` | whisper.cpp `--print-progress` percent × audio duration. |
+| `extract_audio` | FFmpeg `-progress pipe:1`: extracts 16 kHz mono WAV for trimmed segment(s) (+ ~2 s padding). Work unit = audio-seconds. |
+| `transcribe` | whisper.cpp `--print-progress` percent × clip audio duration. |
+| `map` | Rust maps source-relative words to output timeline and applies user edits (<1 s). |
+| `analyze_audio`, `prepare_preview`, `render` | FFmpeg `-progress pipe:1`: `out_time_us` ÷ expected duration (render: `frame` ÷ total frames), plus `speed` and `fps`. |
 | `model_download`, `component_update`, `app_update` | Bytes received ÷ `Content-Length` (verify hash after; resumable). |
 | indeterminate stages | Elapsed time + stage name; timeouts produce `E_*` errors. |
 
@@ -73,12 +82,15 @@ For the running stage *s* with total work `W`, done `D`:
 - Blend: `w = clamp((D/W) / 0.15, 0, 1)`; `r = w·r_live + (1−w)·r_prior` (after ≥3 s of data; before that use `r_prior`).
 - `remaining_s = (W − D) / r`.
 - Future stages: `remaining_k = W_k / r_prior_k`, where `W_k` is derived from known quantities (range duration, output duration, expected download size).
+- **Operation-specific ETA rules:**
+  - `generate` ETA is download-only: `range_seconds / 1.66 + ~10 s startup` (+ proxy transcode if needed).
+  - `captions` ETA: `clip_seconds × RTF prior + model-load overhead (~0.5–1.0 s)`. Trim bounds are snapshotted when the job starts.
 - **ETA = Σ remaining** (running + future). Range: `[0.85·ETA, 1.3·ETA]` when confidence is low/medium, narrower when high.
 - **Confidence:** low until ≥10 s of data *and* ≥5% of the stage done *or* a calibrated prior exists; high when `r_live` has been stable (coefficient of variation < 0.25) for ≥20 s.
 - **Overall percent:** `Σ(completed stage weights) + weight_current × (D/W)`, with weights = calibrated expected time share. Clamped to be non-decreasing.
 
 ### 4.3 Calibration
-After every completed stage, store `(device_profile, stage, variant, work_units, wall_ms)` in `stage_stats`. First-run benchmark seeds the priors. Telemetry (opt-in) may report `stage_ms` by device class to improve built-in defaults. Re-run benchmark after GPU driver/hardware change or from settings.
+After every completed stage, store `(device_profile, stage, variant, work_units, wall_ms)` in `stage_stats`. First-run benchmark seeds the priors. Telemetry (opt-in) may report `stage_ms` by device class to improve built-in defaults. Speech priors (model × device class) apply to **CLIP length**, not range length. Re-run benchmark after GPU driver/hardware change or from settings.
 
 ## 5. Display rules
 
@@ -94,14 +106,14 @@ After every completed stage, store `(device_profile, stage, variant, work_units,
 
 ## 6. UI components
 
-1. **Operation panel** (in the flow screen): stage list with ✓ done / ● current / ○ upcoming; overall bar with %; line "Tahap 3 dari 5 · Membuat transkrip (Small) · 42% · sekitar 1 mnt 30 dtk lagi"; details toggle (rate, encoder/model, file size so far); **Batal** button.
+1. **Operation panel** (in the flow screen): stage list with ✓ done / ● current / ○ upcoming; overall bar with %; line "Tahap 2 dari 3 · Membuat caption (Small) · 42% · sekitar 40 dtk lagi"; details toggle (rate, encoder/model, file size so far); **Batal** button.
 2. **Global activity tray** (top bar): compact chip per running job (icon, %, ETA) so users can navigate while it runs.
 3. **Toast / Windows notification** on success or failure when the window is not focused.
 4. **First-run wizard** with the benchmark and component downloads, each with its own bar.
 
 **Copy examples (id):**
 - Download: "Mengunduh potongan video · 42 MB dari ±118 MB · 6,2 MB/dtk · sekitar 15 dtk lagi"
-- Transcribe: "Membuat transkrip (model Small) · 1,3× kecepatan normal · sekitar 40 dtk lagi"
+- Captions: "Membuat caption · model Small · sekitar 40 dtk lagi"
 - Render: "Merender video · frame 820 dari 1.800 · encoder NVIDIA (h264_nvenc) · sekitar 20 dtk lagi"
 - Ticket: "Memeriksa kredit… Export ini memakai 1 kredit (sisa 2)."
 - Done: "Selesai! File tersimpan di Videos\ClipperHelper. Buka folder · Salin caption & hashtag"
@@ -112,13 +124,15 @@ After every completed stage, store `(device_profile, stage, variant, work_units,
 |-------|--------|--------|
 | `probe` | Abort request | n/a |
 | `download` | Kill process tree; delete partial file (.part) | Restart stage (download is NOT resumable; restart overwrites the .part file from scratch) |
-| `extract_audio`, `prepare_preview`, `analyze_audio` | Kill; delete temp output | Restart stage |
-| `transcribe` | Kill; discard partial (or keep whisper checkpoint if supported) | Restart stage (cache hit if finished earlier) |
+| `prepare_preview`, `analyze_audio` | Kill; delete temp output | Restart stage |
+| `extract_audio` | Kill; delete temp audio | Restart stage |
+| `transcribe` | Kill; discard partial results (cancelling never blocks editing) | Restart stage |
+| `map` | Not cancellable (<1 s) | – |
 | `ticket` | Abort; if the server already processed it, the next attempt with the same idempotency key returns the same result | – |
 | `render` | Kill; delete temp output | Restart render (free: entitlement exists) |
 | `verify`/`finalize` | Not cancellable (very short) | – |
 
-Cancelling during `download` warns: "Proses unduh akan dihentikan dan harus diulang dari awal jika dilanjutkan." Cancelling **after** a ticket was issued shows: "Kredit sudah dipakai untuk proyek ini. Kamu bisa export ulang gratis." A job interrupted by crash/reboot is offered for resume at next launch using the persisted `jobs` row (non-resumable stages like download restart from 0%).
+Cancelling `captions` kills the sidecar immediately, discards partial results, and reverts `captions.status` to `'none'`. Cancelling captions **never blocks editing** (user can continue trimming, adjusting layout, or changing text overlays uninterrupted). Cancelling during `download` warns: "Proses unduh akan dihentikan dan harus diulang dari awal jika dilanjutkan." Cancelling **after** a ticket was issued shows: "Kredit sudah dipakai untuk proyek ini. Kamu bisa export ulang gratis." A job interrupted by crash/reboot is offered for resume at next launch using the persisted `jobs` row (non-resumable stages like download restart from 0%).
 
 ## 8. Error catalog
 

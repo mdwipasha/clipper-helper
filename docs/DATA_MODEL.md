@@ -406,8 +406,11 @@ interface Composition {
     | { mode: 'blur_fit'; blur: number }
     | { mode: 'split'; top: Rect; bottom: Rect; ratio: number };        // ratio = top height share, 0.3..0.7
   captions: {
-    enabled: boolean; language: 'id' | 'en' | 'auto';
-    words: Array<{ t0: number; t1: number; text: string }>;             // OUTPUT-timeline ms
+    enabled: boolean;
+    status: 'none' | 'running' | 'ready' | 'stale';                     // 'stale' when timeline extends beyond transcribed coverage
+    language: 'id' | 'en' | 'auto';
+    words: Array<{ id: string; t0: number; t1: number; text: string }>; // OUTPUT-timeline ms, DERIVED from transcript + timeline + edits
+    edits: Array<{ wordId: string; text?: string; t0?: number; t1?: number; deleted?: boolean }>; // user overrides surviving re-trims
     style: CaptionStyle;                                                // resolved from template + overrides
   };
   overlays: Array<
@@ -423,6 +426,26 @@ interface Composition {
 }
 ```
 Absolute VOD segments sent to the server = `timeline[i]` mapped through `sources[].absoluteStartMs + inMs/outMs`.
+
+### Source Transcripts & Derived Words
+
+Transcripts live in **SOURCE time** as a cached workspace artifact (kind `transcript`):
+```ts
+interface SourceTranscript {
+  sourceId: string;
+  coverage: Array<[number, number]>;                                   // [startMs, endMs][] in source-relative ms covered by transcription
+  words: Array<{ id: string; t0: number; t1: number; text: string }>; // source-relative ms with stable UUIDs
+}
+```
+- **Derivation:** `captions.words` (output-timeline ms) is dynamically derived whenever the timeline changes:
+  1. Filter source transcript words overlapping `[timeline.inMs, timeline.outMs]`.
+  2. Shift timings to output-timeline ms (`t - inMs + segmentOffsetMs`).
+  3. Re-apply user overrides from `captions.edits` matched by `wordId` (`text`, nudged `t0/t1`, or `deleted`).
+- **Trim updates:**
+  - **Shrinking trim:** keeps existing captions valid without re-transcribing (`captions.status = 'ready'`). Words falling outside new trim boundaries are excluded from `captions.words`.
+  - **Extending trim:** if new segment boundaries fall within `transcript.coverage`, captions remain valid. If extending beyond `coverage`, `captions.status = 'stale'` and the UI offers "Perbarui caption" (MVP: re-transcribe the new clip; delta transcription is post-MVP).
+  - **Re-trim after user edits:** user edits are preserved in `captions.edits` and re-applied over the derived words.
+- **Canonical Hash:** `comp_hash` (SHA-256) covers the derived `captions.words` and `captions.edits`.
 
 ## 8. Campaign template JSON (v1)
 
@@ -472,13 +495,13 @@ create table projects (
   created_at integer, updated_at integer, last_export_at integer
 );
 create table jobs (
-  id text primary key, project_id text, kind text,              -- generate|export|model_download|component_update|app_update
+  id text primary key, project_id text, kind text,              -- generate|captions|export|model_download|component_update|app_update
   status text,                                                  -- queued|running|paused|succeeded|failed|cancelled
   stage text, progress_json text, error_code text, error_detail text,
   idempotency_key text, attempt integer default 0, created_at integer, started_at integer, finished_at integer
 );
 create table artifacts (
-  id text primary key, project_id text, kind text,              -- source|audio|transcript|proxy|waveform|output
+  id text primary key, project_id text, kind text,              -- source|audio|transcript(SourceTranscript)|proxy|waveform|output
   cache_key text unique, path text, size_bytes integer, sha256 text, created_at integer, last_used_at integer, pinned integer default 0
 );
 create table stage_stats (                                      -- ETA calibration

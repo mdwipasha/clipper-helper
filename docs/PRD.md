@@ -35,8 +35,8 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | 1 | Home | Paste YouTube link; recent projects; credit indicator. |
 | 2 | Source & range | Metadata fetched; official-player preview; user sets start/end (button from current time, timecode, ±nudge). |
 | 3 | Template | Choose a campaign template (or a built-in generic one). |
-| 4 | Generate | Free. Download range → audio → transcript → initial composition. Stage + progress + ETA shown throughout. |
-| 5 | Editor | Trim, layout, captions, logo/text. Autosave, undo/redo. |
+| 4 | Generate | Free. Download range → (preview proxy if needed) → initial composition without captions. Stage + progress + ETA shown throughout. |
+| 5 | Editor | Trim, layout, captions ("Buat caption" button after trim; also offered when Captions tab opens), logo/text. Autosave, undo/redo. |
 | 6 | Checklist & export | Template rules evaluated; dialog states whether this export costs 1 credit or is free (entitlement). Online approval → render with progress + ETA → post-render verification. |
 | 7 | Done | Open folder, copy post text (caption + hashtags), "make another clip from this range". |
 
@@ -64,7 +64,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 ### Generate
 | ID | Pri | Requirement |
 |----|-----|-------------|
-| FR-GEN-1 | M | Generate = download range (≤1080p, prefer H.264/AAC) → extract audio → transcribe (id / en / auto) → build composition from the template. Free and unlimited; **one at a time**. |
+| FR-GEN-1 | M | Generate = download range (≤1080p, prefer H.264/AAC) → (preview proxy if needed) → build initial composition without captions from the template. Free and unlimited; **one at a time**. |
 | FR-GEN-2 | M | Resumable and cached: same range + quality reuses artifacts; interrupted downloads resume. |
 | FR-GEN-3 | M | Components auto-download on first run and update independently of the app (signed manifest). |
 
@@ -73,12 +73,20 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 |----|-----|-------------|
 | FR-EDIT-1 | M | Trim with in/out handles, frame-level nudge, looped playback. |
 | FR-EDIT-2 | M | Layouts: **fill** (draggable crop), **blur-fit**, **split** (two regions, e.g. gameplay + facecam). Live preview. |
-| FR-EDIT-3 | M | Captions from transcript: edit text/timing, style from template with overrides, language switch. |
+| FR-EDIT-3 | M | Captions from trimmed clip: trigger "Buat caption" (separate free local operation) or auto-prompt on opening Captions tab; edit text/timing, style from template with overrides, language switch. |
 | FR-EDIT-4 | M | Logo/watermark overlay (position, size, opacity) and fixed text overlay. |
 | FR-EDIT-5 | S | Cut out a middle section; remove silences. |
 | FR-EDIT-6 | S | Audio gain + loudness normalization. |
 | FR-EDIT-7 | M | Undo/redo, autosave, crash recovery. |
 | FR-EDIT-8 | C | Face-aware auto reframe (local ONNX) — post-MVP. |
+
+### Captions
+| ID | Pri | Requirement |
+|----|-----|-------------|
+| FR-CAP-1 | M | Captions use the current trim bounds: extracts audio ONLY for the trimmed segment(s) (+ ~2 s context padding each side), transcribes, and maps words back to the output timeline. |
+| FR-CAP-2 | M | Shrinking the trim keeps captions valid without re-transcribing (words outside the new trim bounds are hidden). |
+| FR-CAP-3 | M | Extending the trim beyond transcribed coverage marks captions stale and offers a re-run (MVP: re-transcribe the new clip; delta transcription is post-MVP). |
+| FR-CAP-4 | M | User text/timing edits survive re-trims (edits are keyed by stable word ID and re-applied over derived words). |
 
 ### Templates and checklist
 | ID | Pri | Requirement |
@@ -87,7 +95,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | FR-TPL-2 | M | Built-in starter templates (generic TikTok / Reels / Shorts). |
 | FR-TPL-3 | S | Sync templates to the account; share by short code; import with validation. |
 | FR-TPL-4 | M | Template carries post text (caption template, hashtags, mentions, disclosure) with a copy button. |
-| FR-CHK-1 | M | Pre-export checklist from template rules. **Errors block export; warnings do not.** |
+| FR-CHK-1 | M | Pre-export checklist from template rules. **Errors block export; warnings do not.** The template rule `captions_present` blocks export only when the template requires captions. |
 | FR-CHK-2 | M | Post-render verification with ffprobe (duration, resolution, fps, size, audio stream). |
 
 ### Export and credits

@@ -90,8 +90,8 @@ apps/desktop/
 ```mermaid
 flowchart LR
   A[probe] --> B[download range] --> C{needs proxy?}
-  C -- yes --> D[prepare preview] --> E
-  C -- no --> E[extract audio] --> F[transcribe] --> G[build composition]
+  C -- yes --> D[prepare preview] --> E[build initial composition]
+  C -- no --> E
 ```
 
 | Stage | Tool | Work unit | Cache key |
@@ -99,8 +99,6 @@ flowchart LR
 | probe | yt-dlp `-J` | – (indeterminate, ≤30 s timeout) | – |
 | download | yt-dlp `--download-sections` (copy mode); reuses probe JSON via `--load-info-json` (saves ~6 s extraction). Probe JSON is a **temp file** (contains signed URLs, ~6 h TTL) — delete after the stage, never log or sync. On 403 from URL expiry: silent re-probe once and retry; only then surface `E_YT_RATE_LIMITED`. | media-seconds (from FFmpeg `time=`/`speed=` output, ~1.4–1.9 ev/s; 6–11 s startup is indeterminate — show "Menyiapkan unduhan…") | sha256(provider, video_id, start, end, format selector) |
 | prepare preview | FFmpeg (only when source codec is not H.264/AAC — e.g. VP9/AV1-only sources); proxy transcode via `h264_mf` at `-b:v 3500k` with a short GOP (`-g 30`, TO-VERIFY: confirm smooth, frame-accurate seeking in WebView2 during M1). Final export always uses the original file. | media-seconds | sha256(source artifact, preset) |
-| extract audio | FFmpeg → 16 kHz mono WAV | media-seconds | sha256(source artifact) |
-| transcribe | whisper.cpp (`--print-progress`) | audio-seconds | sha256(audio, model, language, vad) |
 | build | Rust | – (<2 s) | – |
 
 Rules:
@@ -110,7 +108,30 @@ Rules:
 - Baseline copy-mode download measured at **≈1.66× real-time** (5 min range ≈ 3 min, ~94 MB at 1080p60 on Reference R1). YouTube paces un-chunked DASH requests by **TIME** (720p took the same wall time as 1080p), while yt-dlp's native chunked downloader reaches **≈8× real-time** on the same link. Parallel split ($N=2/3/4$) was rejected (not $\ge 2\times$ faster, and copy-mode joins broke at $N=4$). Sequential copy-mode is retained as baseline and placed behind a `RangeDownloader` trait in the Rust core design. Open item S1d (optional, after M1 baseline works): a local range-chunking proxy so FFmpeg reads through chunked upstream requests.
 - Failures are stage-scoped; retry resumes from the last good artifact.
 
-### 5.2 Export (credit-gated)
+### 5.2 Captions (free local operation)
+
+Captions are a separate free local operation started after the user trims: triggered via the "Buat caption" button or auto-offered upon opening the Captions tab. We **never transcribe the whole downloaded range or full VOD** — only the trimmed segment(s).
+
+```mermaid
+flowchart LR
+  A[extract audio (trimmed segment ± 2s)] --> B[transcribe (whisper.cpp)] --> C[map to timeline]
+```
+
+| Stage | Tool | Work unit | Cache key |
+|-------|------|-----------|-----------|
+| extract audio | FFmpeg → 16 kHz mono WAV for trimmed segment(s) (+ ~2 s context padding each side) | audio-seconds | sha256(segment audio extract) |
+| transcribe | whisper.cpp (`--print-progress`) | audio-seconds | sha256(segment audio hash, model, language, vad, dtw) |
+| map | Rust (map source-relative words to output timeline, re-apply user edits) | – (<1 s) | – |
+
+Rules:
+- Audio extracted ONLY for the trimmed segment(s) (+ ~2 s context padding each side for acoustic and boundary phonetic continuity).
+- Multiple segments on the timeline are transcribed independently (each padded), then mapped to output timeline positions.
+- Transcript cache key = `sha256(segment audio hash, model, language, vad, dtw)`.
+- ETA includes model load / warm-up overhead (~0.5–1.0 s) + `clip_seconds × RTF prior`. Trim bounds are snapshotted when the job starts.
+- Cancelling `captions` never blocks editing: partial results are discarded, and `captions.status` returns to `'none'`.
+- Shrinking the trim keeps existing captions valid (words outside the new trim bounds are hidden). Extending beyond transcribed coverage marks `captions.status = 'stale'` and prompts re-run (MVP: re-transcribe the new clip; delta transcription is post-MVP). User text/timing edits survive re-trims.
+
+### 5.3 Export (credit-gated)
 
 ```mermaid
 sequenceDiagram
@@ -148,7 +169,7 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 ## 7. Composition and render
 
 - **Composition JSON** (DATA_MODEL §7) is canonical: sources, timeline segments (source-relative ms + absolute offset), layout, captions (word timings), overlays, audio, template reference. Coordinates are **normalized 0–1** so they are resolution-independent. Time mapping working definition: `absoluteStartMs = requestedStartMs`; file t=0 = requested start (pre-roll packets carry discard flag). S1c verified relative consistency across offsets via audio cross-correlation (0.00 ms error); absolute timeline alignment beyond 15 s tolerance and WebView2 playback behavior remain to be validated in M1 sync test. Timeline segments map back to absolute VOD time via `absoluteStartMs` for entitlement matching.
-- **Canonicalization + hash:** keys sorted, numbers normalized → `comp_hash` (SHA-256). Included in the export ticket.
+- **Canonicalization + hash:** keys sorted, numbers normalized → `comp_hash` (SHA-256). Included in the export ticket. `comp_hash` covers the derived words (`captions.words`) and user overrides (`captions.edits`).
 - **Render builder (Rust):** composition → FFmpeg filtergraph + ASS file.
   - `fill`: crop rect → scale to 1080×1920.
   - `blur_fit`: blurred scaled background (using LGPL filter `gblur` or `avgblur`; `boxblur` is GPL-only and strictly absent in LGPL builds) + centered contained foreground.
@@ -163,7 +184,7 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 
 ## 8. Hardware profile and adaptive defaults
 
-First run (and "Re-run benchmark" in settings): probe CPU model/cores/AVX2, RAM, GPUs, free disk; test-encode with each encoder; run a ~10 s whisper micro-benchmark. Produce a `device_profile` (class A/B/C) and measured rate priors for ETA. Defaults:
+First run (and "Re-run benchmark" in settings): probe CPU model/cores/AVX2, RAM, GPUs, free disk; test-encode with each encoder; run a ~10 s whisper micro-benchmark. Produce a `device_profile` (class A/B/C) and measured rate priors for ETA (speech priors apply to CLIP length, not range length). Defaults:
 
 | Setting | Rule |
 |---------|------|

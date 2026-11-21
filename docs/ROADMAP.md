@@ -62,8 +62,15 @@ Test fixtures: short clips we own or that are freely licensed. Never commit down
 
 ## 5. M1 — Core local pipeline (no accounts)
 
-Scope: Tauri skeleton, typed IPC, SQLite, job runner (stages, cache, resume, cancel), hardware probe + first-run wizard, component installer (dev manifest), URL intake + probe, preview (per S2), range picker, generate pipeline, minimal editor (trim, fill layout, captions auto, no templates), render + verify, full progress/ETA, error catalog plumbing. Use a **`TicketProvider` interface** with a fake implementation so M3 can swap in the real one without touching the render code.
-**Exit:** a mid-spec laptop goes link → exported 9:16 captioned clip; every stage shows stage/progress/ETA; cancel/resume works; failures show catalog messages; sync test passes (known marker in source; preview and export align within ±1 frame; captions align with speech).
+Scope: Tauri skeleton, typed IPC, SQLite, job runner (stages, cache, resume, cancel), hardware probe + first-run wizard, component installer (dev manifest), URL intake + probe, preview (per S2), range picker, generate pipeline (download-only), minimal editor (trim, fill layout, captions as separate operation on trimmed clip, no templates), render + verify, full progress/ETA, error catalog plumbing. Use a **`TicketProvider` interface** with a fake implementation so M3 can swap in the real one without touching the render code.
+**Exit:** a mid-spec laptop goes link → range → generate → trim → captions → exported 9:16 captioned clip; every stage shows stage/progress/ETA; cancel/resume works (cancelling captions never blocks editing); failures show catalog messages; sync test passes (known marker in source; preview and export align within ±1 frame; captions align with speech).
+**Test cases for caption flow:**
+- Trim → captions → export end-to-end.
+- Shrink trim: existing captions remain valid without re-transcribing (words outside trimmed bounds hidden).
+- Extend trim within transcribed coverage: captions remain valid.
+- Extend trim beyond transcribed coverage: marks captions stale (`captions.status = 'stale'`) and offers re-run.
+- Re-trim after editing words: user text/timing overrides survive re-trims.
+- Multi-segment timeline: independent padded transcription (+ ~2 s padding per segment) mapped to single output timeline.
 
 ## 6. M2 — Editor, templates, checklist
 
