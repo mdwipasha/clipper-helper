@@ -119,7 +119,14 @@ payload: { v:1, sub:<user_id>, did:<device_id>, eid:<export_id>, pid:<project_id
 
 ## 9. Desktop app hardening
 
-- **Tauri v2 capabilities:** explicit allowlist of IPC commands; no wildcard shell/fs; asset protocol scoped to the workspace; devtools disabled in release; CSP: `default-src 'self'`, no `unsafe-eval`, `connect-src` limited to our API/CDN, `frame-src` limited to the bridge origin.
+- **Tauri v2 capabilities:** explicit allowlist of IPC commands; no wildcard shell/fs; asset protocol scoped to the workspace; devtools disabled in release; CSP: `default-src 'self'`, no `unsafe-eval`, `connect-src` limited to our API/CDN, `frame-src` limited to the bridge origin (`https://clipper-bridge.vercel.app`).
+- **Bridge security requirements (D-13):**
+  - No `'*'` postMessage targets: host sends commands targeted strictly to the bridge origin; bridge posts events back targeted strictly to the validated host origin.
+  - Handshake & origin validation: bidirectional handshake verifies `event.origin` against an allowlist (`http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`) and validates `event.source === iframe.contentWindow`.
+  - Schema validation & size limits: schema-validate every message (TypeScript / zod schema) at the boundary; enforce a strict 64 KB payload size limit.
+  - CSP hardening: remove `'unsafe-inline'` from bridge `script-src` in production deployment.
+  - Frame-ancestors scoping: production bridge `frame-ancestors` allows Tauri origins only (`https://tauri.localhost http://tauri.localhost tauri://localhost`); `localhost` / `127.0.0.1` are strictly excluded from production and reserved for separate development deployments.
+  - App CSP isolation: desktop app CSP enforces `frame-src https://clipper-bridge.vercel.app` only. Direct YouTube frames are blocked.
 - **Sidecar execution:** spawned only by Rust; absolute paths inside the install/bin dir; arguments as arrays; inputs validated (URL allowlist, numeric ranges, sanitized output paths inside workspace); Windows **Job Object** with kill-on-close so no orphan processes; timeouts and output-size limits; stderr parsed, never executed.
 - **Workspace path safety:** workspace root = `%LOCALAPPDATA%\ClipperHelper\`. All stored paths are POSIX-style, relative to the root, and must match `^(cache|projects)/[A-Za-z0-9._/-]+$` — no `..`, no leading `/`, no drive letters, no UNC paths. Only `resolve_workspace_path()` in Rust converts stored paths to OS paths; it canonicalizes and verifies the result stays inside the root (including across symlinks and NTFS junctions).
 - **Integrity:** verify SHA-256 of sidecars at startup (cheap size+mtime check, full hash after updates); refuse to run unexpected binaries.
@@ -146,7 +153,7 @@ Pinned exact versions + lockfiles (`pnpm`, `Cargo.lock`); `cargo audit`/`npm aud
 | Telemetry events (**opt-in**) | `events` | Quality, ETA priors | 90 days |
 | Crash reports (**opt-in**) | Sentry | Stability | Per Sentry retention |
 
-**Never leaves the device:** video files, audio, transcripts, caption text, project contents. **Telemetry events (complete list):** `app_start`, `generate_done{stage_ms, device_class, model, ok/error_code}`, `export_done{encoder, render_ms, ok/error_code}`, `component_update{component, ok}`, `caption_edit_rate{model, total_words, edited_words}` (aggregate counts only, no text), `error{code, stage}`. No URLs, titles, or text. Provide: privacy policy, in-app consent screen, data export/deletion request path.
+**Never leaves the device:** video files, audio, transcripts, caption text, project contents. **Telemetry events (complete list):** `app_start`, `generate_done{stage_ms, device_class, model, ok/error_code}`, `export_done{encoder, render_ms, ok/error_code}`, `component_update{component, ok}`, `caption_edit_rate{model, total_words, edited_words}` (aggregate counts only, no text), `preview_fallback{reason}` (aggregate counts of switches to timecode-only mode; `reason`: `'embed_disabled'` | `'error_101_150'` | `'timeout'` | `'preview_config'`), `error{code, stage}`. No URLs, titles, or text. Provide: privacy policy, in-app consent screen, data export/deletion request path.
 
 ## 12. Logging, monitoring, incident response
 

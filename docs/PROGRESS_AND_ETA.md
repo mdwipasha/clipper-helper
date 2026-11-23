@@ -180,7 +180,11 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_TICKET_INVALID` | Ticket failed verification (clock/tamper) | yes | Retry · Update app |
 | `E_PAYMENT_PENDING` / `E_PAYMENT_FAILED` / `E_PAYMENT_EXPIRED` | Checkout states | varies | Continue payment / Try again |
 | `E_TEMPLATE_INVALID` | Template/schema validation failed | no | Fix template |
+| `E_PREVIEW_CONFIG` | Preview bridge configuration or origin error (YouTube error 153 / bridge misconfiguration) | yes (auto-switch) | Auto-switch to timecode-only mode · Check app network/bridge config |
 | `E_UNKNOWN` | Unexpected | yes | Retry · Export diagnostics |
+
+> [!NOTE]
+> A mode switch to timecode-only mode (e.g. when yt-dlp probe reports `playable_in_embed=false`, the bridge reports 101/150 after a control-video check, or the bridge handshake times out after 6 s) is a normal UI state, **not an error code**. `E_PREVIEW_CONFIG` is recorded strictly when YouTube emits Error 153 or the bridge configuration fails (triggering an automatic switch to timecode-only mode + telemetry). Members-only and age-restricted videos are rejected during initial probe (`E_YT_UNAVAILABLE`) and never reach preview.
 
 ### 8.1 YouTube error classification
 1. **Probe JSON first:** inspect `availability` and `live_status`:

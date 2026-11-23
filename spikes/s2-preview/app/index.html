@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Strict host app CSP: frame-src = bridge origin ONLY (never direct YouTube) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; frame-src https://clipper-bridge.vercel.app; connect-src 'self' https://clipper-bridge.vercel.app; img-src 'self' data: https:;">
+  <title>Spike S2: Embed Bridge Host Test Harness</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <h1>🎬 S2 Preview Test Harness</h1>
+        <span class="badge" id="hostOriginBadge">Host: http://127.0.0.1:8765</span>
+        <span class="badge badge-accent">Bridge: clipper-bridge.vercel.app</span>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" id="runAutoMatrixBtn">▶ Run Full Automated Matrix</button>
+        <button class="btn btn-secondary" id="exportResultsBtn">💾 Export JSON Results</button>
+      </div>
+    </div>
+
+    <!-- Candidate Selector Toolbar -->
+    <div class="candidate-bar">
+      <span class="bar-label">Candidates:</span>
+      <button class="cand-btn active" data-id="WufkeDaJisQ" data-group="(a)" data-title="Deceit 2 (10m)">
+        (a) Short 10m
+      </button>
+      <button class="cand-btn" data-id="3snfJrlSyqo" data-group="(a)" data-title="Podcast (40m)">
+        (a) Medium 40m
+      </button>
+      <button class="cand-btn" data-id="XwQwhjzAc_k" data-group="(a)" data-title="GTA 6 Marathon (10h)">
+        (a) Live VOD 10h
+      </button>
+      <button class="cand-btn" data-id="9s6imDGjy08" data-group="(c)(d)" data-title="IShowSpeed 3h47m (Monetized)">
+        (c)(d) Monetized 3h47m
+      </button>
+      <button class="cand-btn" data-id="QOJIILaJKNc" data-group="(d)" data-title="GTA 6 S1 VOD (5.5h)">
+        (d) Long VOD 5.5h
+      </button>
+      <button class="cand-btn cand-blocked" data-id="KBdGeakRgqg" data-group="(e)" data-title="Members-Only">
+        (e) Members-Only
+      </button>
+      <button class="cand-btn cand-blocked" data-id="6kLq3WMV1nU" data-group="(e)" data-title="Age-Restricted">
+        (e) Age-Restricted
+      </button>
+      <div class="custom-cand-group">
+        <input type="text" id="customVideoInput" placeholder="Custom video ID / URL..." title="Test own unlisted embed-disabled video">
+        <button class="btn" id="loadCustomBtn">Load (b)</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-layout">
+    <!-- Left Column: Video Preview & Transport -->
+    <section class="preview-column">
+      <div class="viewport-box">
+        <!-- The Embed Bridge IFrame -->
+        <iframe 
+          id="bridgeIframe" 
+          src="https://clipper-bridge.vercel.app/?v=WufkeDaJisQ" 
+          allow="autoplay; encrypted-media; fullscreen"
+          title="ClipperHelper Bridge Preview">
+        </iframe>
+
+        <!-- Fallback UX Container (Displayed when embed fails) -->
+        <div id="fallbackView" class="hidden">
+          <div class="fallback-card">
+            <div class="fallback-icon">🖼️</div>
+            <h3>Embed Dibatasi — Menggunakan Mode Storyboard Fallback</h3>
+            <p>
+              Video ini tidak mengizinkan pemutar resmi YouTube di aplikasi luar.
+              ClipperHelper secara otomatis mengaktifkan penjelajahan storyboard frame & timecode.
+            </p>
+            <div class="storyboard-preview">
+              <div class="storyboard-thumb" id="storyboardThumb">
+                <span>[Storyboard Frame @ 00:00:00]</span>
+              </div>
+              <div class="storyboard-meta">
+                <div>Durasi Video: <strong id="fallbackDuration">00:00:00</strong></div>
+                <div>Status: <span class="badge badge-warning">Fallback Active (D-13)</span></div>
+              </div>
+            </div>
+            <button class="btn btn-secondary" id="dismissFallbackBtn">Coba Muat Ulang Embed</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Video Transport Bar -->
+      <div class="transport-bar">
+        <div class="playback-controls">
+          <button class="btn btn-sm btn-primary" id="playBtn">▶ Play</button>
+          <button class="btn btn-sm" id="pauseBtn">⏸ Pause</button>
+          <button class="btn btn-sm" id="seekBack5Btn">-5s</button>
+          <button class="btn btn-sm" id="seekFwd5Btn">+5s</button>
+          <button class="btn btn-sm" id="seek30Btn">Go 30s</button>
+          <button class="btn btn-sm" id="seek300Btn">Go 5m</button>
+          <button class="btn btn-sm btn-warn" id="seek3hBtn">Go ~3h (10800s)</button>
+        </div>
+
+        <div class="time-scrubber">
+          <input type="range" id="scrubberSlider" min="0" max="100" value="0" step="0.1">
+          <span class="time-readout" id="timeReadout">00:00.000 / 00:00.000</span>
+        </div>
+
+        <div class="audio-controls">
+          <button class="btn btn-sm" id="muteToggleBtn">🔊</button>
+          <input type="range" id="volumeSlider" min="0" max="100" value="100" style="width: 70px;">
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Real-Time Metrics & Diagnostic Log -->
+    <aside class="metrics-column">
+      <div class="card">
+        <h3>📊 Live Benchmark Metrics</h3>
+        <table class="metrics-table">
+          <tr>
+            <td>Active Video:</td>
+            <td><strong id="metricVideoId">WufkeDaJisQ</strong></td>
+          </tr>
+          <tr>
+            <td>Embed State:</td>
+            <td><span class="badge" id="metricState">UNSTARTED</span></td>
+          </tr>
+          <tr>
+            <td>Time to Bridge Ready:</td>
+            <td><span id="metricTimeBridgeReady">-- ms</span></td>
+          </tr>
+          <tr>
+            <td>Time to Player Ready:</td>
+            <td><span id="metricTimePlayerReady">-- ms</span></td>
+          </tr>
+          <tr>
+            <td>Time to First Play:</td>
+            <td><span id="metricTimeToPlay">-- ms</span></td>
+          </tr>
+          <tr>
+            <td>TimeUpdate Rate:</td>
+            <td><span id="metricUpdateRate">-- events/s</span></td>
+          </tr>
+          <tr>
+            <td>Last Seek Latency:</td>
+            <td><span id="metricSeekLatency">-- ms</span></td>
+          </tr>
+          <tr>
+            <td>Error Encountered:</td>
+            <td><span id="metricError">None</span></td>
+          </tr>
+          <tr>
+            <td>Diagnosis:</td>
+            <td><span id="metricDiagnosis" class="badge">Awaiting test</span></td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Test Matrix Progress / Summary -->
+      <div class="card">
+        <h3>📋 Test Matrix Results (<span id="matrixCompletedCount">0</span>/7)</h3>
+        <div id="matrixResultsList" class="matrix-list">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <!-- Live Event Log -->
+      <div class="card event-log-card">
+        <div class="card-header">
+          <h3>📜 IPC Event Log</h3>
+          <button class="btn btn-xs" id="clearLogBtn">Clear</button>
+        </div>
+        <div class="log-stream" id="logStream"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

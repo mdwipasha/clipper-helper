@@ -40,7 +40,7 @@ When code and docs disagree, fix one of them **in the same PR**.
 | D-10 | **Supabase (Singapore)** is authoritative for auth, plans, credits, payments. App verifies **signed export tickets** | Server owns money; client never trusted. |
 | D-11 | **LGPLv3 BtbN shared FFmpeg build + hardware encoders only** (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`); `libopenh264` and `x264` unapproved | Licensing safety and patent caution (see ARCHITECTURE §15, docs/compliance/FFMPEG.md). |
 | D-12 | **yt-dlp + QuickJS-NG JS runtime** as downloader, updated independently via a signed manifest | YouTube breaks extractors often; the downloader must be hot-updatable. QuickJS-NG (MIT, 1.87 MB) chosen in S1; Deno may ship later as a fallback via signed manifest. |
-| D-13 | Preview via **official YouTube embed through a bridge page**, with storyboard-thumbnail fallback; verified in spike S2 | Compliant preview without downloading the full VOD. |
+| D-13 | Preview via **official YouTube embed through the hosted bridge** (`https://clipper-bridge.vercel.app`, production Vercel deployment; move to owned domain before launch in M5) with **timecode-only fallback mode**; direct embed and loopback bridge NOT pursued for MVP; storyboard scrubber moved to post-MVP; verified in spike S2 | Compliant preview without downloading the full VOD. |
 | D-14 | A versioned **Composition JSON** is the single source of truth for preview and render | Guarantees preview == export; testable. |
 | D-15 | Every long operation must show **stage, progress and time estimate** | Product requirement; see PROGRESS_AND_ETA.md. |
 | D-16 | Admin web dashboard later; until then **manual plan grants via an SQL function** | Lets friends/beta users get the paid tier immediately. |

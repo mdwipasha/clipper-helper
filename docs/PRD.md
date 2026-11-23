@@ -57,8 +57,8 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 |----|-----|-------------|
 | FR-SRC-1 | M | Accept `watch`, `live`, `shorts`, `youtu.be` URLs; normalize to a video id. Playlists/channels rejected with a clear message. |
 | FR-SRC-2 | M | Fetch metadata (title, channel, duration, thumbnail, live state). Specific messages for: ongoing live, private/deleted, members-only, age-restricted, region-blocked, premiere not started. |
-| FR-SRC-3 | M | Preview with the official player (embed) with current-time readout. If embedding fails, fall back to storyboard thumbnails + timecode inputs. |
-| FR-SRC-4 | M | Range picker: "set start/end here", timecode inputs, ±1 s/±5 s nudges, shows duration. Max range **10 min** *(config, proposed beta default 5 min pending user decision)*. Validates 0 ≤ start < end ≤ video duration. Displays estimated download time at range selection: "Perkiraan unduh: ~N menit", computed as `range_seconds / 1.66 + ~10 s startup` (calibrated later from `stage_stats`). |
+| FR-SRC-3 | M | Preview with official YouTube embed through the hosted bridge (`https://clipper-bridge.vercel.app`, D-13; move to owned domain in M5). If embedding fails (`playable_in_embed=false`, bridge error 101/150 after control check, or no `bridgeReady` within 6 s), switch to timecode-only mode (FR-SRC-4). Storyboard scrubber moved to post-MVP. |
+| FR-SRC-4 | M | Range picker: in normal preview mode: "set start/end here", timecode inputs, ±1 s/±5 s nudges, duration display, ads guard (player duration ≠ probe duration ±2 s disables "set start/end" and shows notice). In timecode-only mode: message ("Pratinjau tidak tersedia untuk video ini"), start/end timecode inputs with ±1 s/±5 s nudges, and estimated download time ("Perkiraan unduh: ~N menit", `range_seconds / 1.66 + ~10 s startup`). Max range **10 min** *(config, proposed beta default 5 min pending user decision)*. Validates 0 ≤ start < end ≤ video duration. |
 | FR-SRC-5 | S | Open a local video file as the source; same flow after range. Serves as resilience when the downloader breaks. **Decision rule (Q4):** after S1, if the downloader shows fragility (frequent extractor failures or throttling), promote to Must and schedule in M2; otherwise first post-MVP item. |
 
 ### Generate
@@ -175,13 +175,13 @@ Activation: % of new users who export a clip in their first session. Time from l
 | Mid-spec laptops too slow | Poor UX | Hardware probe + adaptive defaults; benchmark gate (M0); honest ETA. |
 | Bypass of credits | Revenue leakage | Server tickets + entitlements + device caps (SECURITY.md); accept residual risk of local cracking. |
 | Competing free editors | Weak differentiation | Stay focused on workflow, templates and checklist; do not chase editor feature parity. |
-| Embed preview blocked (Error 153-class) | Range picking degraded | Bridge page + fallback (D-13, spike S2). |
+| Embed preview blocked (Error 153-class) | Range picking degraded | Hosted bridge page + timecode-only fallback mode (D-13, spike S2). |
 | FFmpeg/x264/H.264 licensing | Legal | LGPL build + hardware encoders; legal review for any GPL component. |
 | Payment edge cases | Lost revenue / angry users | Webhook + status-API confirmation, reconciliation job, admin tools. |
 
 ## 10. Post-MVP
 
-macOS (Tauri build or web with limits), live capture ("clip last 60 s"), AI highlight suggestions, face-aware reframe, credit packs, campaign submission tracker, local-file source (if not in MVP), template marketplace, profanity handling in captions (template option to mask explicit words with a configurable blocklist, common in Indonesian gaming streams), admin dashboard (see ADMIN_DASHBOARD.md).
+macOS (Tauri build or web with limits), live capture ("clip last 60 s"), AI highlight suggestions, face-aware reframe, storyboard-thumbnail scrubber for embed-disabled videos, credit packs, campaign submission tracker, local-file source (if not in MVP), template marketplace, profanity handling in captions (template option to mask explicit words with a configurable blocklist, common in Indonesian gaming streams), admin dashboard (see ADMIN_DASHBOARD.md).
 
 ## 11. Open questions (with working defaults)
 

@@ -160,10 +160,14 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 - **Probe/download split:** probe with yt-dlp `-J`, save output to a temporary workspace file, and reuse it for download via `--load-info-json` (saves ~6 s extraction and challenge execution). The JSON contains signed URLs that expire (~6 h TTL): keep it strictly as a temp file in the workspace, delete it after the stage, and never log or sync it. On a 403 HTTP error during download caused by expired URLs, silently re-probe once and retry; only surface `E_YT_RATE_LIMITED` if the retry also fails.
 - **Progress observability (S1 decision — Approach A):** yt-dlp's internal FFmpeg emits `time=`/`speed=` lines at ~1.4–1.9 events/s in copy mode. The 6–11 s startup (extraction + JS challenge resolution) is indeterminate. Reference implementation: `spikes/s1-downloader/progress_parser.py` (port to Rust with the same unit-test cases).
 - **Preview proxy for non-AVC1 sources:** when the downloaded stream is not H.264/AAC (e.g. VP9/AV1-only streams), generate a preview proxy with FFmpeg using `h264_mf` at `-b:v 3500k -g 30 -pix_fmt yuv420p` (`-g 30` added as TO-VERIFY: confirm smooth, frame-accurate seeking in WebView2 during M1). The editor and UI preview play this proxy; final export always renders from the original source file. Note: `h264_mf` routes to the GPU vendor's hardware MFT and falls back to a slower software MFT when no hardware encoder exists; to be re-tested on other GPUs during beta. In the Generate stage table (§5.1), `prepare_preview` applies only to this case.
-- **Preview strategy (priority order):**
-  1. **Official embed through a bridge page** on our own HTTPS origin (`player.<domain>`), loaded in an iframe inside the app. It wraps the IFrame API and relays `currentTime/duration/state` via `postMessage`. Rationale: YouTube embeds fail with "Error 153" when the embedding page sends no acceptable Referer/origin; custom app schemes are a known trigger. The bridge supplies a real HTTPS origin and `referrerpolicy="strict-origin-when-cross-origin"`; consider `youtube-nocookie.com`.
-  2. **Storyboard thumbnails** (sprite sheets listed by yt-dlp metadata) + timecode inputs — no video playback.
-  3. **Short low-res range preview** downloaded on demand (explicit user action).
+- **Preview strategy (D-13 verified in S2):**
+  1. **Official YouTube embed through the hosted bridge:** hosted at `https://clipper-bridge.vercel.app` (production Vercel deployment; migrate to owned domain `player.<domain>` before launch in M5). The bridge loads the official loader `https://www.youtube.com/iframe_api` (note: `youtube-nocookie.com/iframe_api` returns HTTP 404), supplies a genuine HTTPS origin and `Referrer-Policy: strict-origin-when-cross-origin` to eliminate Error 153, and relays player state, timecode, duration, and errors via `postMessage`. Direct embed inside WebView2 and a loopback local bridge are **NOT pursued for MVP** (unmeasured; revisit only if the hosted bridge becomes an operational problem).
+  2. **Fallback: Timecode-Only Mode (MVP):** If the yt-dlp probe indicates `playable_in_embed=false`, or the bridge reports error 101/150 (verified after a control-video check), or no `bridgeReady` arrives within 6 s, the UI cleanly switches to "timecode-only mode": displays message *"Pratinjau tidak tersedia untuk video ini"*, start/end timecode inputs with ±1/±5 s nudges, and estimated download time. Storyboard scrubber is **cut from MVP** and moved to the post-MVP backlog. Occurrences of mode switches are counted as aggregate telemetry (SECURITY §11).
+  3. **Mode switch vs Error code:** A mode switch to timecode-only is a normal UI state, **not an error code**. `E_PREVIEW_CONFIG` is added strictly for YouTube error 153 / bridge misconfiguration (auto-switches to timecode-only + records telemetry). Members-only and age-restricted videos are rejected during initial probe and never reach the preview stage.
+  4. **Preview timing rules (M1 acceptance tests):**
+     - Do not claim fixed 16 Hz updates (empirical measurements show `timeUpdate` arrives at 4–17 Hz depending on stream and browser load); the host UI smoothly extrapolates display time (`time + elapsed × playbackRate`).
+     - Seek latency is measured from `seekTo` issuance until player state transitions to `PLAYING` after `BUFFERING`.
+     - Ads detection: if player reported duration differs from probe duration by > ±2 s, disable the "set start/end here" buttons and display an in-app notice alerting the user that an ad is playing.
 - **Unsupported (MVP):** ongoing live streams, private/members-only/age-restricted content, cookies import.
 
 ## 7. Composition and render
@@ -323,7 +327,7 @@ Unit (rules engine, ETA estimator, composition→FFmpeg args, URL parser, ticket
 
 ## 18. Web components (small, MVP)
 
-`apps/web` (Astro, static): landing + download, `/terms`, `/privacy`, `/refund`, `/pay/finish` ("payment received — return to the app"; never grants anything), `player` bridge page for the embed. Later: account portal and CAPTCHA-protected login (decided in spike S7).
+`apps/web` (Astro, static): landing + download, `/terms`, `/privacy`, `/refund`, `/pay/finish` ("payment received — return to the app"; never grants anything), `player` bridge page for the embed (currently deployed as standalone `apps/bridge` at `https://clipper-bridge.vercel.app`; migrate to owned domain in M5). Later: account portal and CAPTCHA-protected login (decided in spike S7).
 
 ## 19. macOS / web later
 
