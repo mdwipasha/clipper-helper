@@ -26,7 +26,7 @@ pub struct DevSidecarRunResult {
     pub exit_code: i32,
     pub lines: Vec<String>,
     pub stderr_tail: String,
-    pub elapsed_ms: u64,
+    pub elapsed_ms: u32,
 }
 
 /// Locate the fake-sidecar executable in the target directory.
@@ -100,7 +100,7 @@ pub async fn dev_run_fake_sidecar(mode: String) -> Result<DevSidecarRunResult, S
             exit_code: res.exit_code,
             lines: res.stdout_lines,
             stderr_tail: res.stderr_tail,
-            elapsed_ms: start.elapsed().as_millis() as u64,
+            elapsed_ms: start.elapsed().as_millis() as u32,
         }),
         Err(crate::sidecars::SidecarError::ExecutionFailed {
             exit_code,
@@ -109,7 +109,7 @@ pub async fn dev_run_fake_sidecar(mode: String) -> Result<DevSidecarRunResult, S
             exit_code: exit_code.unwrap_or(-1),
             lines: Vec::new(),
             stderr_tail,
-            elapsed_ms: start.elapsed().as_millis() as u64,
+            elapsed_ms: start.elapsed().as_millis() as u32,
         }),
         Err(e) => Err(e.to_string()),
     }

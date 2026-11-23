@@ -50,12 +50,16 @@ pub fn run() {
     let specta_builder = create_specta_builder();
 
     #[cfg(debug_assertions)]
-    specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../src/ipc/bindings.ts",
-        )
-        .expect("Failed to export TypeScript bindings");
+    {
+        let bindings_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/ipc/bindings.ts");
+        specta_builder
+            .export(
+                specta_typescript::Typescript::default().header("// @ts-nocheck\n"),
+                bindings_path,
+            )
+            .expect("Failed to export TypeScript bindings");
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
