@@ -11,6 +11,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  audit:
+    name: Security & License Audit (Report-Only)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create reports directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path audit-reports
+
+      - name: Run pnpm audit (report-only)
+        shell: powershell
+        run: |
+          pnpm audit > audit-reports/pnpm-audit.txt 2>&1
+          Write-Host "pnpm audit completed (report saved to audit-reports/pnpm-audit.txt)"
+
+      - name: Install and run cargo audit (report-only)
+        shell: powershell
+        run: |
+          cargo install --locked cargo-audit
+          cargo audit --file apps/desktop/src-tauri/Cargo.lock > audit-reports/cargo-audit.txt 2>&1
+          Write-Host "cargo audit completed (report saved to audit-reports/cargo-audit.txt)"
+
+      - name: Upload Audit Reports Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-reports
+          path: audit-reports/
+
   check:
     name: Lint, Test & Build (Windows)
     runs-on: windows-latest
@@ -43,6 +90,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Tauri version parity (tauri info)
+        shell: powershell
+        run: |
+          $info = pnpm --filter @clipper-helper/desktop tauri info 2>&1 | Out-String
+          Write-Host $info
+          if ($info -match '\(outdated|\(mismatch') {
+            Write-Error "Tauri package/crate version mismatch detected!"
+            exit 1
+          }
+
       - name: Check code formatting
         run: pnpm run format
 
@@ -64,8 +121,23 @@ jobs:
       - name: Rust Unit Tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-      - name: Build Tauri Desktop App (Unsigned)
+      - name: Build Tauri Desktop App (Release, Unsigned)
         run: pnpm --filter @clipper-helper/desktop tauri build --no-bundle
+
+      - name: Release Binary Smoke Test
+        shell: powershell
+        run: |
+          $binPath = "apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe"
+          if (!(Test-Path $binPath)) {
+            Write-Error "Release binary not found at $binPath"
+            exit 1
+          }
+          $item = Get-Item $binPath
+          Write-Host "Binary exists: $($item.FullName) ($($item.Length) bytes)"
+          if ($item.Length -lt 1000000) {
+            Write-Error "Binary size is unexpectedly small ($($item.Length) bytes)"
+            exit 1
+          }
 
       - name: Upload Desktop Binary Artifact
         uses: actions/upload-artifact@v4
