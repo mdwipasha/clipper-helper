@@ -32,6 +32,11 @@ To ensure full scientific reproducibility, eliminate ambiguity, and prevent unve
 1. **Raw System Probes:** Every benchmark report must include verbatim output from `systeminfo`, `Win32_Processor`, `Win32_VideoController`, and `powercfg /getactivescheme`.
 2. **Explicit Host & Date:** Every benchmark report must state the exact Windows Host Name, user, execution date, and AC/battery state.
 3. **Measured vs Placeholder:** All data rows must be explicitly labeled as **Measured** (with sample size and hardware target) or **UNTESTED / PLACEHOLDER**. Unmeasured placeholder numbers must never be labeled as "verified".
+4. **Benchmark Variance & Standard Protocol (≥5 Runs, Median + IQR):**
+   Speech-to-text inference and video encoding throughput exhibit significant run-to-run variance on mobile/desktop hardware due to CPU thermal boost states, Windows background services, and dynamic clock scaling. For instance, the identical 60 s `podcast_mixed.wav` job with `small-q5_1` took 53.2 s in the S3c model matrix run versus 37.7 s in the S3d baseline run (a 1.41× spread on the same machine).
+   - **Protocol:** Benchmark runs must execute **≥5 runs per condition**, reporting the **median and IQR** (Interquartile Range) rather than single-run numbers.
+   - **Environment Recording:** Every report must record the active Windows power plan (`powercfg /getactivescheme`), AC vs battery state, background system load (CPU % and RAM before test launch), and CPU core clock / throttling status if available.
+   - **Priors as Ranges:** Rate priors in architecture and ETA specs must be expressed as **RANGES** (e.g. 1.1–2.2× real-time), never single-point constants.
 
 ---
 

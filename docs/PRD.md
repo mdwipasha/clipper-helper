@@ -73,7 +73,7 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 |----|-----|-------------|
 | FR-EDIT-1 | M | Trim with in/out handles, frame-level nudge, looped playback. |
 | FR-EDIT-2 | M | Layouts: **fill** (draggable crop), **blur-fit**, **split** (two regions, e.g. gameplay + facecam). Live preview. |
-| FR-EDIT-3 | M | Captions from trimmed clip: trigger "Buat caption" (separate free local operation) or auto-prompt on opening Captions tab; edit text/timing, style from template with overrides, language switch. |
+| FR-EDIT-3 | M | Captions from trimmed clip: trigger "Buat caption" (separate free local operation) or auto-prompt on opening Captions tab; edit text/timing, style from template with overrides, language switch. Animation modes: 'none', 'phrase' (line-level reveal), 'word_highlight', 'pop'. Per-word animations ('word_highlight' and 'pop') require words with timingSource 'dtw'; when words lack 'dtw', both render as 'phrase'. |
 | FR-EDIT-4 | M | Logo/watermark overlay (position, size, opacity) and fixed text overlay. |
 | FR-EDIT-5 | S | Cut out a middle section; remove silences. |
 | FR-EDIT-6 | S | Audio gain + loudness normalization. |
@@ -164,7 +164,7 @@ Targets marked ◇ are **provisional** until benchmarks across Reference machine
 
 ## 8. Success metrics
 
-Activation: % of new users who export a clip in their first session. Time from link paste to first export. Export success rate. Crash-free sessions. ETA accuracy (|estimate − actual| / actual, p50/p90). Free→pass conversion. D7/D30 retention. Support tickets per 100 exports.
+Activation: % of new users who export a clip in their first session. Time from link paste to first export. Export success rate. Crash-free sessions. ETA accuracy (|estimate − actual| / actual, p50/p90). Caption edit rate (opt-in telemetry: fraction of words edited by the user per clip, tracked by speech model, as empirical proxy for ASR accuracy). Free→pass conversion. D7/D30 retention. Support tickets per 100 exports.
 
 ## 9. Risks
 

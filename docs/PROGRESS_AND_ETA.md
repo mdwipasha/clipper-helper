@@ -84,13 +84,13 @@ For the running stage *s* with total work `W`, done `D`:
 - Future stages: `remaining_k = W_k / r_prior_k`, where `W_k` is derived from known quantities (range duration, output duration, expected download size).
 - **Operation-specific ETA rules:**
   - `generate` ETA is download-only: `range_seconds / 1.66 + ~10 s startup` (+ proxy transcode if needed).
-  - `captions` ETA: `clip_seconds / rate + 8 s` (model-init prior = 8 s; transcribe rate prior = range 1.1–2.2× real-time depending on speech density, marked low confidence until measured on device). Trim bounds are snapshotted when the job starts.
+  - `captions` ETA: `clip_seconds / rate + 8 s` (model-init prior = 8 s; transcribe rate priors are **RANGES** 1.1–2.2× real-time depending on speech density, background load, and thermal throttling; marked low confidence until measured on device). Trim bounds are snapshotted when the job starts.
 - **ETA = Σ remaining** (running + future). Range: `[0.85·ETA, 1.3·ETA]` when confidence is low/medium, narrower when high.
 - **Confidence:** low until ≥10 s of data *and* ≥5% of the stage done *or* a calibrated prior exists; high when `r_live` has been stable (coefficient of variation < 0.25) for ≥20 s.
 - **Overall percent:** `Σ(completed stage weights) + weight_current × (D/W)`, with weights = calibrated expected time share. Clamped to be non-decreasing.
 
 ### 4.3 Calibration
-After every completed stage, store `(device_profile, stage, variant, work_units, wall_ms)` in `stage_stats`. First-run benchmark seeds the priors. Telemetry (opt-in) may report `stage_ms` by device class to improve built-in defaults. Speech priors (model × device class) apply to **CLIP length**, not range length, with a prior range of 1.1–2.2× real-time and 8 s initialization. Re-run benchmark after GPU driver/hardware change or from settings.
+After every completed stage, store `(device_profile, stage, variant, work_units, wall_ms)` in `stage_stats`. First-run benchmark seeds the priors. Telemetry (opt-in) may report `stage_ms` by device class to improve built-in defaults. Speech priors (model × device class) apply to **CLIP length**, not range length, and are represented as **RANGES** (e.g. 1.1–2.2× real-time for `small-q5_1` with 8 s initialization) to account for benchmark variance (e.g. the same 60 s audio ranged from 37.7 s to 53.2 s on R1). Re-run benchmark after GPU driver/hardware change or from settings.
 
 ### 4.4 Initial built-in rate priors (seed table)
 Initial priors before first calibration or benchmark. Hardware encoders reconciled from S4 raw data on Reference Machine R1:
@@ -98,7 +98,7 @@ Initial priors before first calibration or benchmark. Hardware encoders reconcil
 | Operation / Stage | Variant / Hardware | $r_{prior}$ | Basis / Source |
 |---|---|---|---|
 | `download` | All devices | **1.66× real-time** | S1 baseline copy-mode on YouTube DASH |
-| `captions` (transcribe) | `small-q5_1` (CPU AVX2) | **RANGE 1.1–2.2× real-time** (+ 8 s init) | S3b micro-benchmark range (low confidence until measured) |
+| `captions` (transcribe) | `small-q5_1` (CPU AVX2) | **RANGE 1.1–2.2× real-time** (+ 8 s init) | S3b/S3d benchmark range (reflects 37.7 s to 53.2 s variance on R1; low confidence until measured) |
 | `captions` (transcribe) | `base` (Class C fallback) | **RANGE 2.5–4.0× real-time** (+ 5 s init) | S3b micro-benchmark range |
 | `export` (render) | `h264_amf` (AMD GPU) | **2.70× real-time** (81 fps) | S4b measured median on R1 (22.01 s for 60 s @ 4.4 Mbps) |
 | `export` (render) | `h264_mf` (Media Foundation) | **3.50× real-time** (105 fps) | S4b measured median on R1 (16.76 s for 60 s @ 4.0 Mbps) |

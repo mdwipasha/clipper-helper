@@ -79,12 +79,12 @@ PS> Get-CimInstance -ClassName BatteryStatus -Namespace root\wmi
 
 | Decision | Recommendation | Measured Evidence on Reference R1 / Rationale |
 |---|---|---|
-| **Default Model for Class A/B** | **`small-q5_1` (181.3 MB)** or **`small` (465.0 MB)** | `small-q5_1` reaches **RTF 0.44–0.89×** (1.1–2.2× real-time) with **697–772 MB RAM**, cutting model download size by 61% while achieving identical or superior transcript fidelity to unquantized `small` (51.1% vs 59.7% WER vs medium draft on podcast). Unquantized `small` reaches **RTF 0.35–0.91×** with **968–1,058 MB RAM**. |
-| **Fallback Model for Class C** | **`base` (141.1 MB)** | Extremely fast (**RTF 0.23–0.34×**, 3.0–4.4× real-time) and light (**476–510 MB RAM**), but higher error rates (~61–73% WER vs medium draft) on rapid Indonesian gaming slang and overlapping talk. |
-| **High-Spec Override** | **`medium` (1,462.7 MB)** | High acoustic fidelity, but runs at **RTF 1.43–1.66×** (slower than real-time: ~86–100 s per 60 s audio) and consumes **2,355–2,378 MB RAM**. Strictly an optional power-user override. |
+| **Default Model for Class A/B** | **`small-q5_1` (181.3 MB) [PROVISIONAL]** or **`small` (465.0 MB)** | **PROVISIONAL:** `final_*.txt` files are identical to the uncorrected medium draft (no human correction yet); every WER/CER represents distance from the medium reference baseline, not ground-truth accuracy, and medium's 0.0% is circular. `small-q5_1` reaches **RTF 0.44–0.89×** (1.1–2.2× real-time) with **697–772 MB RAM**, cutting model download size by 61% with comparable fidelity to unquantized `small` (45.5% vs 51.1% on slang, 50.4% vs 58.3% on podcast due to reduced token looping; 48.0% vs 43.0% on live commentary; Lenient WER vs medium reference). Unquantized `small` reaches **RTF 0.35–0.91×** with **968–1,058 MB RAM**. |
+| **Fallback Model for Class C** | **`base` (141.1 MB)** | Extremely fast (**RTF 0.23–0.34×**, 3.0–4.4× real-time) and light (**476–510 MB RAM**), but higher error rates (~63–71% Lenient WER vs medium reference) on rapid Indonesian gaming slang and overlapping talk. |
+| **High-Spec Override** | **`medium` (1,462.7 MB)** | High acoustic fidelity, but runs at **RTF 1.43–1.66×** (slower than real-time: ~86–100 s per 60 s audio) and consumes **2,355–2,378 MB RAM**. Strictly an optional power-user override with a speed warning. |
 | **Language Configuration** | **Force `-l id`** | Auto-detect incurs a 10–24% wall-time penalty (first-window detection pass) with **0.0% accuracy gain**. Auto-detect also risks misclassifying rapid code-switching into English. |
-| **Voice Activity Detection** | **VAD OFF by default (`-sns` active)** | Silero VAD fragments rapid gaming speech, causing a **+50.2% wall time slowdown** and **dropping 25.3% of spoken words** (19/75 words lost). Trailing silence hallucinations are cleanly eliminated without speech loss using `-sns` (`--suppress-non-speech-tokens`) and a 0 ms post-processing phrase blocklist. |
-| **Word Timestamps & DTW** | **Enable DTW (`-dtw <model> -nfa`)** | Without DTW, attention timestamps suffer catastrophic cumulative delay across conversational pauses (up to **12.24 seconds** drift). DTW locks word onsets to acoustic spectrogram energy within **~200 ms max error** (163.2 ms mean). |
+| **Voice Activity Detection** | **VAD OFF by default (`-sns` active)** | Silero VAD fragments rapid gaming speech, causing a **+50.2% wall time slowdown** and **dropping 25.3% of spoken words** (19/75 words lost; +12.5% Lenient WER penalty). Trailing silence hallucinations are cleanly eliminated without speech loss using `-sns` (`--suppress-non-speech-tokens`) and a 0 ms post-processing phrase blocklist. |
+| **Word Timestamps & DTW** | **Enable DTW (`-dtw <canonical base> -nfa -sow -sns -ojf`) [SUPPORTED by unanchored check]** | **SUPPORTED by an automated unanchored check:** Root cause of whole-second $t_0$ resolved: `whisper_to_words.py` was reading attention `offsets` instead of `tok["t_dtw"] * 10 ms`. Across 1,949 tokens tested on Reference R1, 100.0% have valid DTW timestamps. When verified unanchored against global acoustic onsets (338 words, 3 samples), median absolute error is **29.0 ms** (mean 38.7 ms, P95 115.0 ms) with a mean signed bias of **+7.0 ms** (95% CI: [+1.4, +13.0] ms), strictly within the 10 ms frame step. The +85 ms bias and −60 ms lead-in are retracted as artifacts of circular backward-looking windows; `caption_lead_offset_ms = 0` default. PENDING: (a) human timing audit (30 words/sample; 30/30 OK on `gaming_live`, remaining 2 samples pending); (b) negative control: run matcher on timestamps shifted by ±100/±200/±300 ms and confirm validator detects shift, reporting onset density vs word density (reason: ±350 ms tolerance against dense onsets can yield small errors by construction). Flags: `-l id -dtw <canonical base> -nfa -sow -sns -ojf`; Rust core maps quantized names (`small-q5_1` → `small`); flash attention disables DTW so `-nfa` mandatory; runtime self-check requires ≥95% DTW tokens; capability test against pinned binary re-run on whisper.cpp update. Karaoke highlighting requires `timingSource == 'dtw'`; otherwise phrase-level reveal. Character-proportional interpolation drifts mean 0.7–1.1 s (max 7 s): never use it for word-level highlighting. |
 | **Trim Context Padding** | **2.0 s padding per side** | Transcribing trimmed clips without padding causes severe word-boundary truncation (up to 6 errors on initial/final words). Adding 2.0 s padding restores acoustic continuity with only ~1.8 s compute overhead. |
 | **Thread Count** | **$\mathbf{N = \min(6, \text{physical cores})}$** | 6 threads saturates physical cores at optimal throughput. Hyperthreading to 12 threads adds CPU thrashing and context-switching overhead with zero speedup. |
 | **Compute Backend** | **CPU AVX2 (haswell kernel)** | Pre-built Windows Vulkan binaries are not published in official whisper.cpp releases. OpenBLAS offers modest matrix speedup (+18%), but requires bundling 44.4 MB extra DLLs and uses +106 MB RAM. Native AVX2 is the clean default. |
@@ -128,25 +128,36 @@ ffmpeg -y -i <source_video> -vn -ar 16000 -ac 1 -c:a pcm_s16le -t 60 <output.wav
 ## 4. Test Sources & Reference Transcripts
 
 > [!IMPORTANT]
-> **Provisional Reference Notice (Spike S3b):**
-> Transcripts generated by the `medium` model were initially saved as `ground_truth.json`. Because these were uncorrected model outputs, evaluating `medium` against itself yielded a circular 0.0% WER, and other models' scores represented "distance from medium" rather than true ground-truth accuracy.
-> In Spike S3b:
-> 1. `ground_truth.json` was renamed to `draft_medium.json`.
-> 2. Per-sample draft texts with timestamps were exported to:
->    - `spikes/s3-speech/references/draft_gaming_slang.txt`
->    - `spikes/s3-speech/references/draft_podcast_mixed.txt`
->    - `spikes/s3-speech/references/draft_gaming_live.txt`
-> 3. The human reviewer will listen to the audio clips and save human-corrected ground truth to `final_<sample>.txt`. Per AGENTS.md, AI agents do not create or modify final reference files.
-> 4. All accuracy numbers in this report are explicitly designated **"WER vs medium draft"** and **"CER vs medium draft"** until human ground truth is provided.
+> **Reference Provenance Notice (Spike S3c):**
+> Verification in Spike S3c confirmed that the saved `final_<sample>.txt` files are **100% text-identical to the uncorrected medium draft** (no human corrections were applied).
+> Therefore:
+> 1. There is **no independent human ground truth yet**. The label "human-reviewed" is **strictly removed**.
+> 2. Every WER and CER reported in this document is a **"distance from the medium reference"**, not ground-truth transcription accuracy.
+> 3. The `medium` model's 0.0% WER score is **circular** by definition.
+> 4. All model recommendations (including default `small-q5_1`) remain **PROVISIONAL** pending human-corrected ground truth or beta edit-rate telemetry.
 
-### Text Normalization Pipeline
+### Text Normalization Pipeline (STRICT vs LENIENT)
 To ensure fair acoustic evaluation, both references and hypothesis strings pass through a standardized normalization function (`spikes/s3-speech/accuracy_eval.py`):
 1. **Lowercasing & Unicode normalization**: Standardizes case and accents.
 2. **Indonesian Censorship Unmasking**: Converts masked swearwords (e.g. `a*****` / `a***`) to explicit spelling (`anjing`) so censorship asterisks do not register as acoustic substitution errors.
 3. **Punctuation & Hyphen Handling**: Strips punctuation characters (`.,!?;:"()[]{}«»…`); Indonesian reduplications (`anak-anak`, `masalah-masalah`) convert hyphens to single spaces.
 4. **Apostrophe Preservation**: Preserves colloquial apostrophes (`ng'gak`, `jum'at`).
 5. **Whitespace Collapsing**: Eliminates repeated spaces and trims outer margins.
-The pipeline is verified with 11 comprehensive unit tests in `spikes/s3-speech/test_accuracy_eval.py` (all passing).
+
+#### Colloquial Spelling Normalization (LENIENT Mode)
+In **LENIENT mode**, common colloquial Indonesian spelling variants are mapped to canonical forms to avoid penalizing phonologically identical informal spellings. **Ambiguous collapses (`si↔sih`, `de↔deh`, `kl↔kalau`, and `ni`/`tu` variants) were deliberately removed** because they conflate distinct functional words (e.g. determiner *si* vs discourse particle *sih*):
+
+| Category | Canonical | Allowed Mapped Variants (Unambiguous) |
+|---|---|---|
+| **Pronouns** | `gue`, `lu` | `gw`, `gua`, `gwe` → `gue`; `lo` → `lu` |
+| **Negation** | `enggak` | `nggak`, `gak`, `ga`, `ngga`, `nggk` → `enggak` |
+| **Aspect / Completion** | `udah`, `sudah` | `udh`, `uda` → `udah`; `sdh` → `sudah` |
+| **Conditional** | `kalau` | `kalo`, `klo` → `kalau` (*`kl` excluded*) |
+| **Intensifier / Question** | `banget`, `gimana` | `bgt`, `bngt` → `banget`; `gmn`, `gmna` → `gimana` |
+| **Particles & Modals** | `emang`, `kayak`, `aja`, `dong` | `emg` → `emang`; `kyk` → `kayak`; `aj` → `aja`; `donk`, `dng` → `dong` |
+| **Verbs / Modals / Other** | `mau`, `bisa`, `jadi`, `bener`, `sama`, `yang` | `mo`, `mw` → `mau`; `bs` → `bisa`; `jd` → `jadi`; `bner` → `bener`; `sm` → `sama`; `yg` → `yang` |
+
+The pipeline is verified with 13 comprehensive unit tests in `spikes/s3-speech/test_s3c_colloquial.py` (all passing).
 
 ### Test Samples Overview
 
@@ -175,43 +186,43 @@ The pipeline is verified with 11 comprehensive unit tests in `spikes/s3-speech/t
 All 28 runs were executed systematically via `run_benchmark_matrix.py`. Wall times, Real-Time Factors ($RTF = \frac{\text{wall time}}{60.0\text{ s}}$), peak working set RAM (Win32 `GetProcessMemoryInfo`), CPU utilization (Win32 `GetProcessTimes`), Word Error Rate (WER), and Character Error Rate (CER) were measured directly.
 
 ### 5.1 Model Architecture & Accuracy Matrix
-*(Measured on Reference R1: 6 threads, `-l id` forced, VAD off, DTW enabled with matching model size, `-nfa`)*
+*(Measured on Reference R1: 6 threads, `-l id` forced, VAD off, DTW enabled with matching model size, `-nfa`. All WER/CER metrics represent distance from the uncorrected medium reference baseline; medium's 0.0% is circular)*
 
-| Model | Sample | RTF | Wall Time (s) | Peak RAM | WER vs medium draft (%) | CER vs medium draft (%) | Words Generated |
-|---|---|---|---|---|---|---|---|
-| **`base`** | `gaming_slang` | **0.229×** | 13.74 s | 477.7 MB | 65.9% | 42.2% | 87 |
-| **`base`** | `podcast_mixed` | **0.341×** | 20.46 s | 509.7 MB | 72.7% | 42.7% | 181 |
-| **`base`** | `gaming_live` | **0.269×** | 16.14 s | 476.7 MB | 61.0% | 35.2% | 90 |
-| **`small-q5_1`** | `gaming_slang` | **0.445×** | 26.70 s | 697.0 MB | 56.8% | 37.7% | 75 |
-| **`small-q5_1`** | `podcast_mixed` | **0.887×** | 53.22 s | 772.1 MB | **51.1%** | 34.9% | 166 |
-| **`small-q5_1`** | `gaming_live` | **0.649×** | 38.94 s | 704.5 MB | 47.4% | 26.7% | 97 |
-| **`small`** | `gaming_slang` | **0.350×** | 21.00 s | 968.5 MB | 59.1% | 43.6% | 64 |
-| **`small`** | `podcast_mixed` | **0.913×** | 54.78 s | 1058.5 MB | 59.7% | 38.1% | 185 |
-| **`small`** | `gaming_live` | **0.542×** | 32.52 s | 1010.8 MB | **42.1%** | 20.8% | 96 |
-| **`medium`** | `gaming_slang` | **1.662×** | 99.72 s | 2354.8 MB | 0.0%* | 0.0%* | 85 |
-| **`medium`** | `podcast_mixed` | **1.465×** | 87.90 s | 2373.2 MB | 0.0%* | 0.0%* | 134 |
-| **`medium`** | `gaming_live` | **1.433×** | 85.98 s | 2378.0 MB | 5.3%* | 6.9%* | 98 |
+| Model | Sample | RTF | Wall Time (s) | Peak RAM | STRICT WER (%) | LENIENT WER (%) | LENIENT CER (%) | Token Loops | Outro Repetition |
+|---|---|---|---|---|---|---|---|---|---|
+| **`base`** | `gaming_slang` | **0.229×** | 13.74 s | 477.7 MB | 65.91% | **64.77%** | 41.71% | 1 loop (`oke,` ×3) | None |
+| **`base`** | `podcast_mixed` | **0.341×** | 20.46 s | 509.7 MB | 72.66% | **70.50%** | 44.57% | 2 loops (`ya,` ×5, `lo, ga` ×3) | None |
+| **`base`** | `gaming_live` | **0.269×** | 16.14 s | 476.7 MB | 63.00% | **63.00%** | 38.85% | 2 loops (`korang,` ×3, `menang,` ×3) | None |
+| **`small-q5_1`** | `gaming_slang` | **0.445×** | 26.70 s | 697.0 MB | 56.82% | **45.45%** | 34.46% | 2 loops (`oke,` ×3, `tepuk,` ×4) | None |
+| **`small-q5_1`** | `podcast_mixed` | **0.887×** | 53.22 s | 772.1 MB | 51.08% | **50.36%** | 35.09% | 2 loops (`iya,` ×3, `ya,` ×3) | None |
+| **`small-q5_1`** | `gaming_live` | **0.649×** | 38.94 s | 704.5 MB | 48.00% | **48.00%** | 27.15% | **0 loops** | None |
+| **`small`** | `gaming_slang` | **0.350×** | 21.00 s | 968.5 MB | 59.09% | **51.14%** | 41.45% | **0 loops** | None |
+| **`small`** | `podcast_mixed` | **0.913×** | 54.78 s | 1058.5 MB | 59.71% | **58.27%** | 41.61% | 4 loops (`iya,` ×5, `omg` ×5, etc.) | None |
+| **`small`** | `gaming_live` | **0.542×** | 32.52 s | 1010.8 MB | 43.00% | **43.00%** | 22.74% | **0 loops** | None |
+| **`medium`** | `gaming_slang` | **1.662×** | 99.72 s | 2354.8 MB | 0.00%* | 0.00%* | 0.00%* | 1 loop (`oke,` ×3) | None |
+| **`medium`** | `podcast_mixed` | **1.465×** | 87.90 s | 2373.2 MB | 0.00%* | 0.00%* | 0.00%* | 1 loop (`gombo` ×3) | None |
+| **`medium`** | `gaming_live` | **1.433×** | 85.98 s | 2378.0 MB | 0.00%* | 0.00%* | 0.00%* | 1 loop (`jadi.` ×3) | **YES** |
 
-*\*Note on `medium` metrics: Because `medium` outputs serve as `draft_medium.json`, WER/CER against itself is 0.0% by definition on samples 1 & 2. On `gaming_live`, the 5.3% WER is due to trailing silence repetition.*
+*\*Note on `medium` metrics: Because `medium` outputs serve as the reference baseline, WER/CER against itself is 0.00% by definition (circular).*
 
 #### Key Model Findings:
-1. **`small` vs `base`**: `small` reduces Character Error Rate by up to **41% relative** (from 35.2% to 20.8% on live gaming). `base` struggles with truncated colloquial words and rapid code-switching.
-2. **`small-q5_1` Efficiency**: Quantized `small-q5_1` (181 MB) delivers an extraordinary tradeoff. On `podcast_mixed`, it achieved a **lower WER (51.1%)** than unquantized `small` (59.7%) due to less token looping, while consuming **286 MB less RAM** (772 MB vs 1,058 MB) and cutting download footprint by 61%.
-3. **`medium` Viability**: `medium` is ~3.1–3.4× heavier on RAM (2.36–2.38 GB) and runs at ~1.4–1.7× real-time (86–100 s per 60 s audio). It should not be the default, but offered as an optional high-precision override.
+1. **`small` vs `base`**: `small` reduces Character Error Rate by up to **41% relative** (from 38.9% to 22.7% on live gaming). `base` struggles with truncated colloquial words and rapid code-switching.
+2. **`small-q5_1` Tradeoffs**: Quantized `small-q5_1` (181 MB) cuts download size by 61% and RAM by 286 MB (772 MB vs 1,058 MB). On `podcast_mixed`, it achieved lower Lenient WER (**50.4% vs 58.3%**) due to substantially reduced token looping (166 vs 185 words). On `gaming_live`, unquantized `small` was superior (**43.0% vs 48.0%**). Fidelity is comparable overall rather than uniformly superior.
+3. **`medium` Viability**: `medium` is ~3.1–3.4× heavier on RAM (2.36–2.38 GB) and runs at ~1.4–1.7× real-time (86–100 s per 60 s audio). It should not be the default, but offered as an optional high-precision override with a speed warning.
 
 ---
 
 ### 5.2 Language Handling: Forced `-l id` vs Auto-Detect
 *(Measured on Reference R1: `small` model, 6 threads, VAD off, DTW on)*
 
-| Mode | Sample | RTF | Wall Time (s) | Peak RAM | WER vs medium draft (%) | CER vs medium draft (%) | Delta Wall Time |
-|---|---|---|---|---|---|---|---|
-| **`id` (forced)** | `gaming_slang` | **0.350×** | 21.00 s | 968.5 MB | 59.1% | 43.6% | **Baseline** |
-| `auto` (detect) | `gaming_slang` | 0.434× | 26.04 s | 968.6 MB | 59.1% | 43.6% | **+24.0% slower** |
-| **`id` (forced)** | `podcast_mixed` | **0.913×** | 54.78 s | 1058.5 MB | 59.7% | 38.1% | **Baseline** |
-| `auto` (detect) | `podcast_mixed` | 1.046× | 62.76 s | 1049.4 MB | 59.7% | 38.1% | **+14.6% slower** |
-| **`id` (forced)** | `gaming_live` | **0.542×** | 32.52 s | 1010.8 MB | 42.1% | 20.8% | **Baseline** |
-| `auto` (detect) | `gaming_live` | 0.634× | 38.04 s | 1009.8 MB | 42.1% | 20.8% | **+17.0% slower** |
+| Mode | Sample | RTF | Wall Time (s) | Peak RAM | STRICT WER (%) | LENIENT WER (%) | LENIENT CER (%) | Delta Wall Time |
+|---|---|---|---|---|---|---|---|---|
+| **`id` (forced)** | `gaming_slang` | **0.350×** | 21.00 s | 968.5 MB | 59.09% | **51.14%** | 41.45% | **Baseline** |
+| `auto` (detect) | `gaming_slang` | 0.434× | 26.04 s | 968.6 MB | 59.09% | 51.14% | 41.45% | **+24.0% slower** |
+| **`id` (forced)** | `podcast_mixed` | **0.913×** | 54.78 s | 1058.5 MB | 59.71% | **58.27%** | 41.61% | **Baseline** |
+| `auto` (detect) | `podcast_mixed` | 1.046× | 62.76 s | 1049.4 MB | 59.71% | 58.27% | 41.61% | **+14.6% slower** |
+| **`id` (forced)** | `gaming_live` | **0.542×** | 32.52 s | 1010.8 MB | 43.00% | **43.00%** | 22.74% | **Baseline** |
+| `auto` (detect) | `gaming_live` | 0.634× | 38.04 s | 1009.8 MB | 43.00% | 43.00% | 22.74% | **+17.0% slower** |
 
 **Conclusion:** Auto-detect wastes 5–8 seconds of compute per 60 s chunk performing an initial language classification pass without changing the transcription output (identical WER/CER). Furthermore, auto-detect risks misclassifying rapid code-switching into English. **Always force `-l id` for Indonesian clips.**
 
@@ -299,41 +310,150 @@ In Spike S3b, we conducted a targeted deep-dive into Voice Activity Detection on
 
 ---
 
-### 5.6 Word Timestamp Quality & DTW Alignment
+### 5.6 Word Timestamp Quality & DTW Alignment (Spike S3d Audit)
 
-In Spike S3b, we audited the timestamp validation methodology to eliminate non-rigorous proxies (such as FFmpeg `volumedetect`) and clarify the provenance of previously cited metrics.
+> [!NOTE]
+> **Status: SUPPORTED by automated unanchored check; PENDING human audit and negative control**  
+> Following the retraction of flawed validation metrics from S3/S3b/S3c, Spike S3d conducted an exhaustive audit of whisper.cpp DTW token emissions, flag interactions, unanchored acoustic onset alignment, fallback interpolation, and human perceptual listening.
 
-#### Explanation of Previously Reported "38.4 ms"
-In the initial S3 draft, "38.4 ms" was reported as timestamp drift. In reality, that number was measured as the average delta between DTW timestamps ($t_0$) and standard attention token timestamps ($t_0$) across the first 30 words of `podcast_mixed` before the standard attention mechanism accumulated cumulative delay. It was a comparative difference between two model outputs, not an independent acoustic verification against audio.
+#### 1. Root Cause of Whole-Second $t_0$ Leakage (Measured):
+- **Diagnosis:** In S3c, 41 of 90 audited words (~46%) showed exact whole-second timestamps (`1000 ms`, `2000 ms`, etc.). Direct token inspection revealed that `whisper.cpp` emits two timestamp fields:
+  1. `tok["offsets"]["from"]`: Segment-relative attention timestamps that snap to coarse segment boundaries (`0 ms`, `2000 ms`, `4000 ms`).
+  2. `tok["t_dtw"]`: True dynamic time warping frame indices in centiseconds (10 ms units: $t = t_{\text{dtw}} \times 10\text{ ms}$).
+- The previous converter (`whisper_to_words.py`) mistakenly read `tok.get("offsets", {})` instead of `tok["t_dtw"]`.
+- **Token Audit Across Models & Samples (1,949 text tokens audited):**
+  - Exactly **100.0% of text tokens (1,949 / 1,949)** emitted by `whisper-cli` across `base`, `small-q5_1`, and `small` have valid `t_dtw >= 0`. Zero tokens fell back or lacked DTW alignment.
+  - With `whisper_to_words.py` corrected to read `t_dtw * 10 ms`, whole-second timestamps drop from 42.4% down to **0.0%–3.3% (mean 1.8%)**, perfectly matching the theoretical ~1.0% random uniform occurrence on a 10 ms grid.
+  - Mean word durations range between **253 ms and 376 ms** (median **200–260 ms**), with zero 0-duration words.
 
-#### Independent Acoustic Waveform Onset Validation
-To independently validate timestamp alignment accuracy, we constructed an acoustic onset detector in pure Python (`spikes/s3-speech/validate_dtw_onsets.py`):
-- Operates directly on the 16 kHz uncompressed PCM WAV files.
-- Computes frame-by-frame RMS energy in 10 ms windows with 2 ms hop steps.
-- Detects the true physical speech onset when acoustic energy rises 6 dB above the preceding local noise floor.
-- Evaluated on the default quantized model (`small-q5_1`) across **30 spot-checked words** (10 words sampled across `gaming_slang`, `podcast_mixed`, and `gaming_live`).
+#### 2. Flag Interactions & Granularity Benchmark (Measured on Reference R1):
+Benchmark run on `podcast_mixed.wav` (60.0 s, `small-q5_1`, 6 threads, forced `id`):
 
-| Metric | DTW Alignment (`-dtw small -nfa`) | Standard Token Timestamps (No DTW) |
+| Config / Flag Combination | RTF | Wall Time (s) | RAM (MB) | DTW Words | % Whole-Sec $t_0$ | Median Duration | Key Finding |
+|---|---|---|---|---|---|---|---|
+| **Baseline (`-dtw small -nfa -ojf`)** | 0.628× | 37.68 s | 774.0 MB | 166 (100%) | 1.8% | 240.0 ms | Baseline reference. |
+| **Flash Attention (`-dtw small -fa -ojf`)** | 0.799× | 47.95 s | 576.7 MB | **0 (0.0%)** | 11.5% | 295.0 ms | **FATAL:** Flash attention drops cross-attention maps; DTW alignment is disabled entirely! |
+| **Split-On-Word (`-dtw small -nfa -sow -ojf`)** | **0.602×** | **36.11 s** | **766.9 MB** | **166 (100%)** | **1.8%** | **240.0 ms** | **Optimal:** Clean word segment boundaries with slightly faster RTF. |
+| **One-Word Segments (`-dtw small -nfa -ml 1 -sow`)** | 0.610× | 36.62 s | 772.9 MB | 166 (100%) | 1.8% | 105.0 ms | Artificial truncation: truncating segments to 1 token cuts word durations by >55%. |
+| **Quantized DTW Name (`-dtw small-q5_1`)** | N/A | 0.05 s | N/A | 0 | N/A | N/A | **FAILS (Exit code 3):** `error: unknown DTW preset 'small-q5_1'`. Must map to canonical base name `-dtw small`. |
+
+- **Whisper Flag Specification & Runtime Rules:**
+  - **Pinned Flags:** `-l id -dtw <canonical base> -nfa -sow -sns -ojf`.
+  - **Preset Mapping:** The Rust core maps quantized model names to canonical presets (`small-q5_1` → `small`; unknown → disable DTW and set `timingSource` accordingly).
+  - **Flash Attention Interaction:** Flash attention disables DTW (0 DTW words with `-fa`); `-nfa` is strictly required whenever DTW is active.
+  - **Runtime Self-Check:** After each transcription job, the Rust supervisor verifies that ≥95% of tokens have `t_dtw >= 0`. If below 95%, mark `timingSource != 'dtw'` and log a diagnostic warning (non-fatal; falls back to phrase-level rendering).
+  - **Capability Test:** An automated test against the pinned `whisper-cli.exe` binary runs in CI and must be re-run on every whisper.cpp update.
+  - **Converter Spec:** Word $t_0/t_1$ come strictly from `t_dtw * 10` ms, never from `offsets.from`. Each word carries `timingSource: 'dtw'|'interpolated'|'segment'`.
+
+#### 3. Unanchored Global Acoustic Onset Validation (Measured):
+To eliminate the circularity of S3c (where a detector searched backward $\le 200\text{ ms}$ from DTW $t_0$, artificially clamping errors to the window boundary), an independent acoustic validator detected global log-energy novelty onsets across the **entire 60.0 s audio file without any windowing around $t_0$**, followed by monotonic order-constrained matching ($\pm 350\text{ ms}$ max tolerance):
+
+| Sample Audio | Total Words | Matched Words | Mean Signed Bias | 95% Bootstrap CI | Std Dev | MAE | Median Abs Err | P95 Abs Err | Max Abs Err |
+|---|---|---|---|---|---|---|---|---|---|
+| `gaming_slang` | 75 | 75 (100%) | +2.8 ms | [-12.7, +17.0] ms | 64.2 ms | 43.9 ms | 29.0 ms | 122.8 ms | 245.0 ms |
+| `podcast_mixed` | 166 | 166 (100%) | +4.4 ms | [-3.1, +11.7] ms | 50.3 ms | 37.0 ms | 29.0 ms | 110.5 ms | 193.0 ms |
+| `gaming_live` | 97 | 96 (99.0%) | +14.8 ms | [+4.7, +25.2] ms | 53.6 ms | 37.6 ms | 28.0 ms | 107.5 ms | 257.0 ms |
+| **Aggregate (All 3)** | **338** | **337 (99.7%)** | **+7.0 ms** | **[+1.4, +13.0] ms** | **54.8 ms** | **38.7 ms** | **29.0 ms** | **115.0 ms** | **257.0 ms** |
+
+- **Retraction of +85 ms Bias & −60 ms Lead-In:**
+  - The apparent "+85 ms bias" in S3c was a direct mathematical artifact of the backward-looking search window.
+  - When measured without anchoring, the true global bias is **only +7.0 ms** (95% CI: [+1.4, +13.0] ms), which is within the 10 ms frame quantization of Whisper.
+  - The acoustic justification for a −60 ms lead-in is **retracted**. `caption_lead_offset_ms = 0` is retained as the correct default in `app_config`.
+- **Status & Methodological Limitations (Pending Items):**
+  - Current word timing accuracy is **SUPPORTED by an automated unanchored check** (n=338 words, 3 samples, median abs error 29.0 ms, mean bias +7.0 ms [95% CI +1.4, +13.0] ms).
+  - **PENDING Item (a): Human Timing Audit:** 30 words/sample across all 3 samples. (Completed for `gaming_live` with 30/30 OK; pending for `gaming_slang` and `podcast_mixed`).
+  - **PENDING Item (b): Negative Control Validation:** Run the same monotonic matcher on timestamps artificially shifted by ±100, ±200, and ±300 ms to confirm the validator reliably detects shifts and does not falsely match adjacent acoustic transients. Report acoustic onset density vs word density. Reason: A ±350 ms matching tolerance against dense acoustic energy onsets can produce small errors by construction if onsets occur every 100–150 ms.
+- **Forced Alignment Feasibility Assessment:** Offline forced alignment tools (Montreal Forced Aligner, PyTorch/torchaudio CTC aligners) require ~2.5 GB of unbundled runtime dependencies, acoustic models, and pronunciation dictionaries. The unanchored global log-energy onset validator provides a completely reproducible, dependency-free offline ground truth.
+
+#### 4. Character-Proportional Fallback Evaluation (Measured):
+When DTW is unavailable, words can be interpolated within segment boundaries proportionally to character length:
+$$\text{duration}(w_i) = (t_{\text{seg,end}} - t_{\text{seg,start}}) \times \frac{\text{len}(w_i)}{\sum_j \text{len}(w_j)}$$
+
+Direct comparison between Fallback Character-Proportional Interpolation and true DTW across all 3 samples:
+- **Direct Drift vs DTW:** Mean error **673.7–1,076.3 ms**; Median error **606.5–750.0 ms**; P90 error **1,283.5–2,636.4 ms**; Max error **1,881.0–7,140.0 ms**.
+- **Impact on Karaoke Animation:** Natural speech includes pauses, hesitations, and uneven speaking rates. Linear character interpolation drifts by over half a second on median and multiple seconds during inter-phrase pauses.
+- **Viability Decision:**
+  - **Word-Level Karaoke Animation:** **VIABLE ONLY WITH TRUE DTW** (`timingSource: 'dtw'`). True DTW delivers median onset accuracy within 29.0 ms of acoustic reality, well within the ~100 ms human threshold for audio-visual sync.
+  - **Phrase-Level Fallback:** When `timingSource != 'dtw'` (or when DTW fails), the renderer must fall back to **phrase-level** or line-level reveal animations. Character interpolation is acceptable for static subtitle card placement, but must NOT be used for word-by-word karaoke highlighting.
+
+#### 5. Review Tool Extension: Human Word Timing Audit:
+- Extended `spikes/s3-speech/review/`:
+  - `generate_audit_data.py`: Deterministically samples 30 words per sample (`seed=42`) across `gaming_live`, `gaming_slang`, and `podcast_mixed`.
+  - `timing_audit.html` & `timing_audit.js`: Web Audio snippet player testing $[t_0 - 0.3\text{ s}, t_0 + 0.6\text{ s}]$, with unselected radio options (`Early` / `OK` / `Late` / `Can't tell`), live progress tracking, and File System Access API export to `timing_audit_<sample>.json` (no pre-fill, no auto-save).
+
+#### 6. Human Audit of Word-Level DTW Timestamps
+
+> [!NOTE]
+> **Scope:** Only `gaming_live` was audited (30 words). `gaming_slang` and `podcast_mixed` are pending.
+
+**Summary — `gaming_live` (30 / 30 audited, `small-q5_1`, seed=42):**
+
+| Choice | Count | Percentage |
 |---|---|---|
-| **Mean Onset Error vs Acoustic Audio** | **163.2 ms** | **2,339.1 ms** (2.34 s) |
-| **Median Onset Error vs Acoustic Audio** | **197.0 ms** | **744.0 ms** |
-| **Max Onset Error vs Acoustic Audio** | **201.0 ms** | **12,239.0 ms** (**12.24 s catastrophic drift**) |
-| **Drift Accumulation Across Pauses** | **Bounded ($\le 201\text{ ms}$)** | **Unbounded runaway drift** |
-| **Zero-Duration Words ($t_1 = t_0$)** | **0 / 30 (0.0%)** | 0 / 30 (0.0%) |
-| **Negative Duration Words ($t_1 < t_0$)** | **0 / 30 (0.0%)** | 0 / 30 (0.0%) |
-| **Recommended JSON Mode** | **`-ojf` (JSON Full)** | `-ojf` |
+| **OK** | **30** | **100.0%** |
+| Early | 0 | 0.0% |
+| Late | 0 | 0.0% |
+| Can't tell | 0 | 0.0% |
 
-#### Representative Word Onset Spot Checks
+**Zero words were marked Early or Late.** All 30 sampled word onsets sounded correctly aligned during human listening (audio snippet $[t_0 - 0.3\text{ s},\; t_0 + 0.6\text{ s}]$ at normal speed).
 
-| Sample | Word | Acoustic Onset ($t_{\text{audio}}$) | DTW $t_0$ | DTW Error | No-DTW $t_0$ | No-DTW Error |
-|---|---|---|---|---|---|---|
-| `gaming_slang` | `BUNUH!` | 0.013 s | 0.000 s | 13 ms | 0.000 s | 13 ms |
-| `gaming_slang` | `tepuk,` | 22.509 s | 22.630 s | **121 ms** | 27.000 s | **4,491 ms (+4.5 s drift!)** |
-| `podcast_mixed` | `Low` | 20.490 s | 20.689 s | 199 ms | 20.690 s | 200 ms |
-| `podcast_mixed` | `kick,` | 55.274 s | 55.470 s | **196 ms** | 56.150 s | **876 ms** |
-| `gaming_live` | `menang` | 39.761 s | 39.960 s | **199 ms** | 52.000 s | **12,239 ms (+12.2 s drift!)** |
+**Cross-Reference with Unanchored Acoustic Onset Validator (same 30 words):**
 
-**Conclusion:** **DTW is non-negotiable for animated captions.** Without DTW, standard attention timestamps accumulate massive delay across speaker pauses (reaching over 12 seconds of drift on live gaming audio). DTW rigidly anchors subtitle word boundaries to true acoustic energy onsets within ~200 ms across the entire file.
+All 30 audited words matched an unanchored global onset within ±350 ms. Statistics for this subset:
+
+| Metric | Value |
+|---|---|
+| Mean signed bias | +17.9 ms |
+| Median signed bias | +17.0 ms |
+| Mean absolute error | 32.3 ms |
+| Median absolute error | 23.0 ms |
+| P95 absolute error | 96.0 ms |
+| Max absolute error | 127.0 ms |
+| Words with \|err\| > 100 ms | 2 / 30 (6.7%) |
+
+The two words with absolute error > 100 ms (`ini` at +123.0 ms, `dia` at +127.0 ms) were both judged **OK** by the human listener, indicating the onset error falls within human perceptual tolerance for audio-visual sync.
+
+**Full Per-Word Cross-Reference Table:**
+
+| # | Word | DTW $t_0$ (ms) | Human | Validator Signed Err (ms) | Validator Abs Err (ms) |
+|---|---|---|---|---|---|
+| 1 | oh | 1020 | OK | +19.0 | 19.0 |
+| 2 | boleh | 1900 | OK | −15.0 | 15.0 |
+| 3 | mas | 2140 | OK | −23.0 | 23.0 |
+| 4 | jangan | 4980 | OK | +33.0 | 33.0 |
+| 5 | gede | 5400 | OK | +23.0 | 23.0 |
+| 6 | kita | 5640 | OK | +23.0 | 23.0 |
+| 7 | ada | 6400 | OK | +35.0 | 35.0 |
+| 8 | oh | 7300 | OK | +37.0 | 37.0 |
+| 9 | kali | 9460 | OK | +15.0 | 15.0 |
+| 10 | coba | 9700 | OK | −33.0 | 33.0 |
+| 11 | ya | 10020 | OK | −13.0 | 13.0 |
+| 12 | suamran | 10700 | OK | −41.0 | 41.0 |
+| 13 | ampun | 11240 | OK | −3.0 | 3.0 |
+| 14 | orang | 14700 | OK | +19.0 | 19.0 |
+| 15 | lah | 29440 | OK | +25.0 | 25.0 |
+| 16 | langsung | 29800 | OK | +15.0 | 15.0 |
+| 17 | elah | 30880 | OK | +9.0 | 9.0 |
+| 18 | gelem | 37200 | OK | −7.0 | 7.0 |
+| 19 | sia | 38580 | OK | +59.0 | 59.0 |
+| 20 | bisa | 40740 | OK | +29.0 | 29.0 |
+| 21 | lu | 42500 | OK | +43.0 | 43.0 |
+| 22 | ini | 43080 | OK | +123.0 | 123.0 |
+| 23 | lagi | 46900 | OK | +9.0 | 9.0 |
+| 24 | penang-penang-penang | 47340 | OK | +7.0 | 7.0 |
+| 25 | belom | 53480 | OK | +63.0 | 63.0 |
+| 26 | 17 | 53700 | OK | +39.0 | 39.0 |
+| 27 | anggun | 54000 | OK | −13.0 | 13.0 |
+| 28 | nih | 54800 | OK | −47.0 | 47.0 |
+| 29 | dia | 55440 | OK | +127.0 | 127.0 |
+| 30 | kuat | 55700 | OK | −21.0 | 21.0 |
+
+**Agreement:** The human listener and the unanchored acoustic validator agree perfectly — no word was perceived as mis-timed, and the validator's errors are small (median 23 ms). 0% of audited words are Early or Late, well under the 10% threshold.
+
+**Karaoke Viability Conclusion (gaming_live):** Word-level karaoke animation is **viable** on this sample. All DTW onsets land close enough to true acoustic onsets that a human listener cannot tell the difference in a 0.9 s snippet. The two highest-error words (123 ms, 127 ms) are still perceptually OK.
+
+> [!IMPORTANT]
+> **Coverage Limitation:** Only 1 of 3 samples audited so far. `gaming_slang` and `podcast_mixed` human audits are pending. The karaoke viability conclusion applies only to `gaming_live` until the remaining samples are audited.
 
 ---
 
@@ -441,17 +561,18 @@ Large speech models and binaries will be distributed via Cloudflare R2 behind a 
 
 ### 1. `docs/ARCHITECTURE.md §3` (Technology choices table)
 Update Speech-to-text row:
-> **whisper.cpp** sidecar (**v1.9.5** / `b5454`, MIT) + dynamic CPU micro-architecture backends (Haswell/AVX2). Model selection: `small-q5_1` (181 MB) for Class A/B (RAM ≥ 8 GB); `base` (141 MB) for Class C (<8 GB). Optional user override for `medium` (1.46 GB). Always force `-l id`. Suppress non-speech tokens (`-sns`) enabled; VAD OFF by default on gaming clips to avoid fragmentation and word loss. DTW (`-dtw <model> -nfa`) enabled for animated captions. Enforce 2.0 s trim context padding.
+> **whisper.cpp** sidecar (**v1.9.5** / `b5454`, MIT) + dynamic CPU micro-architecture backends (Haswell/AVX2). Model selection: `small-q5_1` (181 MB) for Class A/B (RAM ≥ 8 GB and projected RTF ≤ 1.5; provisional); `base` (141 MB) for Class C (<8 GB). Optional user override for `medium` (1.46 GB, speed warning). Always force `-l id`. Suppress non-speech tokens (`-sns`) enabled; VAD OFF by default on gaming clips to avoid fragmentation and word loss. Flags: `-l id -dtw <canonical base> -nfa -sow -sns -ojf` (Rust core maps quantized names; flash attention disables DTW so `-nfa` mandatory; runtime self-check requires ≥95% DTW tokens; capability test against pinned binary). Word timing is **SUPPORTED by an automated unanchored check** (n=338 words, 3 samples, median abs error 29 ms, mean bias +7 ms [95% CI +1.4, +13.0]); PENDING (a) human timing audit and (b) negative control. Karaoke highlighting requires `timingSource == 'dtw'`; otherwise phrase-level reveal. Character-proportional interpolation drifts mean 0.7–1.1 s (max 7 s): never use it for word-level highlighting. `caption_lead_offset_ms = 0` default. Enforce 2.0 s trim context padding.
 
 ### 2. `docs/ARCHITECTURE.md §8` (Hardware profile and adaptive defaults)
 Update defaults table:
 ```markdown
 | Setting | Rule |
 |---|---|
-| Speech model | `small-q5_1` (181 MB) if RAM ≥ 8 GB and micro-benchmark RTF ≤ 1.2×; otherwise `base` (141 MB). User can override to `small` or `medium`. |
+| Speech model | **PROVISIONAL:** `small-q5_1` (181 MB) if RAM ≥ 8 GB AND first-run micro-benchmark projected RTF for `small-q5_1` ≤ 1.5; otherwise `base` (141 MB). RAM alone is not enough. User can override to `small` or `medium` (with speed warning). |
 | Whisper backend | CPU AVX2 by default. |
 | Whisper threads | min(6, physical_cores). Do not allocate hyperthreads. |
-| Whisper flags | `-l id -dtw <model> -nfa -sns` (VAD disabled by default on gaming audio to prevent word dropping). |
+| Whisper flags | `-l id -dtw <canonical base> -nfa -sow -sns -ojf` (VAD disabled by default on gaming audio; Rust core maps quantized model names to canonical base names for `-dtw`). |
+| Word Timestamps | **SUPPORTED by automated unanchored check:** Median error 29.0 ms, bias +7.0 ms. PENDING human audit and negative control. Word-level karaoke enabled when `timingSource == 'dtw'`. Fallback to phrase-level reveal when `timingSource != 'dtw'`. `caption_lead_offset_ms = 0` default. |
 | Trim Context Padding | 2.0 s per side ([trim_start - 2.0s, trim_end + 2.0s]). |
 ```
 

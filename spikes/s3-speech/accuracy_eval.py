@@ -27,14 +27,9 @@ COLLOQUIAL_GROUPS = [
     ["emang", "emg"],
     # "like" (similative)
     ["kayak", "kyk"],
-    # Demonstrative particles
-    ["tuh", "tu"],
-    ["nih", "ni"],
     # Softening particles
     ["aja", "aj"],
-    ["deh", "de"],
     ["dong", "donk", "dng"],
-    ["sih", "si"],
     # "correct" / "true"
     ["bener", "bner"],
     # "want"
@@ -47,12 +42,8 @@ COLLOQUIAL_GROUPS = [
     ["sudah", "sdh"],
     # "so" / "then"
     ["jadi", "jd"],
-    # "if" / conditional
-    ["kalau", "kl"],
     # "can" / "could"
     ["bisa", "bs"],
-    # "that" (demonstrative)
-    ["itu", "tu"],  # note: "tu" maps here AND to "tuh" — context-free, we pick the first match
 ]
 
 # Build lookup: variant → canonical

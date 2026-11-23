@@ -1,0 +1,431 @@
+{
+  "sample_id": "gaming_live",
+  "sample_title": "Gaming Livestream (Windah Basudara GTA 6)",
+  "model": "small-q5_1",
+  "sampling_seed": 42,
+  "total_words_sampled": 30,
+  "audited_count": 30,
+  "saved_at": "2026-11-23T03:33:45.076Z",
+  "items": [
+    {
+      "rank": 1,
+      "word": "oh",
+      "t0_ms": 1020,
+      "t1_ms": 1200,
+      "dur_ms": 180,
+      "timingSource": "dtw",
+      "snippet": [
+        0.72,
+        1.62
+      ],
+      "context": "[oh] suamran nih boleh",
+      "choice": "OK"
+    },
+    {
+      "rank": 2,
+      "word": "boleh",
+      "t0_ms": 1900,
+      "t1_ms": 2140,
+      "dur_ms": 240,
+      "timingSource": "dtw",
+      "snippet": [
+        1.6,
+        2.5
+      ],
+      "context": "oh suamran nih [boleh] mas suamran suamran",
+      "choice": "OK"
+    },
+    {
+      "rank": 3,
+      "word": "mas",
+      "t0_ms": 2140,
+      "t1_ms": 2360,
+      "dur_ms": 220,
+      "timingSource": "dtw",
+      "snippet": [
+        1.84,
+        2.74
+      ],
+      "context": "suamran nih boleh [mas] suamran suamran tuh",
+      "choice": "OK"
+    },
+    {
+      "rank": 4,
+      "word": "jangan",
+      "t0_ms": 4980,
+      "t1_ms": 5160,
+      "dur_ms": 180,
+      "timingSource": "dtw",
+      "snippet": [
+        4.68,
+        5.58
+      ],
+      "context": "kayak gimana tuh [jangan] kandaran gede kita",
+      "choice": "OK"
+    },
+    {
+      "rank": 5,
+      "word": "gede",
+      "t0_ms": 5400,
+      "t1_ms": 5640,
+      "dur_ms": 240,
+      "timingSource": "dtw",
+      "snippet": [
+        5.1,
+        6
+      ],
+      "context": "tuh jangan kandaran [gede] kita pake umarin",
+      "choice": "OK"
+    },
+    {
+      "rank": 6,
+      "word": "kita",
+      "t0_ms": 5640,
+      "t1_ms": 5820,
+      "dur_ms": 180,
+      "timingSource": "dtw",
+      "snippet": [
+        5.34,
+        6.24
+      ],
+      "context": "jangan kandaran gede [kita] pake umarin ada",
+      "choice": "OK"
+    },
+    {
+      "rank": 7,
+      "word": "ada",
+      "t0_ms": 6400,
+      "t1_ms": 6520,
+      "dur_ms": 120,
+      "timingSource": "dtw",
+      "snippet": [
+        6.1,
+        7
+      ],
+      "context": "kita pake umarin [ada] korsi korsinya oh",
+      "choice": "OK"
+    },
+    {
+      "rank": 8,
+      "word": "oh",
+      "t0_ms": 7300,
+      "t1_ms": 7460,
+      "dur_ms": 160,
+      "timingSource": "dtw",
+      "snippet": [
+        7,
+        7.9
+      ],
+      "context": "ada korsi korsinya [oh] iya serius coba",
+      "choice": "OK"
+    },
+    {
+      "rank": 9,
+      "word": "kali",
+      "t0_ms": 9460,
+      "t1_ms": 9580,
+      "dur_ms": 120,
+      "timingSource": "dtw",
+      "snippet": [
+        9.16,
+        10.06
+      ],
+      "context": "serius coba ya [kali] ya coba ya",
+      "choice": "OK"
+    },
+    {
+      "rank": 10,
+      "word": "coba",
+      "t0_ms": 9700,
+      "t1_ms": 10020,
+      "dur_ms": 320,
+      "timingSource": "dtw",
+      "snippet": [
+        9.4,
+        10.3
+      ],
+      "context": "ya kali ya [coba] ya suamran ku",
+      "choice": "OK"
+    },
+    {
+      "rank": 11,
+      "word": "ya",
+      "t0_ms": 10020,
+      "t1_ms": 10090,
+      "dur_ms": 70,
+      "timingSource": "dtw",
+      "snippet": [
+        9.72,
+        10.62
+      ],
+      "context": "kali ya coba [ya] suamran ku ampun",
+      "choice": "OK"
+    },
+    {
+      "rank": 12,
+      "word": "suamran",
+      "t0_ms": 10700,
+      "t1_ms": 11120,
+      "dur_ms": 420,
+      "timingSource": "dtw",
+      "snippet": [
+        10.4,
+        11.3
+      ],
+      "context": "ya coba ya [suamran] ku ampun korek",
+      "choice": "OK"
+    },
+    {
+      "rank": 13,
+      "word": "ampun",
+      "t0_ms": 11240,
+      "t1_ms": 11660,
+      "dur_ms": 420,
+      "timingSource": "dtw",
+      "snippet": [
+        10.94,
+        11.84
+      ],
+      "context": "ya suamran ku [ampun] korek korek anak",
+      "choice": "OK"
+    },
+    {
+      "rank": 14,
+      "word": "orang",
+      "t0_ms": 14700,
+      "t1_ms": 14900,
+      "dur_ms": 200,
+      "timingSource": "dtw",
+      "snippet": [
+        14.4,
+        15.3
+      ],
+      "context": "korek korek anak [orang] mau ngelawa aku",
+      "choice": "OK"
+    },
+    {
+      "rank": 15,
+      "word": "lah",
+      "t0_ms": 29440,
+      "t1_ms": 29800,
+      "dur_ms": 360,
+      "timingSource": "dtw",
+      "snippet": [
+        29.14,
+        30.04
+      ],
+      "context": "hahahaha jadi jadi [lah] langsung main ding",
+      "choice": "OK"
+    },
+    {
+      "rank": 16,
+      "word": "langsung",
+      "t0_ms": 29800,
+      "t1_ms": 30120,
+      "dur_ms": 320,
+      "timingSource": "dtw",
+      "snippet": [
+        29.5,
+        30.4
+      ],
+      "context": "jadi jadi lah [langsung] main ding elah",
+      "choice": "OK"
+    },
+    {
+      "rank": 17,
+      "word": "elah",
+      "t0_ms": 30880,
+      "t1_ms": 31040,
+      "dur_ms": 160,
+      "timingSource": "dtw",
+      "snippet": [
+        30.58,
+        31.48
+      ],
+      "context": "langsung main ding [elah] dia penjadapan angin",
+      "choice": "OK"
+    },
+    {
+      "rank": 18,
+      "word": "gelem",
+      "t0_ms": 37200,
+      "t1_ms": 37320,
+      "dur_ms": 120,
+      "timingSource": "dtw",
+      "snippet": [
+        36.9,
+        37.8
+      ],
+      "context": "tot ada yang [gelem] ada yang gelem",
+      "choice": "OK"
+    },
+    {
+      "rank": 19,
+      "word": "sia",
+      "t0_ms": 38580,
+      "t1_ms": 38685,
+      "dur_ms": 105,
+      "timingSource": "dtw",
+      "snippet": [
+        38.28,
+        39.18
+      ],
+      "context": "yang gelem lu [sia] nganjok bisa kak",
+      "choice": "OK"
+    },
+    {
+      "rank": 20,
+      "word": "bisa",
+      "t0_ms": 40740,
+      "t1_ms": 40860,
+      "dur_ms": 120,
+      "timingSource": "dtw",
+      "snippet": [
+        40.44,
+        41.34
+      ],
+      "context": "lu sia nganjok [bisa] kak boosting kawat",
+      "choice": "OK"
+    },
+    {
+      "rank": 21,
+      "word": "lu",
+      "t0_ms": 42500,
+      "t1_ms": 42720,
+      "dur_ms": 220,
+      "timingSource": "dtw",
+      "snippet": [
+        42.2,
+        43.1
+      ],
+      "context": "kak boosting kawat [lu] bagus ini gila",
+      "choice": "OK"
+    },
+    {
+      "rank": 22,
+      "word": "ini",
+      "t0_ms": 43080,
+      "t1_ms": 43120,
+      "dur_ms": 40,
+      "timingSource": "dtw",
+      "snippet": [
+        42.78,
+        43.68
+      ],
+      "context": "kawat lu bagus [ini] gila sepuluh menit",
+      "choice": "OK"
+    },
+    {
+      "rank": 23,
+      "word": "lagi",
+      "t0_ms": 46900,
+      "t1_ms": 47040,
+      "dur_ms": 140,
+      "timingSource": "dtw",
+      "snippet": [
+        46.6,
+        47.5
+      ],
+      "context": "gila sepuluh menit [lagi] penang-penang-penang menang-menang-menang jauh-jauh",
+      "choice": "OK"
+    },
+    {
+      "rank": 24,
+      "word": "penang-penang-penang",
+      "t0_ms": 47340,
+      "t1_ms": 49360,
+      "dur_ms": 2020,
+      "timingSource": "dtw",
+      "snippet": [
+        47.04,
+        47.94
+      ],
+      "context": "sepuluh menit lagi [penang-penang-penang] menang-menang-menang jauh-jauh ku",
+      "choice": "OK"
+    },
+    {
+      "rank": 25,
+      "word": "belom",
+      "t0_ms": 53480,
+      "t1_ms": 53700,
+      "dur_ms": 220,
+      "timingSource": "dtw",
+      "snippet": [
+        53.18,
+        54.08
+      ],
+      "context": "menang-menang-menang jauh-jauh ku [belom] 17 anggun kan",
+      "choice": "OK"
+    },
+    {
+      "rank": 26,
+      "word": "17",
+      "t0_ms": 53700,
+      "t1_ms": 54000,
+      "dur_ms": 300,
+      "timingSource": "dtw",
+      "snippet": [
+        53.4,
+        54.3
+      ],
+      "context": "jauh-jauh ku belom [17] anggun kan boleh",
+      "choice": "OK"
+    },
+    {
+      "rank": 27,
+      "word": "anggun",
+      "t0_ms": 54000,
+      "t1_ms": 54320,
+      "dur_ms": 320,
+      "timingSource": "dtw",
+      "snippet": [
+        53.7,
+        54.6
+      ],
+      "context": "ku belom 17 [anggun] kan boleh nih",
+      "choice": "OK"
+    },
+    {
+      "rank": 28,
+      "word": "nih",
+      "t0_ms": 54800,
+      "t1_ms": 54830,
+      "dur_ms": 30,
+      "timingSource": "dtw",
+      "snippet": [
+        54.5,
+        55.4
+      ],
+      "context": "anggun kan boleh [nih] boleh dia kuat",
+      "choice": "OK"
+    },
+    {
+      "rank": 29,
+      "word": "dia",
+      "t0_ms": 55440,
+      "t1_ms": 55700,
+      "dur_ms": 260,
+      "timingSource": "dtw",
+      "snippet": [
+        55.14,
+        56.04
+      ],
+      "context": "boleh nih boleh [dia] kuat Selamat tinggal.",
+      "choice": "OK"
+    },
+    {
+      "rank": 30,
+      "word": "kuat",
+      "t0_ms": 55700,
+      "t1_ms": 56000,
+      "dur_ms": 300,
+      "timingSource": "dtw",
+      "snippet": [
+        55.4,
+        56.3
+      ],
+      "context": "nih boleh dia [kuat] Selamat tinggal.",
+      "choice": "OK"
+    }
+  ]
+}

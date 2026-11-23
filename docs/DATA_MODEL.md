@@ -190,7 +190,7 @@ insert into public.app_config(key, value) values
  ('maintenance',     '{"enabled":false,"message":null}'),
  ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
  ('ticket',          '{"ttl_seconds":900,"active_kid":null,"next_kid":null}'),
- ('flags',           '{}');
+ ('flags',           '{"caption_lead_offset_ms":0}'); -- caption_lead_offset_ms: default 0 pending S3d timing verification
 
 create table public.component_manifests (
   id uuid primary key default gen_random_uuid(),
@@ -409,7 +409,7 @@ interface Composition {
     enabled: boolean;
     status: 'none' | 'running' | 'ready' | 'stale';                     // 'stale' when timeline extends beyond transcribed coverage
     language: 'id' | 'en' | 'auto';
-    words: Array<{ id: string; t0: number; t1: number; text: string }>; // OUTPUT-timeline ms, DERIVED from transcript + timeline + edits
+    words: Array<{ id: string; t0: number; t1: number; text: string; timingSource: 'dtw' | 'interpolated' | 'segment' }>; // OUTPUT-timeline ms, DERIVED from transcript + timeline + edits
     edits: Array<{ wordId: string; text?: string; t0?: number; t1?: number; deleted?: boolean }>; // user overrides surviving re-trims
     style: CaptionStyle;                                                // resolved from template + overrides
   };
@@ -434,7 +434,7 @@ Transcripts live in **SOURCE time** as a cached workspace artifact (kind `transc
 interface SourceTranscript {
   sourceId: string;
   coverage: Array<[number, number]>;                                   // [startMs, endMs][] in source-relative ms covered by transcription
-  words: Array<{ id: string; t0: number; t1: number; text: string }>; // source-relative ms with stable UUIDs
+  words: Array<{ id: string; t0: number; t1: number; text: string; timingSource: 'dtw' | 'interpolated' | 'segment' }>; // source-relative ms with stable UUIDs
 }
 ```
 - **Derivation:** `captions.words` (output-timeline ms) is dynamically derived whenever the timeline changes:
@@ -446,6 +446,13 @@ interface SourceTranscript {
   - **Extending trim:** if new segment boundaries fall within `transcript.coverage`, captions remain valid. If extending beyond `coverage`, `captions.status = 'stale'` and the UI offers "Perbarui caption" (MVP: re-transcribe the new clip; delta transcription is post-MVP).
   - **Re-trim after user edits:** user edits are preserved in `captions.edits` and re-applied over the derived words.
 - **Canonical Hash:** `comp_hash` (SHA-256) covers the derived `captions.words` and `captions.edits`.
+- **Word Timing, Converter Spec & Fallback Interpolation:**
+  - **Converter Spec:** Word `t0`/`t1` are derived from `t_dtw * 10` ms (centiseconds converted to milliseconds), **never from `offsets.from`** (which snaps to coarse segment boundaries). Each word carries `timingSource: 'dtw' | 'interpolated' | 'segment'`.
+  - `timingSource`: `'dtw'` (whisper DTW token alignment, requires ≥95% valid tokens from sidecar run), `'interpolated'` (fallback character-proportional interpolation inside segment), or `'segment'` (coarse segment-boundary timing).
+  - **Animation Policy:** Per-word animations (`'word_highlight'` and `'pop'`) both **require `timingSource == 'dtw'`**; when words lack timingSource `'dtw'`, both render as `'phrase'` (line-level reveal).
+  - **Fallback Drift Limitation:** Character-proportional interpolation is measured to drift by a mean of 0.7–1.1 s (max 7 s during speech pauses); it must **never be used for word-level highlighting** (phrase-level display only).
+  - **Status:** Word timing is **SUPPORTED by an automated unanchored check** (n=338 words, 3 samples, median abs error 29 ms, mean bias +7 ms [95% CI +1.4, +13.0]). PENDING: (a) human timing audit (30 words/sample) and (b) negative control: run the same matcher on timestamps shifted by ±100/±200/±300 ms and confirm the validator detects the shift, reporting onset density vs word density (reason: ±350 ms matching tolerance against dense energy onsets can yield small errors by construction).
+  - **Lead-In Offset:** `caption_lead_offset_ms = 0` default in configuration.
 
 ## 8. Campaign template JSON (v1)
 
@@ -469,7 +476,7 @@ interface CaptionStyle {
   fontFamily: 'Montserrat' | 'Poppins' | 'Inter' | 'Anton';     // bundled OFL fonts only
   fontSizePct: number; weight: 400 | 600 | 700 | 800; color: string; outlineColor: string; outlinePx: number;
   shadow: boolean; positionAnchor: 'top' | 'center' | 'bottom'; offsetYPct: number;
-  maxWordsPerLine: number; maxLines: 1 | 2 | 3; animation: 'none' | 'word_highlight' | 'pop';
+  maxWordsPerLine: number; maxLines: 1 | 2 | 3; animation: 'none' | 'phrase' | 'word_highlight' | 'pop'; // 'word_highlight' and 'pop' are per-word animations requiring timingSource == 'dtw'; when words lack 'dtw', both render as 'phrase' (line-level reveal)
   highlightColor: string; uppercase: boolean;
 }
 type Rule =

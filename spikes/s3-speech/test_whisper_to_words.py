@@ -29,9 +29,15 @@ class TestWhisperToWords(unittest.TestCase):
         }
         words = convert_whisper_json_to_words(sample)
         self.assertEqual(len(words), 3)
-        self.assertEqual(words[0], {"t0": 10, "t1": 310, "text": "Tidak"})
-        self.assertEqual(words[1], {"t0": 320, "t1": 520, "text": "ada"})
-        self.assertEqual(words[2], {"t0": 520, "t1": 720, "text": "ya?"})
+        self.assertEqual(words[0]["text"], "Tidak")
+        self.assertEqual(words[0]["t0"], 10)
+        self.assertEqual(words[0]["t1"], 310)
+        self.assertEqual(words[1]["text"], "ada")
+        self.assertEqual(words[1]["t0"], 320)
+        self.assertEqual(words[1]["t1"], 520)
+        self.assertEqual(words[2]["text"], "ya?")
+        self.assertEqual(words[2]["t0"], 520)
+        self.assertEqual(words[2]["t1"], 720)
 
     def test_indonesian_hyphenation_and_apostrophe(self):
         sample = {
@@ -74,7 +80,46 @@ class TestWhisperToWords(unittest.TestCase):
         }
         words = convert_whisper_json_to_words(sample)
         self.assertEqual(len(words), 1)
-        self.assertEqual(words[0], {"t0": 100, "t1": 400, "text": "Halo"})
+        self.assertEqual(words[0]["text"], "Halo")
+        self.assertEqual(words[0]["t0"], 100)
+        self.assertEqual(words[0]["t1"], 400)
+
+    def test_dtw_timing_source(self):
+        sample = {
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 3000},
+                    "tokens": [
+                        {"text": "[_BEG_]", "offsets": {"from": 0, "to": 0}, "t_dtw": -1},
+                        {"text": " Bun", "offsets": {"from": 0, "to": 500}, "t_dtw": 54},
+                        {"text": "uh", "offsets": {"from": 500, "to": 1000}, "t_dtw": 86},
+                        {"text": " sekarang", "offsets": {"from": 1000, "to": 2000}, "t_dtw": 120},
+                    ]
+                }
+            ]
+        }
+        words = convert_whisper_json_to_words(sample)
+        self.assertEqual(len(words), 2)
+        self.assertEqual(words[0]["text"], "Bunuh")
+        self.assertEqual(words[0]["t0"], 540)
+        self.assertEqual(words[0]["timingSource"], "dtw")
+        self.assertEqual(words[1]["text"], "sekarang")
+        self.assertEqual(words[1]["t0"], 1200)
+        self.assertEqual(words[1]["timingSource"], "dtw")
+
+    def test_segment_fallback_timing_source(self):
+        sample = {
+            "transcription": [
+                {
+                    "offsets": {"from": 1000, "to": 3000},
+                    "text": "Satu dua tiga",
+                    "tokens": []
+                }
+            ]
+        }
+        words = convert_whisper_json_to_words(sample)
+        self.assertEqual(len(words), 3)
+        self.assertTrue(all(w["timingSource"] == "segment" for w in words))
 
     def test_duration_floor_positive(self):
         # zero duration token

@@ -146,7 +146,7 @@ Pinned exact versions + lockfiles (`pnpm`, `Cargo.lock`); `cargo audit`/`npm aud
 | Telemetry events (**opt-in**) | `events` | Quality, ETA priors | 90 days |
 | Crash reports (**opt-in**) | Sentry | Stability | Per Sentry retention |
 
-**Never leaves the device:** video files, audio, transcripts, caption text, project contents. **Telemetry events (complete list):** `app_start`, `generate_done{stage_ms, device_class, model, ok/error_code}`, `export_done{encoder, render_ms, ok/error_code}`, `component_update{component, ok}`, `error{code, stage}`. No URLs, titles, or text. Provide: privacy policy, in-app consent screen, data export/deletion request path.
+**Never leaves the device:** video files, audio, transcripts, caption text, project contents. **Telemetry events (complete list):** `app_start`, `generate_done{stage_ms, device_class, model, ok/error_code}`, `export_done{encoder, render_ms, ok/error_code}`, `component_update{component, ok}`, `caption_edit_rate{model, total_words, edited_words}` (aggregate counts only, no text), `error{code, stage}`. No URLs, titles, or text. Provide: privacy policy, in-app consent screen, data export/deletion request path.
 
 ## 12. Logging, monitoring, incident response
 
