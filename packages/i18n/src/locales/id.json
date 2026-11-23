@@ -1,0 +1,40 @@
+{
+  "app": {
+    "name": "ClipperHelper",
+    "welcome": "Selamat datang di ClipperHelper",
+    "version": "Versi {version}",
+    "tagline": "Ubah VOD livestream menjadi klip vertikal siap kampanye dalam hitungan menit."
+  },
+  "stage": {
+    "probe": "Memeriksa link video…",
+    "download": "Mengunduh potongan video",
+    "prepare_preview": "Menyiapkan pratinjau",
+    "build": "Menyiapkan editor",
+    "extract_audio": "Menyiapkan audio clip…",
+    "transcribe": "Membuat caption ({model})…",
+    "map": "Menyelaraskan teks…",
+    "ticket": "Memeriksa kredit & izin export…",
+    "analyze_audio": "Menganalisis volume audio",
+    "render": "Merender video",
+    "verify": "Memeriksa hasil",
+    "finalize": "Menyimpan file"
+  },
+  "err": {
+    "E_NET_OFFLINE": {
+      "title": "Koneksi terputus",
+      "body": "Periksa koneksi internet kamu dan coba lagi."
+    },
+    "E_YT_BOT_CHECK": {
+      "title": "Verifikasi anti-bot terdeteksi",
+      "body": "YouTube meminta verifikasi 'bukan bot'. Tunggu beberapa menit atau ganti jaringan/VPN."
+    },
+    "E_PREVIEW_CONFIG": {
+      "title": "Konfigurasi pratinjau bermasalah",
+      "body": "Pratinjau tidak dapat dimuat karena kendala konfigurasi. Beralih otomatis ke mode timecode-only."
+    },
+    "E_UNKNOWN": {
+      "title": "Terjadi kesalahan",
+      "body": "Terjadi kendala tak terduga. Silakan coba lagi."
+    }
+  }
+}

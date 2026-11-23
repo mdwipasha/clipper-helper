@@ -1,0 +1,40 @@
+{
+  "app": {
+    "name": "ClipperHelper",
+    "welcome": "Welcome to ClipperHelper",
+    "version": "Version {version}",
+    "tagline": "Turn livestream VODs into campaign-ready vertical clips in minutes."
+  },
+  "stage": {
+    "probe": "Checking video link…",
+    "download": "Downloading video section",
+    "prepare_preview": "Preparing preview",
+    "build": "Setting up editor",
+    "extract_audio": "Preparing audio clip…",
+    "transcribe": "Creating captions ({model})…",
+    "map": "Aligning text…",
+    "ticket": "Checking credits & export authorization…",
+    "analyze_audio": "Analyzing audio volume",
+    "render": "Rendering video",
+    "verify": "Verifying output",
+    "finalize": "Saving file"
+  },
+  "err": {
+    "E_NET_OFFLINE": {
+      "title": "No internet connection",
+      "body": "Check your internet connection and try again."
+    },
+    "E_YT_BOT_CHECK": {
+      "title": "Anti-bot verification detected",
+      "body": "YouTube is requesting a bot check. Wait a few minutes or switch networks/VPN."
+    },
+    "E_PREVIEW_CONFIG": {
+      "title": "Preview configuration error",
+      "body": "Preview could not load due to a configuration mismatch. Switching to timecode-only mode."
+    },
+    "E_UNKNOWN": {
+      "title": "An error occurred",
+      "body": "An unexpected error occurred. Please try again."
+    }
+  }
+}
