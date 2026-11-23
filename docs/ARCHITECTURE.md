@@ -49,7 +49,7 @@ flowchart LR
 | Secure storage | Windows Credential Manager (`keyring` crate) | Refresh tokens, device secret. |
 | Downloader | **yt-dlp** sidecar + **QuickJS-NG** JS runtime | Approach A (`--download-sections`, copy mode) chosen in S1. `--force-keyframes-at-cuts` is **forbidden** (with an LGPL FFmpeg it silently falls back to the mpeg4 encoder). Official `yt-dlp.exe` release (bundles EJS); pin version `2026.10.26` + SHA-256 (`f5389d…7a7d`). QuickJS-NG (`qjs.exe` v0.18.0, MIT, 1.87 MB) via `--js-runtimes "quickjs:<bin_dir>\qjs.exe"`. Deno is **not** bundled but may ship later as a fallback JS runtime via the signed component manifest. Node is supported. Bun is deprecated by yt-dlp — do not use. |
 | Media | **FFmpeg + ffprobe** sidecars (LGPL build) | Cut, reframe, burn-in ASS captions, encode, probe. |
-| Speech-to-text | **whisper.cpp** sidecar (CPU build; optional Vulkan build) | Local, MIT, good Indonesian support; model chosen by hardware probe. |
+| Speech-to-text | **whisper.cpp** sidecar (CPU AVX2 build, v1.9.5 tag `b5454`, commit `d1be6fd`; optional Vulkan build) | Local, MIT, good Indonesian support; default flags `-l id -dtw <model> -nfa -sns`, threads = `min(6, physical cores)`, VAD OFF by default (measured word loss on gaming audio), phrase blocklist in `app_config` for known hallucinated outros, 2 s context padding per side (words filtered by center). Models/binaries distributed via signed component manifest + Cloudflare R2 mirror. |
 | Captions | ASS subtitles burned by FFmpeg (libass); preview with the same renderer (e.g. libass-WASM/JASSUB) | Preview == export. |
 | Backend | **Supabase** (Postgres, Auth, Edge Functions, Storage) in **Singapore** | Closest region to Indonesia; one platform; RLS. |
 | Payments | **Midtrans Snap** (hosted checkout) | Already registered; QRIS/e-wallet/VA/cards without handling card data. |
@@ -172,15 +172,45 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
 - **Canonicalization + hash:** keys sorted, numbers normalized → `comp_hash` (SHA-256). Included in the export ticket. `comp_hash` covers the derived words (`captions.words`) and user overrides (`captions.edits`).
 - **Render builder (Rust):** composition → FFmpeg filtergraph + ASS file.
   - `fill`: crop rect → scale to 1080×1920.
-  - `blur_fit`: blurred scaled background (using LGPL filter `gblur` or `avgblur`; `boxblur` is GPL-only and strictly absent in LGPL builds) + centered contained foreground.
+  - `blur_fit`: blurred scaled background (using LGPL filter `gblur=sigma=30:steps=2` or `avgblur`; `boxblur` is GPL-only and strictly absent in LGPL builds) + centered contained foreground.
   - `split`: two crops stacked by ratio.
-  - Captions: generate ASS (word-highlight via karaoke tags), burn with `ass`/`subtitles` filter, fonts from the bundled set only.
+  - Captions: generate ASS (word-highlight via karaoke tags), burn with `ass`/`subtitles` filter, fonts from the bundled OFL set only (Montserrat, Poppins, Inter, Anton). Emojis are **stripped in MVP** because bundled typography fonts lack color emoji tables (COLR/CPAL/SVG) and fontconfig-free sidecars render empty glyphs or missing boxes (`[]`).
+  - Windows filter-path escaping contract:
+    ```python
+    def escape_filter_path(p: str) -> str:
+        return p.replace("\\", "/").replace(":", r"\:")
+    ```
+    Paths passed as `ass=filename='F\:/path/to/caption.ass':fontsdir='F\:/path/to/fonts'`.
   - Overlays: logo via `overlay`, text via ASS or `drawtext` with bundled fonts.
-  - Audio: gain + optional loudness normalization (analysis pass is audio-only and fast).
-  - Output: H.264 High, yuv420p, 30 fps default (template may set 60), AAC 48 kHz 128–192 kbps, `+faststart`.
-  - **Export presets:** `standard` (quality-targeted, e.g. CRF-based) or `small_file` (bitrate-capped to meet `template.format.maxFileSizeMB` with margin). If the estimated file size at `standard` exceeds the template's size limit, the app selects `small_file` automatically. Users cannot set CRF/bitrate directly in MVP; fps and resolution come from the template. Per-encoder rate-control values live in the Rust render module (mapping table: *fill after S4*).
+  - **Two-pass audio loudness normalization pipeline:**
+    - Assumed by PROGRESS_AND_ETA stage `analyze_audio` (audio-only analysis pass) + render stage:
+      - Pass 1 (`analyze_audio`): `ffmpeg -i <audio> -af "loudnorm=I=-14.0:TP=-1.5:LRA=11:print_format=json" -f null -` (parses `measured_I`, `measured_TP`, `measured_LRA`, `measured_thresh`, and `target_offset`).
+      - Pass 2 (`render`): main filtergraph injects measured parameters in linear mode: `volume=<gain>dB,loudnorm=I=-14.0:TP=-1.5:LRA=11:measured_I=...:measured_TP=...:measured_LRA=...:measured_thresh=...:offset=...:linear=true,aresample=48000`.
+    - Default target: **−14.0 LUFS** (template-configurable via `audio.targetLufs`, e.g. −16.0 LUFS for broadcast). Softened platform note: YouTube normalizes around −14 LUFS; other platforms are not verified.
+    - Note on dynamic headroom: with the −1.5 dBTP ceiling, linear mode landed ~1.5 LU below target on peaky gaming audio (−15.5 LUFS for −14.0 LUFS target) because linear gain backs off to prevent transient clipping. Added evaluation item: test a true-peak limiter before loudnorm in post-M1 optimization.
+  - Output: H.264 High, yuv420p, 30 fps default (template may set 60), AAC 48 kHz stereo 128–192 kbps, `+faststart`. Output containers always specify `-color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv -movflags +faststart`.
+  - **Export presets & rate control (S4 verified on R1):**
+    - **`standard` (quality target):**
+      - `h264_amf` (AMD GPU, measured on R1): `-usage transcoding -rc vbr_peak -b:v 4500k -maxrate 6000k -bufsize 9000k -quality quality -profile:v high -level 4.2 -g 30`. (`vbr_peak` selected over `vbr_latency` for offline export because it avoids latency throttling, achieving 4.4 Mbps target accuracy vs 4.0 Mbps underrun, +1.58 dB PSNR, and 97.69 VMAF).
+      - `h264_mf` (Media Foundation, measured on R1): `-b:v 4500k -rate_control pc_vbr -g 30`. **CRITICAL:** never pass `-profile:v` to `h264_mf` (MFT manages profile internally; passing `-profile:v high` triggers syntax error `Invalid argument`).
+      - `h264_nvenc` (NVIDIA GPU, **UNTESTED / PLACEHOLDER**): `-rc vbr -cq 23 -b:v 4500k -maxrate 6000k -bufsize 9000k -profile:v high -g 30`.
+      - `h264_qsv` (Intel QSV, **UNTESTED / PLACEHOLDER**): `-global_quality 23 -b:v 4500k -maxrate 6000k -profile:v high -g 30`.
+    - **`small_file` (bitrate-capped for templates with maxFileSizeMB):**
+      - `h264_amf` (Measured on R1): `-usage transcoding -rc cbr -b:v 2500k -maxrate 2500k -bufsize 5000k -profile:v high -level 4.2 -g 30`.
+      - `h264_mf` (Measured on R1): `-b:v 2500k -rate_control cbr -g 30`.
+      - `h264_nvenc` (**UNTESTED / PLACEHOLDER**): `-rc cbr -b:v 2500k -maxrate 2500k -bufsize 5000k -profile:v high -g 30`.
+      - `h264_qsv` (**UNTESTED / PLACEHOLDER**): `-b:v 2500k -maxrate 2500k -bufsize 5000k -profile:v high -g 30`.
+    - Users cannot set CRF/bitrate directly in MVP; fps and resolution come from the template.
+  - **HW vs SW decode:** Default to **software decode** for maximum export speed on mid-spec CPUs (Class B/A, 6+ logical cores). D3D11VA hardware decode cuts CPU load by >50% (from 27% to 12%), but adds ~7–10 s wall time due to GPU-to-CPU surface copies for CPU-based `libass` subtitle burn-in. D3D11VA is retained as an optional low-CPU / battery-saver setting.
+  - **Disk space guard:** Before rendering, Rust checks `required_bytes = 1.5 × estimated_output_bytes + 500 MB headroom`. If free disk space is insufficient, raises `E_DISK_LOW` without invoking FFmpeg.
+  - **Temp file handling & cleanup:** Output writes to `%LOCALAPPDATA%\...\cache\<job_id>.mp4.tmp` with `-f mp4`. On cancel, crash, or error, the supervisor process terminates FFmpeg via Windows Job Object (`kill-on-close`) and immediately deletes partial `.tmp` artifacts.
 - **Preview parity:** UI preview applies the same crop/scale math from the shared module and renders ASS with the same libass-based renderer. **Golden tests** compare composition → FFmpeg-args snapshots and ffprobe metadata of a short fixture render.
-- **Encoder selection:** probe `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` (Windows Media Foundation; Windows N/KN editions need the Media Feature Pack) → `E_ENCODER_UNAVAILABLE`. `libopenh264` and `x264` are **unapproved** pending legal counsel review (see docs/compliance/FFMPEG.md §7 and ARCHITECTURE §15). If no encoder is available the export fails with `E_ENCODER_UNAVAILABLE` and an actionable message (update GPU driver / install Media Feature Pack / export diagnostics). The UI says which encoder is active.
+- **Post-render verification checklist (`verify_export.py`):**
+  1. Container faststart: binary inspection verifies `moov` atom precedes `mdat` atom.
+  2. Video stream: codec `h264`, dimensions exactly `1080×1920`, framerate `30 fps` (or 60 fps per template), pixel format `yuv420p`, color tags `bt709 tv`.
+  3. Audio stream: codec `aac`, sample rate `48000 Hz` (or 44100 Hz), stereo.
+  4. Duration: rendered duration within ±0.5 s of requested composition timeline.
+- **Encoder selection & fallback chain:** probe `h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf` → `E_ENCODER_UNAVAILABLE`. `libopenh264` and `x264` are **unapproved** pending legal counsel review (see docs/compliance/FFMPEG.md §7 and ARCHITECTURE §15). Fallback chain demonstrated in S4b: unsupported encoders fail fast (<0.25 s each, exit code -22 `Invalid argument`), transitioning cleanly to working hardware in 1.70 s total. Stderr patterns mapped directly to catalog codes.
 
 ## 8. Hardware profile and adaptive defaults
 
@@ -188,10 +218,11 @@ First run (and "Re-run benchmark" in settings): probe CPU model/cores/AVX2, RAM,
 
 | Setting | Rule |
 |---------|------|
-| Speech model | Small if RAM ≥ 8 GB and micro-benchmark real-time factor acceptable; otherwise Base. User can override (Tiny…Medium). |
-| Whisper backend | CPU by default; Vulkan build only if probe + benchmark show benefit and it passes a self-test; auto-fallback to CPU on error. |
+| Speech model | **PROVISIONAL:** Small (`small-q5_1`) if RAM ≥ 8 GB and micro-benchmark real-time factor acceptable; otherwise Base. User can override (Tiny…Medium). *Provisional status: pending S3c human-corrected references; DTW timing accuracy unverified; 8 GB floor is an inference from measured RAM, not an empirical test; hallucination evidence is n=1. Do not cite "12.24 s drift" or "≤200 ms bounded error" claims.* |
+| Whisper sidecar & backend | whisper.cpp CPU AVX2 build (v1.9.5, release tag `b5454`, commit `d1be6fd`). Flags: `-l id -dtw <model> -nfa -sns`. Threads = `min(6, physical cores)`. VAD OFF by default (measured word loss on gaming audio). Phrase blocklist in `app_config` for known hallucinated outros. 2 s context padding per side (words filtered by center). Model/binary manifest + Cloudflare R2 mirror. Synthetic heartbeat every 2 s. Vulkan build optional post-M1 if probe shows clear benefit. |
+| Speech ETA prior | Model-init prior: **8 s**. Transcribe rate prior: **RANGE 1.1–2.2× real-time** depending on speech density; marked low confidence until measured on device. ETA formula: `clip_seconds / rate + 8 s`. |
 | Concurrency | 1 heavy stage at a time (A/B), 2 on high-end. |
-| Encoder | First working in priority order. |
+| Encoder | First working in priority order (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`). Software decode default; D3D11VA optional. |
 
 ## 9. Local storage
 

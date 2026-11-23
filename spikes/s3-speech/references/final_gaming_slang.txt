@@ -1,0 +1,31 @@
+SAMPLE: Gaming (Deceit 2) [01:00 - 02:00]
+MODEL: Medium (ggml-medium.bin)
+RTF: 1.521x, Wall time: 91.269s
+
+--- FULL TEXT ---
+Gw ga bohong! Oke, oke, oke, oke! Gua di poison! Alhamdulillah kita aman ya! Kita aman! Tapi gua di poison, yes! Eh kenapa gua di temen-temen? Temen banget! Kenapa sih gua di bunuh? Aaaaaaa! Kenapa sih gua di bunuh? Aaaaaaa! Kenapa sih a***** gua di bunuh? Orang gua lagi nanya! BOKI! Gimana, Gigi? Gak tau tuh gua a***** Apa jangan-jangan kamu You don't have anything for me Harus bertanih hidup pake A***** ga boleh dipake ini Sebentar, sabar-sabar guys ini tele, tele, gue butuh tele
+
+--- SEGMENTS ---
+[00:00:00,000 --> 00:00:01,000] Gw ga bohong!
+[00:00:01,000 --> 00:00:02,000] Oke, oke, oke, oke!
+[00:00:02,000 --> 00:00:04,000] Gua di poison!
+[00:00:06,000 --> 00:00:07,000] Alhamdulillah kita aman ya!
+[00:00:07,000 --> 00:00:08,000] Kita aman!
+[00:00:08,000 --> 00:00:09,000] Tapi gua di poison, yes!
+[00:00:17,000 --> 00:00:19,000] Eh kenapa gua di temen-temen?
+[00:00:19,000 --> 00:00:20,000] Temen banget!
+[00:00:23,000 --> 00:00:25,000] Kenapa sih gua di bunuh?
+[00:00:25,000 --> 00:00:27,000] Aaaaaaa!
+[00:00:27,000 --> 00:00:30,000] Kenapa sih gua di bunuh?
+[00:00:30,000 --> 00:00:31,000] Aaaaaaa!
+[00:00:33,000 --> 00:00:35,000] Kenapa sih a***** gua di bunuh?
+[00:00:35,000 --> 00:00:37,000] Orang gua lagi nanya!
+[00:00:40,000 --> 00:00:41,000] BOKI!
+[00:00:41,000 --> 00:00:43,000] Gimana, Gigi?
+[00:00:43,000 --> 00:00:45,000] Gak tau tuh gua a*****
+[00:00:45,000 --> 00:00:47,000] Apa jangan-jangan kamu
+[00:00:47,000 --> 00:00:50,000] You don't have anything for me
+[00:00:50,000 --> 00:00:52,000] Harus bertanih hidup pake
+[00:00:52,000 --> 00:00:54,000] A***** ga boleh dipake ini
+[00:00:54,000 --> 00:00:55,000] Sebentar, sabar-sabar guys
+[00:00:55,000 --> 00:00:56,760] ini tele, tele, gue butuh tele

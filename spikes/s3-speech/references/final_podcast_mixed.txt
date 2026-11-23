@@ -1,0 +1,36 @@
+SAMPLE: Podcast Mixed ID/EN (Jonathan Liandi) [05:00 - 06:00]
+MODEL: Medium (ggml-medium.bin)
+RTF: 1.425x, Wall time: 85.472s
+
+--- FULL TEXT ---
+Gak ada lah Kayaknya gak ada ya Kita gak ada yang tau kan Oh iya bener bener Iya gitu ya Masalahnya masalah-masalah anak muda lah kebanyakan Masalah-masalah ya Masalah internal yang mungkin ya Berantem, gak cocok Biasanya itu kalo udah Low streak pasti ditambah masalah-masalah lainnya Nah kalo misalnya kayak tim Esport gitu, ada yang Satu orang gitu, apa yang dilakukan Tim member lainnya Enggak lah Kalo dulu-dulu jaman gue Ada temen gue tuh emang ya jago Terus emang orangnya Dia kayak kaptennya lah gitu kan Ya ada, gue juga dimaren kayak gitu dulu Bener-bener kayak misalnya lu main nih Main apa? Gue dulu inget main Aurora Terus kayak kombonya itu sama Chou Apa? Aura? Aura, ada hero Ngomong sama Chou Kalo konek sama cowo aja kayak cowo kick, lo gombo gombo gombo kan
+
+--- SEGMENTS ---
+[00:00:00,000 --> 00:00:02,000] Gak ada lah
+[00:00:02,000 --> 00:00:04,000] Kayaknya gak ada ya
+[00:00:04,000 --> 00:00:06,000] Kita gak ada yang tau kan
+[00:00:06,000 --> 00:00:08,000] Oh iya bener bener
+[00:00:08,000 --> 00:00:10,000] Iya gitu ya
+[00:00:10,000 --> 00:00:12,000] Masalahnya masalah-masalah anak muda lah kebanyakan
+[00:00:12,000 --> 00:00:14,000] Masalah-masalah ya
+[00:00:14,000 --> 00:00:16,000] Masalah internal yang mungkin ya
+[00:00:16,000 --> 00:00:18,000] Berantem, gak cocok
+[00:00:18,000 --> 00:00:20,000] Biasanya itu kalo udah
+[00:00:20,000 --> 00:00:22,000] Low streak pasti ditambah masalah-masalah lainnya
+[00:00:22,000 --> 00:00:24,000] Nah kalo misalnya kayak tim
+[00:00:24,000 --> 00:00:26,000] Esport gitu, ada yang
+[00:00:26,000 --> 00:00:28,000] Satu orang gitu, apa yang dilakukan
+[00:00:28,000 --> 00:00:30,000] Tim member lainnya
+[00:00:30,000 --> 00:00:32,000] Enggak lah
+[00:00:32,000 --> 00:00:34,000] Kalo dulu-dulu jaman gue
+[00:00:34,000 --> 00:00:36,000] Ada temen gue tuh emang ya jago
+[00:00:36,000 --> 00:00:38,000] Terus emang orangnya
+[00:00:38,000 --> 00:00:40,000] Dia kayak kaptennya lah gitu kan
+[00:00:40,000 --> 00:00:42,000] Ya ada, gue juga dimaren kayak gitu dulu
+[00:00:44,000 --> 00:00:46,000] Bener-bener kayak misalnya lu main nih
+[00:00:46,000 --> 00:00:48,000] Main apa? Gue dulu inget main Aurora
+[00:00:48,000 --> 00:00:50,000] Terus kayak kombonya itu sama Chou
+[00:00:50,000 --> 00:00:52,000] Apa? Aura?
+[00:00:52,000 --> 00:00:54,000] Aura, ada hero
+[00:00:54,000 --> 00:00:56,000] Ngomong sama Chou
+[00:00:56,000 --> 00:00:59,540] Kalo konek sama cowo aja kayak cowo kick, lo gombo gombo gombo kan

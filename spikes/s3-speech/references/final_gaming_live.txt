@@ -1,0 +1,38 @@
+SAMPLE: Gaming Livestream (Windah Basudara GTA 6) [01:00 - 02:00]
+MODEL: Medium (ggml-medium.bin)
+RTF: 1.603x, Wall time: 96.21s
+
+--- FULL TEXT ---
+Woh, suamran nih boleh, mas. Suamran. Suamran tuh kayak gimana itu? Yang kendaraan gede kita pagu, ada korsi-korsinya. Oh iya, serius? Coba ya. Kali ya, coba ya. Kondaraan suamu. Korek? Korek, anak orang bawa rokok nih, cepat. Oh, ada air-airnya dia. Lari, Andi. Laring, ya. Jadi. Jadi. Jadi. Lah, langsung anjing. Eh, lari pencet apaan? Ah, ngentot. Ada yang jelem? Ada yang jelem. Lucia. Nonjok bisa nggak? Boosting. Power lu bagus ini. Gela. 10 menit lagi. Menang, menang, menang. Menang, menang, menang. Jauh, jauh. Gua buat 17 sambutan, boleh nih. Boleh, dia kuat. Sampai jumpa di video selanjutnya!
+
+--- SEGMENTS ---
+[00:00:00,000 --> 00:00:03,000] Woh, suamran nih boleh, mas. Suamran.
+[00:00:03,000 --> 00:00:05,000] Suamran tuh kayak gimana itu?
+[00:00:05,000 --> 00:00:07,000] Yang kendaraan gede kita pagu, ada korsi-korsinya.
+[00:00:07,000 --> 00:00:08,000] Oh iya, serius?
+[00:00:08,000 --> 00:00:09,000] Coba ya.
+[00:00:09,000 --> 00:00:10,000] Kali ya, coba ya.
+[00:00:10,000 --> 00:00:12,000] Kondaraan suamu.
+[00:00:12,000 --> 00:00:13,000] Korek?
+[00:00:13,000 --> 00:00:16,000] Korek, anak orang bawa rokok nih, cepat.
+[00:00:21,000 --> 00:00:23,000] Oh, ada air-airnya dia.
+[00:00:23,000 --> 00:00:24,000] Lari, Andi.
+[00:00:24,000 --> 00:00:25,000] Laring, ya.
+[00:00:26,000 --> 00:00:27,000] Jadi.
+[00:00:27,000 --> 00:00:28,000] Jadi.
+[00:00:28,000 --> 00:00:29,000] Jadi.
+[00:00:29,000 --> 00:00:31,000] Lah, langsung anjing.
+[00:00:31,000 --> 00:00:33,000] Eh, lari pencet apaan?
+[00:00:35,000 --> 00:00:37,000] Ah, ngentot.
+[00:00:37,000 --> 00:00:38,000] Ada yang jelem?
+[00:00:38,000 --> 00:00:40,000] Ada yang jelem. Lucia.
+[00:00:40,000 --> 00:00:42,000] Nonjok bisa nggak? Boosting.
+[00:00:42,000 --> 00:00:44,000] Power lu bagus ini.
+[00:00:44,000 --> 00:00:46,000] Gela.
+[00:00:46,000 --> 00:00:47,000] 10 menit lagi.
+[00:00:47,000 --> 00:00:49,000] Menang, menang, menang.
+[00:00:50,000 --> 00:00:52,000] Menang, menang, menang.
+[00:00:52,000 --> 00:00:53,000] Jauh, jauh.
+[00:00:53,000 --> 00:00:55,000] Gua buat 17 sambutan, boleh nih.
+[00:00:55,000 --> 00:00:57,000] Boleh, dia kuat.
+[00:00:59,000 --> 00:01:01,000] Sampai jumpa di video selanjutnya!

@@ -1,6 +1,87 @@
 import re
 from typing import List, Tuple
 
+# ──────────────────────────────────────────────────────────────────────
+# Indonesian colloquial spelling normalization map (S3c)
+# Canonical form is the FIRST entry in each group.
+# Applied AFTER standard normalization (lowercase, punctuation stripped).
+# Mapping rationale: these variants are phonologically identical in
+# informal Indonesian speech; penalizing ASR for picking one variant
+# over another inflates WER on casual/gaming audio.
+# ──────────────────────────────────────────────────────────────────────
+COLLOQUIAL_GROUPS = [
+    # Pronoun variants
+    ["gue", "gw", "gua", "gwe"],           # 1st person singular informal
+    ["lu",  "lo"],                           # 2nd person singular informal
+    # Negation variants
+    ["enggak", "nggak", "gak", "ga", "ngga", "nggk"],
+    # Already / completion
+    ["udah", "udh", "uda"],
+    # Conditional
+    ["kalau", "kalo", "klo"],
+    # Intensifier
+    ["banget", "bgt", "bngt"],
+    # Question "how"
+    ["gimana", "gmn", "gmna"],
+    # "indeed" / emphasis
+    ["emang", "emg"],
+    # "like" (similative)
+    ["kayak", "kyk"],
+    # Demonstrative particles
+    ["tuh", "tu"],
+    ["nih", "ni"],
+    # Softening particles
+    ["aja", "aj"],
+    ["deh", "de"],
+    ["dong", "donk", "dng"],
+    ["sih", "si"],
+    # "correct" / "true"
+    ["bener", "bner"],
+    # "want"
+    ["mau", "mo", "mw"],
+    # "which" / "what"
+    ["yang", "yg"],
+    # "with"
+    ["sama", "sm"],
+    # "already" formal→informal
+    ["sudah", "sdh"],
+    # "so" / "then"
+    ["jadi", "jd"],
+    # "if" / conditional
+    ["kalau", "kl"],
+    # "can" / "could"
+    ["bisa", "bs"],
+    # "that" (demonstrative)
+    ["itu", "tu"],  # note: "tu" maps here AND to "tuh" — context-free, we pick the first match
+]
+
+# Build lookup: variant → canonical
+_COLLOQUIAL_MAP = {}
+for group in COLLOQUIAL_GROUPS:
+    canonical = group[0]
+    for variant in group[1:]:
+        if variant not in _COLLOQUIAL_MAP:
+            _COLLOQUIAL_MAP[variant] = canonical
+
+
+def normalize_colloquial(text: str) -> str:
+    """
+    Apply Indonesian colloquial spelling normalization.
+    Input should already be lowercased and punctuation-stripped.
+    Returns text with spelling variants mapped to canonical forms.
+    """
+    words = text.split()
+    normalized = []
+    for w in words:
+        normalized.append(_COLLOQUIAL_MAP.get(w, w))
+    return " ".join(normalized)
+
+
+def get_colloquial_map() -> dict:
+    """Return a copy of the colloquial normalization map for inspection."""
+    return dict(_COLLOQUIAL_MAP)
+
+
 def normalize_text_for_eval(text: str, unmask_asterisks: bool = True) -> str:
     """
     Standard text normalization for Indonesian ASR evaluation (WER/CER):
@@ -96,8 +177,35 @@ def compute_cer(ref_text: str, hyp_text: str, normalize: bool = True) -> float:
     dist = levenshtein_distance(ref_chars, hyp_chars)
     return dist / len(ref_chars)
 
+def compute_wer_lenient(ref_text: str, hyp_text: str) -> float:
+    """WER with standard normalization + colloquial spelling normalization."""
+    ref_norm = normalize_colloquial(normalize_text_for_eval(ref_text))
+    hyp_norm = normalize_colloquial(normalize_text_for_eval(hyp_text))
+    ref_words = ref_norm.split()
+    hyp_words = hyp_norm.split()
+    if not ref_words:
+        return 0.0 if not hyp_words else 1.0
+    dist = levenshtein_distance(ref_words, hyp_words)
+    return dist / len(ref_words)
+
+
+def compute_cer_lenient(ref_text: str, hyp_text: str) -> float:
+    """CER with standard normalization + colloquial spelling normalization."""
+    ref_norm = normalize_colloquial(normalize_text_for_eval(ref_text))
+    hyp_norm = normalize_colloquial(normalize_text_for_eval(hyp_text))
+    ref_chars = list(ref_norm.replace(" ", ""))
+    hyp_chars = list(hyp_norm.replace(" ", ""))
+    if not ref_chars:
+        return 0.0 if not hyp_chars else 1.0
+    dist = levenshtein_distance(ref_chars, hyp_chars)
+    return dist / len(ref_chars)
+
+
 if __name__ == "__main__":
     t1 = "Tidak ada ya? Tidak ada lah."
     t2 = "tidak ada ya tidak ada lah"
     print("WER:", compute_wer(t1, t2))
     print("CER:", compute_cer(t1, t2))
+    print("\nColloquial map:")
+    for variant, canonical in sorted(get_colloquial_map().items()):
+        print(f"  {variant} -> {canonical}")

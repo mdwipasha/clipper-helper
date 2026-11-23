@@ -88,6 +88,9 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 | FR-CAP-3 | M | Extending the trim beyond transcribed coverage marks captions stale and offers a re-run (MVP: re-transcribe the new clip; delta transcription is post-MVP). |
 | FR-CAP-4 | M | User text/timing edits survive re-trims (edits are keyed by stable word ID and re-applied over derived words). |
 
+> [!IMPORTANT]
+> **Caption-Editing UX is Critical:** Because automated speech recognition (ASR) accuracy on informal Indonesian gaming slang, code-switching, and loud vocal transients is unproven (pending S3c human ground truth), users will frequently need to adjust transcribed words. The inline subtitle editor UX (keyboard navigation, click-to-edit, timing drag) must be frictionless and instant.
+
 ### Templates and checklist
 | ID | Pri | Requirement |
 |----|-----|-------------|
@@ -178,7 +181,7 @@ Activation: % of new users who export a clip in their first session. Time from l
 
 ## 10. Post-MVP
 
-macOS (Tauri build or web with limits), live capture ("clip last 60 s"), AI highlight suggestions, face-aware reframe, credit packs, campaign submission tracker, local-file source (if not in MVP), template marketplace, admin dashboard (see ADMIN_DASHBOARD.md).
+macOS (Tauri build or web with limits), live capture ("clip last 60 s"), AI highlight suggestions, face-aware reframe, credit packs, campaign submission tracker, local-file source (if not in MVP), template marketplace, profanity handling in captions (template option to mask explicit words with a configurable blocklist, common in Indonesian gaming streams), admin dashboard (see ADMIN_DASHBOARD.md).
 
 ## 11. Open questions (with working defaults)
 
@@ -190,3 +193,4 @@ macOS (Tauri build or web with limits), live capture ("clip last 60 s"), AI high
 | Q4 | Is local-file import (FR-SRC-5) in MVP? | Yes if M1–M2 finish on time; otherwise first post-MVP item. |
 | Q5 | Legal entity, ToS, privacy policy, refund policy texts | Required before payment go-live (Midtrans production). |
 | Q6 | Login CAPTCHA approach (Turnstile in webview vs hosted page) | Decide in spike S7. |
+| Q7 | Profanity masking in captions: should the app offer an automated masking filter via template option or dictionary? | Post-MVP idea; in MVP, clippers manually edit offensive terms in the caption editor. |
