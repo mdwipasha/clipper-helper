@@ -11,6 +11,34 @@ Built for clippers who take part in clipping campaigns (Motionklip-style program
 Pre-implementation. This folder is the source of truth for product, architecture, data and security.
 When code and docs disagree, fix one of them **in the same PR**.
 
+## Getting started (Windows 10/11 x64)
+
+### Prerequisites
+- **Node.js**: v20+ LTS or v22+
+- **pnpm**: v9+ or v11+ (`npm install -g pnpm`)
+- **Rust**: stable MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`) with components `rustfmt`, `clippy` and Visual Studio C++ Build Tools
+- **WebView2**: pre-installed on Windows 10 (1803+) and Windows 11
+
+### Setup & Development
+```powershell
+# 1. Install workspace dependencies
+pnpm install
+
+# 2. Run the desktop app in development mode (launches Vite + Tauri 2 window)
+pnpm tauri dev
+
+# 3. Run all workspace TypeScript unit tests & security guard
+pnpm test
+
+# 4. Run Rust unit tests and clippy
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# 5. Run typecheck and linting
+pnpm run typecheck
+pnpm run lint
+```
+
 ## Read order
 
 | # | File | What it answers |
