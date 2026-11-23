@@ -1,5 +1,6 @@
 import { t } from '@clipper-helper/i18n';
 import { useEffect, useState } from 'react';
+import { DevPanel } from './components/DevPanel';
 import { AppInfo, commands } from './ipc/bindings';
 
 export function App() {
@@ -57,8 +58,11 @@ export function App() {
           )}
         </div>
 
+        {/* Debug Dev Panel only in development mode */}
+        {import.meta.env.DEV && <DevPanel />}
+
         <div className="mt-6 text-center text-xs text-slate-500">
-          M1.0 Desktop Shell · Milestone 1
+          M1.1a Foundations · Milestone 1
         </div>
       </div>
     </main>

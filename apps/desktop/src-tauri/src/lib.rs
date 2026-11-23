@@ -1,4 +1,6 @@
 pub mod commands;
+#[cfg(debug_assertions)]
+pub mod dev_commands;
 pub mod eta;
 pub mod hardware;
 pub mod jobs;
@@ -25,6 +27,16 @@ pub fn init_logging() {
         .try_init();
 }
 
+#[cfg(debug_assertions)]
+pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
+        commands::get_app_info,
+        dev_commands::dev_get_system_info,
+        dev_commands::dev_run_fake_sidecar,
+    ])
+}
+
+#[cfg(not(debug_assertions))]
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![commands::get_app_info])

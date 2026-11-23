@@ -39,6 +39,12 @@ pnpm run typecheck
 pnpm run lint
 ```
 
+### Debug Dev Panel (Development Only)
+When running in development mode (`pnpm tauri dev`), the app renders an internal debug panel showcasing:
+- **SQLite Store & Workspace**: Displays current schema version (from `PRAGMA user_version`) and canonical workspace root.
+- **Sidecar Supervisor**: Interactive runner for `fake-sidecar` across test modes (`progress`, `sleep`, `exit-code`, `invalid-utf8`, `grandchild`, `flood`) showing live stdout, execution time, and Windows Job Object process tree termination.
+- **Security Invariant**: Dev commands and UI components are strictly gated behind `#[cfg(debug_assertions)]` and `import.meta.env.DEV`, excluded from production release builds, and enforced by `tools/security-guard.test.ts`.
+
 ## Read order
 
 | # | File | What it answers |

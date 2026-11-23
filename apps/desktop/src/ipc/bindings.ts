@@ -9,6 +9,28 @@ export const commands = {
   async getAppInfo(): Promise<AppInfo> {
     return await TAURI_INVOKE('get_app_info');
   },
+  /**
+   * Returns internal system information for the dev panel.
+   */
+  async devGetSystemInfo(): Promise<Result<DevSystemInfo, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_get_system_info') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Runs the fake-sidecar with the requested mode and returns stdout lines.
+   */
+  async devRunFakeSidecar(mode: string): Promise<Result<DevSidecarRunResult, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_run_fake_sidecar', { mode }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -21,10 +43,22 @@ export const commands = {
  * Application metadata returned to the frontend.
  */
 export type AppInfo = { name: string; version: string; platform: string };
+export type DevSidecarRunResult = {
+  exit_code: number;
+  lines: string[];
+  stderr_tail: string;
+  elapsed_ms: number;
+};
+export type DevSystemInfo = {
+  schema_version: number;
+  workspace_root: string;
+  platform: string;
+  arch: string;
+};
 
 /** tauri-specta globals **/
 
-import { invoke as TAURI_INVOKE, Channel as TAURI_CHANNEL } from '@tauri-apps/api/core';
+import { invoke as TAURI_INVOKE } from '@tauri-apps/api/core';
 import * as TAURI_API_EVENT from '@tauri-apps/api/event';
 import { type WebviewWindow as __WebviewWindow__ } from '@tauri-apps/api/webviewWindow';
 
@@ -38,7 +72,7 @@ type __EventObj__<T> = {
 
 export type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
-function __makeEvents__<T extends Record<string, any>>(mappings: Record<keyof T, string>) {
+export function __makeEvents__<T extends Record<string, any>>(mappings: Record<keyof T, string>) {
   return new Proxy(
     {} as unknown as {
       [K in keyof T]: __EventObj__<T[K]> & {

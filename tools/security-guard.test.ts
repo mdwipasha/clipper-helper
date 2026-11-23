@@ -67,7 +67,7 @@ describe('Security Baseline Guard', () => {
     expect(Array.isArray(assetProtocol.scope)).toBe(true);
 
     for (const entry of assetProtocol.scope) {
-      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[\/\\]ClipperHelper[\/\\]/);
+      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper[/\\]/);
       expect(entry).not.toContain('..');
     }
   });
@@ -88,5 +88,28 @@ describe('Security Baseline Guard', () => {
       // Disallow dev commands in production default capabilities
       expect(permName).not.toMatch(/dev_/);
     }
+  });
+
+  it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {
+    // Check lib.rs has dev_commands gated with #[cfg(debug_assertions)]
+    const libRsPath = path.resolve(__dirname, '../apps/desktop/src-tauri/src/lib.rs');
+    expect(fs.existsSync(libRsPath)).toBe(true);
+    const libContent = fs.readFileSync(libRsPath, 'utf8');
+
+    // dev_commands module must be cfg(debug_assertions)
+    expect(libContent).toMatch(/#\[cfg\(debug_assertions\)\]\s+pub mod dev_commands;/);
+
+    // dev commands must only be registered in debug builder
+    expect(libContent).toMatch(
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info\s*\]\)/
+    );
+    expect(libContent).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?dev_/);
+
+    // Check App.tsx gates DevPanel with import.meta.env.DEV
+    const appTsxPath = path.resolve(__dirname, '../apps/desktop/src/App.tsx');
+    expect(fs.existsSync(appTsxPath)).toBe(true);
+    const appContent = fs.readFileSync(appTsxPath, 'utf8');
+    expect(appContent).toContain('import.meta.env.DEV');
+    expect(appContent).toMatch(/import\.meta\.env\.DEV\s*&&\s*<DevPanel\s*\/>/);
   });
 });
