@@ -1,0 +1,25 @@
+{
+  "name": "clipper-helper-root",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ClipperHelper monorepo",
+  "packageManager": "pnpm@11.16.0",
+  "scripts": {
+    "dev": "pnpm --filter @clipper-helper/desktop dev",
+    "tauri": "pnpm --filter @clipper-helper/desktop tauri",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "eslint .",
+    "format": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
+    "format:fix": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "9.18.0",
+    "eslint": "9.18.0",
+    "globals": "15.14.0",
+    "prettier": "3.4.2",
+    "typescript": "5.7.3",
+    "typescript-eslint": "8.20.0"
+  }
+}
