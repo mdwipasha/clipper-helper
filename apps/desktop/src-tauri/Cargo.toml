@@ -1,0 +1,24 @@
+[package]
+name = "clipper-helper-desktop"
+version = "0.1.0"
+description = "ClipperHelper Desktop Core"
+edition = "2021"
+
+[lib]
+name = "clipper_helper_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.6", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.7", features = ["protocol-asset"] }
+tauri-plugin-opener = "=2.7.3"
+specta = "=2.0.0-rc.20"
+specta-typescript = "=0.0.7"
+tauri-specta = { version = "=2.0.0-rc.20", features = ["javascript", "typescript"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+thiserror = "=2.0.11"
+tracing = "=0.1.41"
+tracing-subscriber = "=0.3.19"
