@@ -67,7 +67,7 @@ describe('Security Baseline Guard', () => {
     expect(Array.isArray(assetProtocol.scope)).toBe(true);
 
     for (const entry of assetProtocol.scope) {
-      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper[/\\]/);
+      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper(-Dev)?[/\\]/);
       expect(entry).not.toContain('..');
     }
   });

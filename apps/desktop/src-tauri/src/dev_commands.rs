@@ -116,6 +116,8 @@ pub fn dev_reset_workspace(app: tauri::AppHandle) -> Result<(), String> {
         .try_state::<WorkspaceState>()
         .ok_or_else(|| "Workspace state not available".to_string())?;
 
+    crate::security::assert_can_reset_dev_workspace(&ws.root).map_err(|e| e.to_string())?;
+
     for sub in &["cache", "projects", "logs"] {
         let dir = ws.root.join(sub);
         if dir.exists() {

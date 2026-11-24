@@ -85,7 +85,7 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static USER_PROFILE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[A-Z]:[/\\]Users[/\\]([^/\\]+)").expect("valid regex"));
 
-/// Returns the default workspace root directory `%LOCALAPPDATA%\ClipperHelper\`.
+/// Returns the default workspace root directory `%LOCALAPPDATA%\ClipperHelper\` (or `ClipperHelper-Dev` in debug builds).
 /// Supports `CLIPPER_WORKSPACE_ROOT` override only in debug and test builds.
 pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
     #[cfg(any(debug_assertions, test))]
@@ -102,8 +102,27 @@ pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
         .or_else(|_| std::env::var("USERPROFILE").map(|u| format!("{}\\AppData\\Local", u)))
         .map_err(|e| SecurityError::RootResolutionFailed(format!("Environment error: {}", e)))?;
 
-    let root = PathBuf::from(local_app_data).join("ClipperHelper");
+    #[cfg(debug_assertions)]
+    let app_folder = "ClipperHelper-Dev";
+    #[cfg(not(debug_assertions))]
+    let app_folder = "ClipperHelper";
+
+    let root = PathBuf::from(local_app_data).join(app_folder);
     Ok(root)
+}
+
+/// Asserts that a workspace root is permitted to be reset by dev commands.
+///
+/// Refuses to run unless the root's final path component is exactly `ClipperHelper-Dev`.
+pub fn assert_can_reset_dev_workspace(root: &Path) -> Result<(), SecurityError> {
+    let final_component = root.file_name().and_then(|n| n.to_str());
+    if final_component != Some("ClipperHelper-Dev") {
+        return Err(SecurityError::RootResolutionFailed(format!(
+            "Reset Dev Workspace is forbidden: final path component must be exactly 'ClipperHelper-Dev', got {:?}",
+            final_component
+        )));
+    }
+    Ok(())
 }
 
 /// Ensures the workspace root and its core subdirectories (`bin`, `models`, `cache`, `projects`, `logs`)
@@ -939,5 +958,28 @@ mod tests {
         let free_bytes = get_free_disk_space(&temp_dir);
         assert!(free_bytes.is_ok());
         assert!(free_bytes.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_assert_can_reset_dev_workspace() {
+        // Valid dev workspace root
+        let valid = PathBuf::from(r"C:\Users\test\AppData\Local\ClipperHelper-Dev");
+        assert!(assert_can_reset_dev_workspace(&valid).is_ok());
+
+        // Release workspace root must be refused
+        let release = PathBuf::from(r"C:\Users\test\AppData\Local\ClipperHelper");
+        assert!(assert_can_reset_dev_workspace(&release).is_err());
+
+        // Arbitrary directory must be refused
+        let other = PathBuf::from(r"C:\Users\test\Desktop\SomeFolder");
+        assert!(assert_can_reset_dev_workspace(&other).is_err());
+
+        // Subdirectory of dev workspace root must be refused
+        let sub = PathBuf::from(r"C:\Users\test\AppData\Local\ClipperHelper-Dev\cache");
+        assert!(assert_can_reset_dev_workspace(&sub).is_err());
+
+        // Exact match required: lowercase/variation must be refused
+        let lower = PathBuf::from(r"C:\Users\test\AppData\Local\clipperhelper-dev");
+        assert!(assert_can_reset_dev_workspace(&lower).is_err());
     }
 }
