@@ -195,11 +195,7 @@ pub fn is_system_directory(path: &Path) -> bool {
         }
     }
 
-    if norm == r"c:\users" || norm == r"c:\users\" {
-        return true;
-    }
-
-    false
+    norm == r"c:\users" || norm == r"c:\users\"
 }
 
 pub fn is_onedrive_path(path: &Path) -> bool {
