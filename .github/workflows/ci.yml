@@ -68,6 +68,8 @@ jobs:
   check:
     name: Lint, Test & Build (Windows)
     runs-on: windows-latest
+    env:
+      CLIPPER_MIN_MANIFEST_SEQUENCE: '1'
 
     steps:
       - name: Checkout repository
@@ -138,6 +140,9 @@ jobs:
 
       - name: Rust Unit Tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+
+      - name: Check build-time manifest sequence floor
+        run: node tools/src/check-manifest-sequence.js
 
       - name: Build Tauri Desktop App (Release, Unsigned)
         run: pnpm --filter @clipper-helper/desktop tauri build --no-bundle

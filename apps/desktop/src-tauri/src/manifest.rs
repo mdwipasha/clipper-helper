@@ -33,10 +33,31 @@ impl ManifestError {
     }
 }
 
-/// Build-time floor for manifest sequence number.
+const fn parse_u64_const(s: &str) -> u64 {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must not be empty");
+    }
+    let mut res: u64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < b'0' || b > b'9' {
+            panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must be a positive integer");
+        }
+        res = res * 10 + (b - b'0') as u64;
+        i += 1;
+    }
+    if res < 1 {
+        panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must be >= 1");
+    }
+    res
+}
+
+/// Build-time floor for manifest sequence number (injected from CLIPPER_MIN_MANIFEST_SEQUENCE).
 /// Prevents replay and rollback attacks even if the local database is reset, recreated,
 /// or recovered from corruption (ARCHITECTURE §9, §13).
-pub const MIN_MANIFEST_SEQUENCE: u64 = 1;
+pub const MIN_MANIFEST_SEQUENCE: u64 = parse_u64_const(env!("CLIPPER_MIN_MANIFEST_SEQUENCE"));
 
 /// Embedded public key entry with kid.
 #[derive(Debug, Clone, PartialEq, Eq)]

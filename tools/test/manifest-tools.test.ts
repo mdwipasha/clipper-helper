@@ -8,6 +8,7 @@ import {
   generateDevKeyPair,
   signManifestBytes,
 } from '../src/manifest-signer.js';
+import { checkManifestSequence } from '../src/check-manifest-sequence.js';
 
 describe('Manifest Signer & Dev Server Tools', () => {
   const tmpDir = path.resolve(__dirname, '../../target/test-tools-tmp');
@@ -105,5 +106,36 @@ describe('Manifest Signer & Dev Server Tools', () => {
     );
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('https://cdn.example.com/test');
+  });
+
+  it('checkManifestSequence validates build-time floor against latest signed manifest', () => {
+    const mPath = path.join(tmpDir, 'seq-manifest.json');
+    const sPath = `${mPath}.sig`;
+    fs.writeFileSync(
+      mPath,
+      JSON.stringify({
+        schema: 1,
+        sequence: 5,
+        generated_at: new Date().toISOString(),
+        channel: 'dev',
+        components: [],
+      })
+    );
+    fs.writeFileSync(sPath, JSON.stringify({ kid: 'k1', signature: 'abcd' }));
+
+    // Unset or 0 fails
+    expect(checkManifestSequence({ minSequenceEnv: undefined, manifestPath: mPath }).ok).toBe(
+      false
+    );
+    expect(checkManifestSequence({ minSequenceEnv: '0', manifestPath: mPath }).ok).toBe(false);
+
+    // Lower than manifest sequence (4 < 5) fails
+    const lower = checkManifestSequence({ minSequenceEnv: '4', manifestPath: mPath });
+    expect(lower.ok).toBe(false);
+    expect(lower.error).toContain('lower than');
+
+    // Equal or higher succeeds
+    expect(checkManifestSequence({ minSequenceEnv: '5', manifestPath: mPath }).ok).toBe(true);
+    expect(checkManifestSequence({ minSequenceEnv: '6', manifestPath: mPath }).ok).toBe(true);
   });
 });
