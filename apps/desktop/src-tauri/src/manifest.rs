@@ -268,6 +268,39 @@ pub fn verify_manifest(
     })
 }
 
+/// Verifies manifest against the active `LocalStore`, automatically checking against and
+/// persisting the monotonic sequence number to prevent rollback attacks.
+pub fn verify_and_accept_manifest(
+    raw_manifest_bytes: &[u8],
+    raw_sig_bytes: &[u8],
+    app_version: &str,
+    store: &crate::store::LocalStore,
+    extra_keys: Option<&[ManifestPublicKey]>,
+) -> Result<ComponentManifest, ManifestError> {
+    let last_seq = store
+        .get_manifest_sequence()
+        .map_err(|e| ManifestError::MalformedManifest(e.to_string()))?;
+    let install_id = store
+        .get_or_create_install_id()
+        .map_err(|e| ManifestError::MalformedManifest(e.to_string()))?;
+
+    let verified = verify_manifest(
+        raw_manifest_bytes,
+        raw_sig_bytes,
+        app_version,
+        &install_id,
+        last_seq,
+        extra_keys,
+    )?;
+
+    // Persist new sequence
+    store
+        .set_manifest_sequence(verified.sequence)
+        .map_err(|e| ManifestError::MalformedManifest(e.to_string()))?;
+
+    Ok(verified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +422,73 @@ mod tests {
         )
         .unwrap();
         assert_eq!(res_filtered.components.len(), 0);
+    }
+
+    #[test]
+    fn test_verify_and_accept_manifest_persists_sequence() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("clipper.db");
+        let store = crate::store::LocalStore::open(&db_path).unwrap();
+
+        let signing_key = SigningKey::from_bytes(&[8u8; 32]);
+        let pub_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let extra_keys = [ManifestPublicKey {
+            kid: "dev-test-key-store",
+            public_key_hex: Box::leak(pub_hex.into_boxed_str()),
+        }];
+
+        // Sequence 10
+        let manifest_10 = br#"{"schema": 1, "sequence": 10, "generated_at": "2026-11-24T12:00:00Z", "channel": "dev", "components": []}"#;
+        use ed25519_dalek::Signer;
+        let sig_10 = signing_key.sign(manifest_10);
+        let sig_10_json = format!(
+            r#"{{"kid": "dev-test-key-store", "signature": "{}"}}"#,
+            hex::encode(sig_10.to_bytes())
+        );
+
+        let res = verify_and_accept_manifest(
+            manifest_10,
+            sig_10_json.as_bytes(),
+            "0.1.0",
+            &store,
+            Some(&extra_keys),
+        );
+        assert!(res.is_ok());
+        assert_eq!(store.get_manifest_sequence().unwrap(), 10);
+
+        // Sequence 12
+        let manifest_12 = br#"{"schema": 1, "sequence": 12, "generated_at": "2026-11-24T12:00:00Z", "channel": "dev", "components": []}"#;
+        let sig_12 = signing_key.sign(manifest_12);
+        let sig_12_json = format!(
+            r#"{{"kid": "dev-test-key-store", "signature": "{}"}}"#,
+            hex::encode(sig_12.to_bytes())
+        );
+
+        let res_12 = verify_and_accept_manifest(
+            manifest_12,
+            sig_12_json.as_bytes(),
+            "0.1.0",
+            &store,
+            Some(&extra_keys),
+        );
+        assert!(res_12.is_ok());
+        assert_eq!(store.get_manifest_sequence().unwrap(), 12);
+
+        // Rollback attempt with sequence 10: must be rejected!
+        let res_rollback = verify_and_accept_manifest(
+            manifest_10,
+            sig_10_json.as_bytes(),
+            "0.1.0",
+            &store,
+            Some(&extra_keys),
+        );
+        assert!(matches!(
+            res_rollback.unwrap_err(),
+            ManifestError::SequenceRollback {
+                received: 10,
+                last_accepted: 12
+            }
+        ));
+        assert_eq!(store.get_manifest_sequence().unwrap(), 12);
     }
 }

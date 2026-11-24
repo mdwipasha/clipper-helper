@@ -251,6 +251,36 @@ impl LocalStore {
         Ok(affected > 0)
     }
 
+    /// Read the last accepted manifest sequence number (anti-rollback).
+    pub fn get_manifest_sequence(&self) -> Result<u64, StoreError> {
+        let val = self.get_setting("manifest_last_accepted_sequence")?;
+        Ok(val.and_then(|s| s.parse().ok()).unwrap_or(0))
+    }
+
+    /// Update the last accepted manifest sequence number.
+    pub fn set_manifest_sequence(&self, sequence: u64) -> Result<(), StoreError> {
+        self.set_setting("manifest_last_accepted_sequence", &sequence.to_string())
+    }
+
+    /// Returns the persistent unique installation identifier, generating one on first run.
+    pub fn get_or_create_install_id(&self) -> Result<String, StoreError> {
+        if let Some(id) = self.get_setting("install_id")? {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id();
+        let new_id = format!("{:016x}{:08x}{:08x}", now, pid, 1u32);
+        self.set_setting("install_id", &new_id)?;
+        Ok(new_id)
+    }
+
     // ── Stage Stats DAO ─────────────────────────────────────────────────
 
     /// Record a completed stage timing for ETA calibration (PROGRESS §4.3).
