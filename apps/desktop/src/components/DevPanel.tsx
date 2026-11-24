@@ -4,18 +4,20 @@ import { commands, DevSidecarRunResult, DevSystemInfo } from '../ipc/bindings';
 export function DevPanel() {
   const [sysInfo, setSysInfo] = useState<DevSystemInfo | null>(null);
   const [sysError, setSysError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<boolean>(false);
 
-  const [mode, setMode] = useState<string>('progress');
+  const [mode, setMode] = useState<string>('normal');
   const [running, setRunning] = useState<boolean>(false);
   const [runResult, setRunResult] = useState<DevSidecarRunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadSysInfo = () => {
     commands
       .devGetSystemInfo()
       .then((res) => {
         if (res.status === 'ok') {
           setSysInfo(res.data);
+          setSysError(null);
         } else {
           setSysError(res.error);
         }
@@ -23,7 +25,38 @@ export function DevPanel() {
       .catch((err: unknown) => {
         setSysError(String(err));
       });
+  };
+
+  useEffect(() => {
+    loadSysInfo();
+    // Run initial sidecar test to show exit code 0 on initial view
+    commands
+      .devRunFakeSidecar('normal')
+      .then((res) => {
+        if (res.status === 'ok') {
+          setRunResult(res.data);
+        }
+      })
+      .catch((err: unknown) => {
+        setRunError(String(err));
+      });
   }, []);
+
+  const handleResetWorkspace = async () => {
+    setResetting(true);
+    try {
+      const res = await commands.devResetWorkspace();
+      if (res.status === 'ok') {
+        loadSysInfo();
+      } else {
+        setSysError(res.error);
+      }
+    } catch (err: unknown) {
+      setSysError(String(err));
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleRun = async () => {
     setRunning(true);
@@ -57,10 +90,10 @@ export function DevPanel() {
       </div>
 
       {/* System & Store Info */}
-      <div className="bg-slate-950/80 rounded p-3 border border-slate-800 space-y-1">
+      <div className="bg-slate-950/80 rounded p-3 border border-slate-800 space-y-2">
         <div className="text-slate-400 font-semibold mb-1">SQLite & Workspace Status</div>
         {sysInfo ? (
-          <>
+          <div className="space-y-1">
             <div className="flex justify-between">
               <span className="text-slate-500">Schema Version:</span>
               <span className="text-cyan-400 font-bold">v{sysInfo.schema_version}</span>
@@ -69,9 +102,15 @@ export function DevPanel() {
               <span className="text-slate-500">Workspace Root:</span>
               <span
                 className="text-slate-300 truncate max-w-[200px]"
-                title={sysInfo.workspace_root}
+                title={sysInfo.redacted_workspace_root}
               >
-                {sysInfo.workspace_root}
+                {sysInfo.redacted_workspace_root}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Free Disk Space:</span>
+              <span className="text-emerald-400 font-medium">
+                {sysInfo.free_disk_space_formatted}
               </span>
             </div>
             <div className="flex justify-between">
@@ -80,7 +119,16 @@ export function DevPanel() {
                 {sysInfo.platform}-{sysInfo.arch}
               </span>
             </div>
-          </>
+            <div className="pt-2 border-t border-slate-800/80 flex justify-end">
+              <button
+                onClick={handleResetWorkspace}
+                disabled={resetting}
+                className="bg-rose-900/30 hover:bg-rose-900/50 text-rose-300 border border-rose-800/40 text-[10px] px-2.5 py-1 rounded transition cursor-pointer"
+              >
+                {resetting ? 'Resetting...' : 'Reset Dev Workspace'}
+              </button>
+            </div>
+          </div>
         ) : sysError ? (
           <div className="text-red-400">Error: {sysError}</div>
         ) : (

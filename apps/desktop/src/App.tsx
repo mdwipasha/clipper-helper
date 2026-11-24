@@ -1,10 +1,11 @@
 import { t } from '@clipper-helper/i18n';
 import { useEffect, useState } from 'react';
 import { DevPanel } from './components/DevPanel';
-import { AppInfo, commands } from './ipc/bindings';
+import { AppInfo, commands, WorkspaceStatus } from './ipc/bindings';
 
 export function App() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [wsStatus, setWsStatus] = useState<WorkspaceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -14,6 +15,13 @@ export function App() {
       .catch((err: unknown) => {
         console.error('Failed to get app info:', err);
         setError(String(err));
+      });
+
+    commands
+      .getWorkspaceStatus()
+      .then((status) => setWsStatus(status))
+      .catch((err: unknown) => {
+        console.error('Failed to get workspace status:', err);
       });
   }, []);
 
@@ -31,6 +39,37 @@ export function App() {
         </div>
 
         <p className="text-sm text-slate-300 mb-6 leading-relaxed">{t('app.tagline')}</p>
+
+        {/* Actionable Error Banner if Workspace Initialization Failed */}
+        {wsStatus && !wsStatus.is_initialized && (
+          <div
+            data-testid="workspace-error-banner"
+            className="mb-4 bg-rose-950/60 border border-rose-800/80 rounded-lg p-4 font-mono text-xs space-y-2 text-rose-200"
+          >
+            <div className="font-bold text-rose-400 flex items-center justify-between">
+              <span>Gagal Menginisialisasi Ruang Kerja</span>
+              <span className="text-[10px] bg-rose-900/60 px-1.5 py-0.5 rounded border border-rose-700/60 font-semibold">
+                {wsStatus.error_code ?? 'E_APP_INIT_FAILED'}
+              </span>
+            </div>
+            <p className="text-[11px] text-rose-300/90 leading-relaxed">
+              {wsStatus.error_message ??
+                'Ruang kerja lokal (%LOCALAPPDATA%\\ClipperHelper) tidak dapat dibuat atau diakses.'}
+            </p>
+            <p className="text-[10px] text-slate-400">
+              Pastikan disk Anda memiliki ruang kosong yang cukup dan aplikasi memiliki izin tulis
+              ke %LOCALAPPDATA%.
+            </p>
+            <button
+              onClick={() => {
+                commands.getWorkspaceStatus().then(setWsStatus);
+              }}
+              className="mt-1 bg-rose-800 hover:bg-rose-700 text-white font-medium px-3 py-1 rounded text-xs transition cursor-pointer"
+            >
+              Coba Lagi
+            </button>
+          </div>
+        )}
 
         <div className="bg-slate-950/60 rounded-lg p-4 border border-slate-800 font-mono text-xs space-y-2">
           <div className="text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-800 pb-1">

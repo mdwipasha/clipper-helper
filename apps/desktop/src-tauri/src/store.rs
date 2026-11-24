@@ -196,6 +196,29 @@ impl LocalStore {
         Ok(v)
     }
 
+    /// Drops all tables, resets user_version to 0, and re-runs migrations.
+    /// Only intended for DEV workspace resets.
+    pub fn reset_database(&self) -> Result<(), StoreError> {
+        {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP TABLE IF EXISTS account_snapshot;
+                 DROP TABLE IF EXISTS outbox;
+                 DROP TABLE IF EXISTS settings;
+                 DROP TABLE IF EXISTS templates_local;
+                 DROP TABLE IF EXISTS stage_stats;
+                 DROP TABLE IF EXISTS artifacts;
+                 DROP TABLE IF EXISTS jobs;
+                 DROP TABLE IF EXISTS projects;
+                 PRAGMA user_version = 0;
+                 PRAGMA foreign_keys = ON;",
+            )?;
+        }
+        self.migrate()?;
+        Ok(())
+    }
+
     // ── Settings DAO ────────────────────────────────────────────────────
 
     /// Read a setting value by key. Returns `None` if the key does not exist.

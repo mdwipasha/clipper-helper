@@ -13,11 +13,28 @@ async getAppInfo() : Promise<AppInfo> {
     return await TAURI_INVOKE("get_app_info");
 },
 /**
+ * Returns the workspace initialization status.
+ */
+async getWorkspaceStatus() : Promise<WorkspaceStatus> {
+    return await TAURI_INVOKE("get_workspace_status");
+},
+/**
  * Returns internal system information for the dev panel.
  */
 async devGetSystemInfo() : Promise<Result<DevSystemInfo, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("dev_get_system_info") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Debug-only: resets the dev workspace, clearing files and re-running migrations.
+ */
+async devResetWorkspace() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("dev_reset_workspace") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -51,7 +68,11 @@ async devRunFakeSidecar(mode: string) : Promise<Result<DevSidecarRunResult, stri
  */
 export type AppInfo = { name: string; version: string; platform: string }
 export type DevSidecarRunResult = { exit_code: number; lines: string[]; stderr_tail: string; elapsed_ms: number }
-export type DevSystemInfo = { schema_version: number; workspace_root: string; platform: string; arch: string }
+export type DevSystemInfo = { schema_version: number; workspace_root: string; redacted_workspace_root: string; free_disk_space_formatted: string; free_disk_space_bytes: number; platform: string; arch: string }
+/**
+ * Workspace initialization status returned to the frontend.
+ */
+export type WorkspaceStatus = { is_initialized: boolean; root: string | null; error_code: string | null; error_message: string | null }
 
 /** tauri-specta globals **/
 

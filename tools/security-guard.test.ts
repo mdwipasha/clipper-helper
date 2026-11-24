@@ -101,7 +101,7 @@ describe('Security Baseline Guard', () => {
 
     // dev commands must only be registered in debug builder
     expect(libContent).toMatch(
-      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info\s*\]\)/
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status\s*,?\s*\]\)/
     );
     expect(libContent).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?dev_/);
 
@@ -111,5 +111,19 @@ describe('Security Baseline Guard', () => {
     const appContent = fs.readFileSync(appTsxPath, 'utf8');
     expect(appContent).toContain('import.meta.env.DEV');
     expect(appContent).toMatch(/import\.meta\.env\.DEV\s*&&\s*<DevPanel\s*\/>/);
+  });
+
+  it('asserts dev commands are absent from release binary if built', () => {
+    const releaseExePath = path.resolve(
+      __dirname,
+      '../apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe'
+    );
+    if (fs.existsSync(releaseExePath)) {
+      const buffer = fs.readFileSync(releaseExePath);
+      const str = buffer.toString('latin1');
+      expect(str.includes('dev_run_fake_sidecar')).toBe(false);
+      expect(str.includes('dev_get_system_info')).toBe(false);
+      expect(str.includes('dev_reset_workspace')).toBe(false);
+    }
   });
 });

@@ -13,7 +13,7 @@ use tracing::field::Visit;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Debug, PartialEq, Eq, Clone)]
 pub enum SecurityError {
     #[error("Invalid path format: {0}")]
     InvalidFormat(String),
@@ -33,8 +33,28 @@ pub enum SecurityError {
     PathTooLong(String),
     #[error("Path escapes workspace root: {0}")]
     BoundaryEscape(String),
+    #[error("Workspace root directory is missing or uninitialized: {0}")]
+    WorkspaceRootMissing(String),
+    #[error("Workspace permission denied: {0}")]
+    WorkspacePermissionDenied(String),
+    #[error("Disk full when creating workspace: {0}")]
+    WorkspaceDiskFull(String),
+    #[error("Component is not allowlisted: {0}")]
+    ComponentNotAllowlisted(String),
     #[error("Failed to resolve workspace root: {0}")]
     RootResolutionFailed(String),
+}
+
+impl SecurityError {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            SecurityError::WorkspaceDiskFull(_) => "E_DISK_FULL",
+            SecurityError::WorkspacePermissionDenied(_) => "E_APP_INIT_FAILED",
+            SecurityError::WorkspaceRootMissing(_) => "E_APP_INIT_FAILED",
+            SecurityError::ComponentNotAllowlisted(_) => "E_COMPONENT_MISSING",
+            _ => "E_APP_INIT_FAILED",
+        }
+    }
 }
 
 static WORKSPACE_PATH_REGEX: LazyLock<Regex> =
@@ -66,13 +86,123 @@ static USER_PROFILE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[A-Z]:[/\\]Users[/\\]([^/\\]+)").expect("valid regex"));
 
 /// Returns the default workspace root directory `%LOCALAPPDATA%\ClipperHelper\`.
+/// Supports `CLIPPER_WORKSPACE_ROOT` override only in debug and test builds.
 pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
+    #[cfg(any(debug_assertions, test))]
+    {
+        if let Ok(override_path) = std::env::var("CLIPPER_WORKSPACE_ROOT") {
+            let trimmed = override_path.trim();
+            if !trimmed.is_empty() {
+                return Ok(PathBuf::from(trimmed));
+            }
+        }
+    }
+
     let local_app_data = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("USERPROFILE").map(|u| format!("{}\\AppData\\Local", u)))
         .map_err(|e| SecurityError::RootResolutionFailed(format!("Environment error: {}", e)))?;
 
     let root = PathBuf::from(local_app_data).join("ClipperHelper");
     Ok(root)
+}
+
+/// Ensures the workspace root and its core subdirectories (`bin`, `models`, `cache`, `projects`, `logs`)
+/// exist and are safe from boundary escapes.
+pub fn ensure_workspace() -> Result<PathBuf, SecurityError> {
+    let root = get_workspace_root()?;
+    ensure_workspace_with_root(&root)
+}
+
+/// Ensures the specified workspace root and its core subdirectories exist.
+///
+/// Verifies the root is a real directory (not a regular file or junction escaping outside).
+/// Maps OS errors to typed `SecurityError` variants.
+pub fn ensure_workspace_with_root(root: &Path) -> Result<PathBuf, SecurityError> {
+    if root.exists() && root.is_file() {
+        return Err(SecurityError::RootResolutionFailed(format!(
+            "Workspace root is a file, not a directory: {}",
+            root.display()
+        )));
+    }
+
+    let subdirs = ["bin", "models", "cache", "projects", "logs"];
+
+    // Ensure root and subdirectories exist
+    for subdir in &subdirs {
+        let dir = root.join(subdir);
+        std::fs::create_dir_all(&dir).map_err(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied => SecurityError::WorkspacePermissionDenied(
+                format!("Permission denied creating '{}': {}", dir.display(), e),
+            ),
+            _ => {
+                if e.raw_os_error() == Some(112) {
+                    SecurityError::WorkspaceDiskFull(format!(
+                        "Disk full creating '{}': {}",
+                        dir.display(),
+                        e
+                    ))
+                } else {
+                    SecurityError::RootResolutionFailed(format!(
+                        "Failed to create directory '{}': {}",
+                        dir.display(),
+                        e
+                    ))
+                }
+            }
+        })?;
+    }
+
+    let canonical_root = dunce::canonicalize(root).map_err(|e| {
+        SecurityError::RootResolutionFailed(format!("Canonicalize root failed: {}", e))
+    })?;
+
+    let norm_root = canonical_root.to_string_lossy().to_lowercase();
+
+    // Verify root is not a junction pointing outside its parent (if parent exists)
+    if let Some(parent) = root.parent() {
+        if parent.exists() {
+            if let Ok(meta) = root.symlink_metadata() {
+                if meta.file_type().is_symlink() {
+                    let canonical_parent = dunce::canonicalize(parent).map_err(|e| {
+                        SecurityError::RootResolutionFailed(format!(
+                            "Canonicalize parent failed: {}",
+                            e
+                        ))
+                    })?;
+                    let norm_parent = canonical_parent.to_string_lossy().to_lowercase();
+                    if !norm_root.starts_with(&norm_parent) {
+                        return Err(SecurityError::BoundaryEscape(format!(
+                            "Workspace root junction '{}' escapes parent directory '{}'",
+                            canonical_root.display(),
+                            canonical_parent.display()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Verify subdirectories do not escape canonical_root (in case any was a junction)
+    for subdir in &subdirs {
+        let dir = root.join(subdir);
+        let canonical_subdir = dunce::canonicalize(&dir).map_err(|e| {
+            SecurityError::BoundaryEscape(format!(
+                "Canonicalize subdir '{}' failed: {}",
+                dir.display(),
+                e
+            ))
+        })?;
+        let norm_subdir = canonical_subdir.to_string_lossy().to_lowercase();
+        if !norm_subdir.starts_with(&norm_root) {
+            return Err(SecurityError::BoundaryEscape(format!(
+                "Workspace subdirectory '{}' escapes workspace root '{}'",
+                canonical_subdir.display(),
+                canonical_root.display()
+            )));
+        }
+    }
+
+    Ok(canonical_root)
 }
 
 /// Resolves a stored relative POSIX path against the default workspace root.
@@ -145,7 +275,14 @@ pub fn resolve_workspace_path_with_root(
         return Err(SecurityError::InvalidFormat(rel_path.to_string()));
     }
 
-    // 6. Combine with root
+    // 6. Verify workspace root exists before filesystem operations
+    if !root.exists() {
+        return Err(SecurityError::WorkspaceRootMissing(
+            root.display().to_string(),
+        ));
+    }
+
+    // 7. Combine with root
     let target = root.join(Path::new(&rel_path.replace('/', "\\")));
 
     // 7. Verify components don't escape root
@@ -203,6 +340,165 @@ pub fn resolve_workspace_path_with_root(
     }
 
     Ok(target)
+}
+
+/// Category of trusted workspace components (sidecar binaries or speech models).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentKind {
+    Bin,
+    Models,
+}
+
+impl ComponentKind {
+    pub fn subdir(&self) -> &'static str {
+        match self {
+            ComponentKind::Bin => "bin",
+            ComponentKind::Models => "models",
+        }
+    }
+
+    pub fn is_allowed(&self, filename: &str) -> bool {
+        match self {
+            ComponentKind::Bin => matches!(
+                filename,
+                "yt-dlp.exe"
+                    | "ffmpeg.exe"
+                    | "ffprobe.exe"
+                    | "qjs.exe"
+                    | "whisper.exe"
+                    | "fake-sidecar.exe"
+            ),
+            ComponentKind::Models => matches!(
+                filename,
+                "ggml-tiny.bin"
+                    | "ggml-base.bin"
+                    | "ggml-small.bin"
+                    | "ggml-small-q5_1.bin"
+                    | "ggml-medium.bin"
+                    | "ggml-large-v3.bin"
+            ),
+        }
+    }
+}
+
+/// Resolves a component executable or model file against the default workspace root.
+pub fn resolve_component_path(kind: ComponentKind, name: &str) -> Result<PathBuf, SecurityError> {
+    let root = get_workspace_root()?;
+    resolve_component_path_with_root(&root, kind, name)
+}
+
+/// Resolves a component file against an explicit workspace root, enforcing allowlist and containment.
+pub fn resolve_component_path_with_root(
+    root: &Path,
+    kind: ComponentKind,
+    name: &str,
+) -> Result<PathBuf, SecurityError> {
+    if !kind.is_allowed(name) {
+        return Err(SecurityError::ComponentNotAllowlisted(name.to_string()));
+    }
+
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains(':') {
+        return Err(SecurityError::InvalidFormat(name.to_string()));
+    }
+
+    if SHORT_NAME_REGEX.is_match(name) {
+        return Err(SecurityError::ShortNameForbidden(name.to_string()));
+    }
+
+    if RESERVED_DEVICE_REGEX.is_match(name) {
+        return Err(SecurityError::ReservedDeviceNameForbidden(name.to_string()));
+    }
+
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err(SecurityError::TrailingDotOrSpaceForbidden(name.to_string()));
+    }
+
+    if !root.exists() {
+        return Err(SecurityError::WorkspaceRootMissing(
+            root.display().to_string(),
+        ));
+    }
+
+    let comp_dir = root.join(kind.subdir());
+    let target = comp_dir.join(name);
+
+    let canonical_root = dunce::canonicalize(root).map_err(|e| {
+        if !root.exists() {
+            SecurityError::WorkspaceRootMissing(root.display().to_string())
+        } else {
+            SecurityError::RootResolutionFailed(format!("Canonicalize root failed: {}", e))
+        }
+    })?;
+
+    let check_path = if target.exists() {
+        dunce::canonicalize(&target).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize target failed: {}", e))
+        })?
+    } else if comp_dir.exists() {
+        dunce::canonicalize(&comp_dir).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize component dir failed: {}", e))
+        })?
+    } else {
+        canonical_root.clone()
+    };
+
+    let norm_check = check_path.to_string_lossy().to_lowercase();
+    let norm_root = canonical_root.to_string_lossy().to_lowercase();
+    if !norm_check.starts_with(&norm_root) {
+        return Err(SecurityError::BoundaryEscape(format!(
+            "Component path '{}' escapes root '{}'",
+            check_path.display(),
+            canonical_root.display()
+        )));
+    }
+
+    Ok(target)
+}
+
+/// Returns the free disk space available in bytes at the specified path.
+#[cfg(windows)]
+pub fn get_free_disk_space(path: &Path) -> Result<u64, SecurityError> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut current = path;
+    while !current.exists() {
+        if let Some(parent) = current.parent() {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+
+    let mut wide: Vec<u16> = current.as_os_str().encode_wide().collect();
+    wide.push(0);
+
+    let mut free_bytes_available: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut total_free_bytes: u64 = 0;
+
+    let success = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes_available,
+            &mut total_bytes,
+            &mut total_free_bytes,
+        )
+    };
+
+    if success == 0 {
+        return Err(SecurityError::RootResolutionFailed(format!(
+            "GetDiskFreeSpaceExW failed for '{}': os error {}",
+            current.display(),
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    Ok(free_bytes_available)
+}
+
+#[cfg(not(windows))]
+pub fn get_free_disk_space(_path: &Path) -> Result<u64, SecurityError> {
+    Ok(100 * 1024 * 1024 * 1024) // 100 GB mock for non-Windows
 }
 
 /// Redacts sensitive tokens, query strings, email addresses, and Windows usernames.
@@ -477,5 +773,171 @@ mod tests {
         let redacted_path = redact_sensitive_text(win_path);
         assert!(!redacted_path.contains("MyUsername"));
         assert!(redacted_path.contains("%USERPROFILE%"));
+    }
+
+    #[test]
+    fn test_ensure_workspace_creates_subdirs_and_canonicalizes() {
+        let test_base = std::env::temp_dir().join(format!("test_ws_init_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&test_base);
+
+        assert!(!test_base.exists());
+        let res = ensure_workspace_with_root(&test_base);
+        assert!(res.is_ok(), "ensure_workspace_with_root failed: {:?}", res);
+        let canonical = res.unwrap();
+        assert!(canonical.exists());
+
+        // Verify subdirectories exist
+        for sub in &["bin", "models", "cache", "projects", "logs"] {
+            let p = canonical.join(sub);
+            assert!(p.is_dir(), "Expected subdir {:?} to exist as dir", p);
+        }
+
+        let _ = fs::remove_dir_all(&test_base);
+    }
+
+    #[test]
+    fn test_resolve_workspace_path_missing_root_returns_typed_error() {
+        let non_existent_root =
+            std::env::temp_dir().join(format!("test_ws_non_existent_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&non_existent_root);
+
+        let res = resolve_workspace_path_with_root(&non_existent_root, "cache/probe.tmp");
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            SecurityError::WorkspaceRootMissing(p) => {
+                assert!(p.contains("test_ws_non_existent_"));
+            }
+            other => panic!("Expected WorkspaceRootMissing, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_component_path_allowlist_and_containment() {
+        let test_base =
+            std::env::temp_dir().join(format!("test_ws_component_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&test_base);
+        ensure_workspace_with_root(&test_base).unwrap();
+
+        // Allowlisted binaries
+        assert!(
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "yt-dlp.exe").is_ok()
+        );
+        assert!(
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "ffmpeg.exe").is_ok()
+        );
+        assert!(
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "ffprobe.exe").is_ok()
+        );
+        assert!(
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "qjs.exe").is_ok()
+        );
+        assert!(
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "whisper.exe").is_ok()
+        );
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            ComponentKind::Bin,
+            "fake-sidecar.exe"
+        )
+        .is_ok());
+
+        // Disallowed binary
+        let disallowed =
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "cmd.exe");
+        assert!(matches!(
+            disallowed.unwrap_err(),
+            SecurityError::ComponentNotAllowlisted(_)
+        ));
+
+        // Allowlisted models
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            ComponentKind::Models,
+            "ggml-tiny.bin"
+        )
+        .is_ok());
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            ComponentKind::Models,
+            "ggml-base.bin"
+        )
+        .is_ok());
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            ComponentKind::Models,
+            "ggml-small.bin"
+        )
+        .is_ok());
+
+        // Traversal attempt in component name
+        let trav =
+            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "../bin/yt-dlp.exe");
+        assert!(trav.is_err());
+
+        let _ = fs::remove_dir_all(&test_base);
+    }
+
+    #[test]
+    fn test_ensure_workspace_denied_location() {
+        // Attempting to create workspace where root is an existing regular file
+        let temp_file =
+            std::env::temp_dir().join(format!("test_ws_file_{}.tmp", std::process::id()));
+        fs::write(&temp_file, "not a directory").unwrap();
+
+        let res = ensure_workspace_with_root(&temp_file);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            SecurityError::RootResolutionFailed(msg) => {
+                assert!(msg.contains("is a file, not a directory"));
+            }
+            other => panic!("Expected RootResolutionFailed, got {:?}", other),
+        }
+
+        let _ = fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_ensure_workspace_junction_escape_rejected() {
+        let test_base =
+            std::env::temp_dir().join(format!("test_ws_junction_{}", std::process::id()));
+        let ws_root = test_base.join("workspace");
+        let outside = test_base.join("outside");
+
+        let _ = fs::remove_dir_all(&test_base);
+        fs::create_dir_all(&ws_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        // Create a directory junction for `projects` pointing to `outside`
+        #[cfg(windows)]
+        {
+            let link = ws_root.join("projects");
+            let status = std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    "mklink",
+                    "/J",
+                    &link.to_string_lossy(),
+                    &outside.to_string_lossy(),
+                ])
+                .output();
+
+            if let Ok(out) = status {
+                if out.status.success() {
+                    let res = ensure_workspace_with_root(&ws_root);
+                    assert!(res.is_err(), "Expected junction escape to be rejected");
+                    assert!(matches!(res.unwrap_err(), SecurityError::BoundaryEscape(_)));
+                }
+            }
+        }
+
+        let _ = fs::remove_dir_all(&test_base);
+    }
+
+    #[test]
+    fn test_free_disk_space() {
+        let temp_dir = std::env::temp_dir();
+        let free_bytes = get_free_disk_space(&temp_dir);
+        assert!(free_bytes.is_ok());
+        assert!(free_bytes.unwrap() > 0);
     }
 }

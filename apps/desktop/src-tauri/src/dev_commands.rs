@@ -9,14 +9,20 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use tauri::Manager;
 
+use crate::commands::WorkspaceStatus;
 use crate::sidecars::{SidecarSpec, SidecarSupervisor};
 use crate::store::LocalStore;
+use crate::WorkspaceState;
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct DevSystemInfo {
     pub schema_version: u32,
     pub workspace_root: String,
+    pub redacted_workspace_root: String,
+    pub free_disk_space_formatted: String,
+    pub free_disk_space_bytes: f64,
     pub platform: String,
     pub arch: String,
 }
@@ -62,24 +68,69 @@ fn find_fake_sidecar_binary() -> Result<PathBuf, String> {
 /// Returns internal system information for the dev panel.
 #[tauri::command]
 #[specta::specta]
-pub fn dev_get_system_info() -> Result<DevSystemInfo, String> {
-    let workspace_root = crate::security::resolve_workspace_path("cache/probe.tmp")
-        .map_err(|e| e.to_string())?
-        .parent()
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new(r"C:\"))
-        .to_path_buf();
+pub fn dev_get_system_info(app: tauri::AppHandle) -> Result<DevSystemInfo, String> {
+    let ws_status = app
+        .try_state::<WorkspaceStatus>()
+        .ok_or_else(|| "Workspace status not available".to_string())?;
 
-    let db_path = workspace_root.join("dev_clipper.db");
-    let store = LocalStore::open(&db_path).map_err(|e| e.to_string())?;
+    if !ws_status.is_initialized {
+        return Err(format!(
+            "Workspace not initialized: [{}] {}",
+            ws_status.error_code.as_deref().unwrap_or("UNKNOWN"),
+            ws_status.error_message.as_deref().unwrap_or("")
+        ));
+    }
+
+    let ws = app
+        .try_state::<WorkspaceState>()
+        .ok_or_else(|| "Workspace state not available".to_string())?;
+    let store = app
+        .try_state::<LocalStore>()
+        .ok_or_else(|| "LocalStore not available".to_string())?;
+
     let schema_version = store.schema_version().map_err(|e| e.to_string())?;
+    let root_path = &ws.root;
+    let free_bytes = crate::security::get_free_disk_space(root_path).unwrap_or(0);
+
+    let free_gb = free_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let free_disk_space_formatted = format!("{:.1} GB free", free_gb);
+
+    let raw_root = root_path.to_string_lossy().to_string();
+    let redacted_workspace_root = crate::security::redact_sensitive_text(&raw_root);
 
     Ok(DevSystemInfo {
         schema_version,
-        workspace_root: workspace_root.to_string_lossy().to_string(),
+        workspace_root: raw_root,
+        redacted_workspace_root,
+        free_disk_space_formatted,
+        free_disk_space_bytes: free_bytes as f64,
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     })
+}
+
+/// Debug-only: resets the dev workspace, clearing files and re-running migrations.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_reset_workspace(app: tauri::AppHandle) -> Result<(), String> {
+    let ws = app
+        .try_state::<WorkspaceState>()
+        .ok_or_else(|| "Workspace state not available".to_string())?;
+
+    for sub in &["cache", "projects", "logs"] {
+        let dir = ws.root.join(sub);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    crate::security::ensure_workspace_with_root(&ws.root).map_err(|e| e.to_string())?;
+
+    if let Some(store) = app.try_state::<LocalStore>() {
+        store.reset_database().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 /// Runs the fake-sidecar with the requested mode and returns stdout lines.

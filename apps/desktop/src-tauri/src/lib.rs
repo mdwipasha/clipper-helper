@@ -13,8 +13,15 @@ pub mod store;
 pub mod updater;
 
 use security::RedactionLayer;
+use std::path::PathBuf;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+/// Managed state holding the verified canonical workspace root.
+#[derive(Clone, Debug)]
+pub struct WorkspaceState {
+    pub root: PathBuf,
+}
 
 pub fn init_logging() {
     let fmt_layer = tracing_subscriber::fmt::layer()
@@ -31,15 +38,19 @@ pub fn init_logging() {
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
         commands::get_app_info,
+        commands::get_workspace_status,
         dev_commands::dev_get_system_info,
+        dev_commands::dev_reset_workspace,
         dev_commands::dev_run_fake_sidecar,
     ])
 }
 
 #[cfg(not(debug_assertions))]
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
-    tauri_specta::Builder::<tauri::Wry>::new()
-        .commands(tauri_specta::collect_commands![commands::get_app_info])
+    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
+        commands::get_app_info,
+        commands::get_workspace_status,
+    ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,8 +62,8 @@ pub fn run() {
 
     #[cfg(debug_assertions)]
     {
-        let bindings_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../src/ipc/bindings.ts");
+        let bindings_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
         specta_builder
             .export(
                 specta_typescript::Typescript::default().header("// @ts-nocheck\n"),
@@ -65,7 +76,48 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
+            use tauri::Manager;
             specta_builder.mount_events(app);
+
+            // Startup initialization: ensure workspace directory structure and initialize SQLite store
+            let init_res: Result<(PathBuf, store::LocalStore), security::SecurityError> = (|| {
+                let root = security::ensure_workspace()?;
+                let db_path = root.join("clipper.db");
+                let store = store::LocalStore::open(&db_path).map_err(|e| {
+                    security::SecurityError::RootResolutionFailed(format!(
+                        "Failed to open store: {}",
+                        e
+                    ))
+                })?;
+                Ok((root, store))
+            })(
+            );
+
+            match init_res {
+                Ok((root, store)) => {
+                    tracing::info!("Workspace initialized at {}", root.display());
+                    app.manage(WorkspaceState { root: root.clone() });
+                    app.manage(store);
+                    app.manage(commands::WorkspaceStatus {
+                        is_initialized: true,
+                        root: Some(root.to_string_lossy().to_string()),
+                        error_code: None,
+                        error_message: None,
+                    });
+                }
+                Err(err) => {
+                    tracing::error!("Workspace initialization failed: {}", err);
+                    let err_code = err.error_code().to_string();
+                    let err_msg = err.to_string();
+                    app.manage(commands::WorkspaceStatus {
+                        is_initialized: false,
+                        root: None,
+                        error_code: Some(err_code),
+                        error_message: Some(err_msg),
+                    });
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())

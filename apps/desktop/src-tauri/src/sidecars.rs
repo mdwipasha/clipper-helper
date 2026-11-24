@@ -50,6 +50,7 @@ pub struct SidecarSpec {
     pub max_line_bytes: usize,
     pub max_total_bytes: usize,
     pub max_stderr_bytes: usize,
+    pub below_normal_priority: bool,
 }
 
 impl SidecarSpec {
@@ -69,6 +70,7 @@ impl SidecarSpec {
             max_line_bytes: Self::DEFAULT_MAX_LINE_BYTES,
             max_total_bytes: Self::DEFAULT_MAX_TOTAL_BYTES,
             max_stderr_bytes: Self::DEFAULT_MAX_STDERR_BYTES,
+            below_normal_priority: false,
         }
     }
 
@@ -283,6 +285,43 @@ impl JobObject {
     pub fn terminate(&self, _exit_code: u32) {}
 }
 
+#[cfg(windows)]
+fn resume_process_threads(pid: u32) -> Result<(), u32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(GetLastError());
+        }
+
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+
+        if Thread32First(snapshot, &mut entry) != 0 {
+            loop {
+                if entry.th32OwnerProcessID == pid {
+                    let h_thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !h_thread.is_null() {
+                        ResumeThread(h_thread);
+                        CloseHandle(h_thread);
+                    }
+                }
+                if Thread32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+
+        CloseHandle(snapshot);
+        Ok(())
+    }
+}
+
 // ── Supervisor ──────────────────────────────────────────────────────────
 
 /// Supervisor for spawning and monitoring sidecar child processes.
@@ -325,19 +364,55 @@ impl SidecarSupervisor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
+        // Sanitized environment: clear and only inherit critical system variables
+        cmd.env_clear();
+        const ALLOWED_SYSTEM_ENV: &[&str] = &[
+            "SYSTEMROOT",
+            "SYSTEMDRIVE",
+            "PATH",
+            "TEMP",
+            "TMP",
+            "LOCALAPPDATA",
+            "COMSPEC",
+            "PATHEXT",
+        ];
+        for &var in ALLOWED_SYSTEM_ENV {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(var, val);
+            }
+        }
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
 
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Threading::{
+                BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+            };
+
+            let mut flags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
+            if spec.below_normal_priority {
+                flags |= BELOW_NORMAL_PRIORITY_CLASS;
+            }
+            cmd.creation_flags(flags);
+        }
+
+        // Spawn child in suspended state (no instructions executed yet)
         let mut child = cmd
             .spawn()
             .map_err(|e| SidecarError::SpawnFailed(e.to_string()))?;
 
         #[cfg(windows)]
         {
+            // Assign to Job Object before resuming
             if let Some(raw) = child.raw_handle() {
                 job.assign_process(raw)
                     .map_err(SidecarError::JobObjectError)?;
+            }
+            // Resume suspended process threads now that it is inside the Job Object
+            if let Some(pid) = child.id() {
+                resume_process_threads(pid).map_err(SidecarError::JobObjectError)?;
             }
         }
 
@@ -725,6 +800,80 @@ mod tests {
             dead,
             "grandchild process with PID {} should be dead after JobObject was dropped",
             pid
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_abrupt_app_kill_terminates_job_tree() {
+        use std::io::BufRead;
+
+        let bin = fake_sidecar_path();
+        let mut supervisor = std::process::Command::new(&bin)
+            .args(["--mode", "supervisor-sim"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn supervisor-sim");
+
+        let out = supervisor.stdout.take().expect("take supervisor stdout");
+        let mut reader = std::io::BufReader::new(out);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("read supervisor ready line");
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            parts.first(),
+            Some(&"SUPERVISOR_READY"),
+            "line was: {}",
+            line
+        );
+
+        let child_pid: u32 = parts[1]
+            .split('=')
+            .nth(1)
+            .expect("child pid")
+            .parse()
+            .expect("parse child pid");
+        let grandchild_pid: u32 = parts[2]
+            .split('=')
+            .nth(1)
+            .expect("grandchild pid")
+            .parse()
+            .expect("parse grandchild pid");
+
+        assert!(child_pid > 0);
+        assert!(grandchild_pid > 0);
+
+        let status = supervisor.wait().expect("wait supervisor exit");
+        assert_eq!(status.code(), Some(42));
+
+        let mut child_dead = false;
+        let mut grandchild_dead = false;
+        for _ in 0..30 {
+            if !child_dead && !is_pid_alive(child_pid) {
+                child_dead = true;
+            }
+            if !grandchild_dead && !is_pid_alive(grandchild_pid) {
+                grandchild_dead = true;
+            }
+            if child_dead && grandchild_dead {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(
+            child_dead,
+            "child process with PID {} must be dead after supervisor abrupt exit",
+            child_pid
+        );
+        assert!(
+            grandchild_dead,
+            "grandchild process with PID {} must be dead after supervisor abrupt exit",
+            grandchild_pid
         );
     }
 }

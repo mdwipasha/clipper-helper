@@ -8,3 +8,11 @@ description = "Test utility sidecar for supervisor integration tests"
 [[bin]]
 name = "fake-sidecar"
 path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
