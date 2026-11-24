@@ -50,6 +50,62 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Starts or verifies the local dev server serving fixtures.
+   */
+  async devStartFixtureServer(): Promise<Result<string, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_start_fixture_server') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches and verifies the component manifest.
+   */
+  async devFetchManifest(
+    manifestUrl: string,
+    sigUrl: string
+  ): Promise<Result<DevManifestInfo, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_fetch_manifest', { manifestUrl, sigUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Downloads and verifies a component from the manifest with live progress.
+   */
+  async devDownloadComponent(
+    component: string,
+    version: string,
+    url: string,
+    sizeBytes: number,
+    sha256: string,
+    archive: string
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_download_component', {
+          component,
+          version,
+          url,
+          sizeBytes,
+          sha256,
+          archive,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -77,6 +133,36 @@ export type DevSystemInfo = {
   platform: string;
   arch: string;
 };
+export type DevManifestComponent = {
+  component: string;
+  version: string;
+  platform: string;
+  url: string;
+  size_bytes: number;
+  sha256: string;
+  archive: string;
+  is_downloaded: boolean;
+};
+
+export type DevManifestInfo = {
+  sequence: number;
+  channel: string;
+  generated_at: string;
+  signature_valid: boolean;
+  components: DevManifestComponent[];
+};
+
+export type DevDownloadProgressEvent = {
+  component: string;
+  stage: string;
+  unit: string;
+  completed_bytes: number;
+  total_bytes: number;
+  percent: number;
+  rate_bps: number;
+  eta_seconds: number | null;
+};
+
 /**
  * Workspace initialization status returned to the frontend.
  */

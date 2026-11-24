@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "sequence": 1,
+  "generated_at": "2026-11-24T09:31:45.333Z",
+  "channel": "dev",
+  "components": [
+    {
+      "component": "ggml-tiny.bin",
+      "version": "1.0.0",
+      "platform": "windows-x86_64",
+      "url": "http://127.0.0.1:8080/models/ggml-tiny.bin",
+      "size_bytes": 65536,
+      "sha256": "f8a38b49873588eea0fa55c178b2ad20a05eb7f3eccf55623323405fdec79fe9",
+      "archive": "none",
+      "files": [],
+      "min_app_version": "0.1.0",
+      "rollout_percent": 100
+    }
+  ]
+}

@@ -43,6 +43,9 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         dev_commands::dev_get_system_info,
         dev_commands::dev_reset_workspace,
         dev_commands::dev_run_fake_sidecar,
+        dev_commands::dev_start_fixture_server,
+        dev_commands::dev_fetch_manifest,
+        dev_commands::dev_download_component,
     ])
 }
 

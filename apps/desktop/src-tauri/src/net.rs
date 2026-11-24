@@ -93,11 +93,10 @@ pub fn validate_download_url(url_str: &str) -> Result<reqwest::Url, NetError> {
         .host_str()
         .ok_or_else(|| NetError::UrlInvalid("URL has no host".to_string()))?;
 
-    let is_loopback = host == "127.0.0.1" || host == "localhost";
-
     if url.scheme() != "https" {
         #[cfg(any(debug_assertions, test))]
         {
+            let is_loopback = host == "127.0.0.1" || host == "localhost";
             if is_loopback && url.scheme() == "http" {
                 // Permitted in debug/test for local dev-server
                 return Ok(url);

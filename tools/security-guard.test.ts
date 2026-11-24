@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -124,11 +125,13 @@ describe('Security Baseline Guard', () => {
       expect(str.includes('dev_run_fake_sidecar')).toBe(false);
       expect(str.includes('dev_get_system_info')).toBe(false);
       expect(str.includes('dev_reset_workspace')).toBe(false);
+      expect(str.includes('dev_start_fixture_server')).toBe(false);
+      expect(str.includes('dev_fetch_manifest')).toBe(false);
+      expect(str.includes('dev_download_component')).toBe(false);
     }
   });
 
   it('asserts no private keys or dev key files are tracked or committed in git', () => {
-    const { execSync } = require('node:child_process');
     const trackedFiles = execSync('git ls-files', { encoding: 'utf8' })
       .split('\n')
       .map((f: string) => f.trim())
