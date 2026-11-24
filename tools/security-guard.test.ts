@@ -126,4 +126,18 @@ describe('Security Baseline Guard', () => {
       expect(str.includes('dev_reset_workspace')).toBe(false);
     }
   });
+
+  it('asserts no private keys or dev key files are tracked or committed in git', () => {
+    const { execSync } = require('node:child_process');
+    const trackedFiles = execSync('git ls-files', { encoding: 'utf8' })
+      .split('\n')
+      .map((f: string) => f.trim())
+      .filter(Boolean);
+
+    for (const file of trackedFiles) {
+      expect(file).not.toMatch(/\.dev-keys\//);
+      expect(file).not.toMatch(/\.(priv|priv\.hex|pem|key)$/i);
+      expect(file).not.toMatch(/id_ed25519/i);
+    }
+  });
 });

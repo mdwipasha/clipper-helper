@@ -24,6 +24,10 @@ build/
 .env.*.local
 *.pem
 *.key
+.dev-keys/
+*.priv
+*.priv.hex
+*.priv.pem
 
 # Logs
 logs/
