@@ -7,7 +7,7 @@
 //! - Handle `\r` and `\n` streaming line delimiters for real-time progress updates.
 //! - Maintain a redacted rolling 64KB stderr ring buffer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
@@ -17,6 +17,9 @@ use tokio_util::sync::CancellationToken;
 pub enum SidecarError {
     #[error("Binary not found: {0}")]
     BinaryNotFound(PathBuf),
+
+    #[error("Binary path must be absolute: {0}")]
+    PathNotAbsolute(PathBuf),
 
     #[error("Failed to spawn process: {0}")]
     SpawnFailed(String),
@@ -46,6 +49,7 @@ pub struct SidecarSpec {
     pub binary_path: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub working_dir: Option<PathBuf>,
     pub timeout: Option<Duration>,
     pub max_line_bytes: usize,
     pub max_total_bytes: usize,
@@ -66,12 +70,18 @@ impl SidecarSpec {
             binary_path: binary_path.into(),
             args: args.into_iter().map(Into::into).collect(),
             env: Vec::new(),
+            working_dir: None,
             timeout: None,
             max_line_bytes: Self::DEFAULT_MAX_LINE_BYTES,
             max_total_bytes: Self::DEFAULT_MAX_TOTAL_BYTES,
             max_stderr_bytes: Self::DEFAULT_MAX_STDERR_BYTES,
             below_normal_priority: false,
         }
+    }
+
+    pub fn working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(dir.into());
+        self
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -88,6 +98,24 @@ impl SidecarSpec {
         self.max_total_bytes = limit;
         self
     }
+}
+
+/// Builds a `SidecarSpec` for `yt-dlp` configured with isolated workspace cache and temp directories.
+pub fn create_yt_dlp_spec(
+    binary_path: impl Into<PathBuf>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    workspace_root: &Path,
+) -> SidecarSpec {
+    let temp_dir = workspace_root.join("cache").join("temp");
+    let cache_dir = workspace_root.join("cache").join("yt-dlp");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    SidecarSpec::new(binary_path, args)
+        .working_dir(&temp_dir)
+        .env("TEMP", temp_dir.to_string_lossy().to_string())
+        .env("TMP", temp_dir.to_string_lossy().to_string())
+        .env("XDG_CACHE_HOME", cache_dir.to_string_lossy().to_string())
 }
 
 /// Result of a completed sidecar execution.
@@ -352,6 +380,10 @@ impl SidecarSupervisor {
     where
         F: FnMut(String) + Send + 'static,
     {
+        if !spec.binary_path.is_absolute() {
+            return Err(SidecarError::PathNotAbsolute(spec.binary_path.clone()));
+        }
+
         if !spec.binary_path.exists() {
             return Err(SidecarError::BinaryNotFound(spec.binary_path.clone()));
         }
@@ -364,23 +396,49 @@ impl SidecarSupervisor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        // Sanitized environment: clear and only inherit critical system variables
-        cmd.env_clear();
-        const ALLOWED_SYSTEM_ENV: &[&str] = &[
-            "SYSTEMROOT",
-            "SYSTEMDRIVE",
-            "PATH",
-            "TEMP",
-            "TMP",
-            "LOCALAPPDATA",
-            "COMSPEC",
-            "PATHEXT",
-        ];
-        for &var in ALLOWED_SYSTEM_ENV {
-            if let Ok(val) = std::env::var(var) {
-                cmd.env(var, val);
-            }
+        // Working directory: set to explicit working_dir if provided, otherwise default to workspace temp
+        if let Some(ref dir) = spec.working_dir {
+            cmd.current_dir(dir);
+        } else if let Ok(ws_root) = crate::security::get_workspace_root() {
+            let temp_dir = ws_root.join("cache").join("temp");
+            let _ = std::fs::create_dir_all(&temp_dir);
+            cmd.current_dir(temp_dir);
         }
+
+        // Sanitized environment: strip user PATH and all user environment variables.
+        // PATH contains ONLY the component directory and %SystemRoot%\System32.
+        cmd.env_clear();
+
+        let system_root = std::env::var("SystemRoot")
+            .or_else(|_| std::env::var("SYSTEMROOT"))
+            .unwrap_or_else(|_| r"C:\Windows".to_string());
+        let system32 = format!("{}\\System32", system_root);
+
+        let comp_dir = spec
+            .binary_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let sanitized_path = if comp_dir.is_empty() {
+            system32.clone()
+        } else {
+            format!("{};{}", comp_dir, system32)
+        };
+
+        cmd.env("PATH", sanitized_path);
+        cmd.env("SYSTEMROOT", &system_root);
+        if let Ok(sd) = std::env::var("SYSTEMDRIVE") {
+            cmd.env("SYSTEMDRIVE", sd);
+        } else {
+            cmd.env("SYSTEMDRIVE", "C:");
+        }
+        if let Ok(pe) = std::env::var("PATHEXT") {
+            cmd.env("PATHEXT", pe);
+        }
+        cmd.env("COMSPEC", format!("{}\\System32\\cmd.exe", system_root));
+
+        // Apply per-sidecar custom environment variables
         for (k, v) in &spec.env {
             cmd.env(k, v);
         }
@@ -961,5 +1019,117 @@ mod tests {
             "grandchild process with PID {} must be dead after supervisor abrupt exit",
             grandchild_pid
         );
+    }
+
+    #[tokio::test]
+    async fn test_sidecar_rejects_relative_binary_path() {
+        let spec = SidecarSpec::new("relative/fake-sidecar.exe", ["--mode", "normal"]);
+        let supervisor = SidecarSupervisor::new();
+        let res = supervisor.run_to_completion(&spec, None).await;
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            SidecarError::PathNotAbsolute(p) => {
+                assert_eq!(p, PathBuf::from("relative/fake-sidecar.exe"));
+            }
+            other => panic!("expected PathNotAbsolute, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sidecar_sanitized_environment_and_path() {
+        let bin = fake_sidecar_path();
+        let spec = SidecarSpec::new(&bin, ["--mode", "env"]).env("CUSTOM_VAR", "TEST_VAL_123");
+        let supervisor = SidecarSupervisor::new();
+        let res = supervisor
+            .run_to_completion(&spec, None)
+            .await
+            .expect("run env");
+
+        let env_lines = res.stdout_lines;
+        let mut found_custom = false;
+        let mut path_val = String::new();
+
+        for line in &env_lines {
+            if line.starts_with("CUSTOM_VAR=") {
+                found_custom = true;
+                assert_eq!(line, "CUSTOM_VAR=TEST_VAL_123");
+            }
+            if let Some(val) = line.strip_prefix("PATH=") {
+                path_val = val.to_string();
+            }
+        }
+
+        assert!(
+            found_custom,
+            "CUSTOM_VAR must be present in child environment"
+        );
+        assert!(!path_val.is_empty(), "PATH must be present");
+
+        // Verify PATH contains component directory and System32, and does NOT leak user PATH
+        let comp_dir = bin.parent().unwrap().to_string_lossy().to_string();
+        assert!(
+            path_val.to_lowercase().contains(&comp_dir.to_lowercase()),
+            "PATH must contain component dir"
+        );
+        assert!(
+            path_val.to_lowercase().contains("system32"),
+            "PATH must contain system32"
+        );
+        assert!(
+            !path_val.to_lowercase().contains(r"\cargo\bin"),
+            "User Cargo path must not leak into child PATH"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sidecar_working_directory_isolated() {
+        let bin = fake_sidecar_path();
+        let temp_ws = std::env::temp_dir().join(format!("test_ws_workdir_{}", std::process::id()));
+        let custom_workdir = temp_ws.join("cache").join("temp");
+        let _ = std::fs::create_dir_all(&custom_workdir);
+
+        let spec = SidecarSpec::new(&bin, ["--mode", "pwd"]).working_dir(&custom_workdir);
+        let supervisor = SidecarSupervisor::new();
+        let res = supervisor
+            .run_to_completion(&spec, None)
+            .await
+            .expect("run pwd");
+
+        assert_eq!(res.exit_code, 0);
+        let output_pwd = res.stdout_lines.first().cloned().unwrap_or_default();
+        let expected_canonical = dunce::canonicalize(&custom_workdir)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            output_pwd.eq_ignore_ascii_case(&custom_workdir.to_string_lossy())
+                || output_pwd.eq_ignore_ascii_case(&expected_canonical),
+            "Expected workdir {:?}, got {:?}",
+            custom_workdir,
+            output_pwd
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_ws);
+    }
+
+    #[test]
+    fn test_create_yt_dlp_spec_sets_workspace_cache_and_temp() {
+        let test_root = std::env::temp_dir().join(format!("test_yt_spec_{}", std::process::id()));
+        let bin = fake_sidecar_path();
+
+        let spec = create_yt_dlp_spec(&bin, ["--version"], &test_root);
+
+        assert!(spec.working_dir.is_some());
+        assert_eq!(
+            spec.working_dir.unwrap(),
+            test_root.join("cache").join("temp")
+        );
+
+        let env_map: std::collections::HashMap<_, _> = spec.env.into_iter().collect();
+        assert!(env_map.contains_key("TEMP"));
+        assert!(env_map.contains_key("TMP"));
+        assert!(env_map.contains_key("XDG_CACHE_HOME"));
+
+        let _ = std::fs::remove_dir_all(&test_root);
     }
 }

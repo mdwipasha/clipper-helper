@@ -78,6 +78,17 @@ fn main() {
                 .expect("spawn grandchild");
             println!("grandchild pid: {}", child.id());
         }
+        "env" => {
+            // Dump environment variables to stdout as KEY=VALUE
+            for (key, val) in env::vars() {
+                println!("{}={}", key, val);
+            }
+        }
+        "pwd" => {
+            if let Ok(current_dir) = env::current_dir() {
+                println!("{}", current_dir.display());
+            }
+        }
         "tree-child" => {
             // Spawn a grandchild that sleeps, then sleep ourselves.
             let exe = env::current_exe().expect("get current exe");
