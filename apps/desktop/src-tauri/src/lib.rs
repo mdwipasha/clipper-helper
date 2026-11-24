@@ -5,6 +5,7 @@ pub mod eta;
 pub mod hardware;
 pub mod jobs;
 pub mod license;
+pub mod manifest;
 pub mod net;
 pub mod render;
 pub mod security;
