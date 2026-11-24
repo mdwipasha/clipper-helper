@@ -155,6 +155,8 @@ Pinned exact versions + lockfiles (`pnpm`, `Cargo.lock`); `cargo audit`/`npm aud
 
 **Never leaves the device:** video files, audio, transcripts, caption text, project contents. **Telemetry events (complete list):** `app_start`, `generate_done{stage_ms, device_class, model, ok/error_code}`, `export_done{encoder, render_ms, ok/error_code}`, `component_update{component, ok}`, `caption_edit_rate{model, total_words, edited_words}` (aggregate counts only, no text), `preview_fallback{reason}` (aggregate counts of switches to timecode-only mode; `reason`: `'embed_disabled'` | `'error_101_150'` | `'timeout'` | `'preview_config'`), `error{code, stage}`. No URLs, titles, or text. Provide: privacy policy, in-app consent screen, data export/deletion request path.
 
+**Third-party network exposure note:** Third-party binary artifact hosts (e.g. GitHub Releases via `github.com` and `release-assets.githubusercontent.com`, HuggingFace via `huggingface.co`) observe requesting users' IP addresses during component downloads. To protect user privacy, production builds configure and prefer our self-hosted Cloudflare R2 CDN (`cdn.clipperhelper.com`) as primary source, keeping third-party hosts strictly as verified fallback mirrors declared in the signed manifest.
+
 ## 12. Logging, monitoring, incident response
 
 - **Server:** log function name, user id, error code, latency; never tokens/keys/raw card or full webhook secrets. Alerts: spike in `begin-export` errors, webhook signature failures, reconciliation mismatches, abuse flags, component failure rate by version.

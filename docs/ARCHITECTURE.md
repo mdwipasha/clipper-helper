@@ -232,17 +232,29 @@ First run (and "Re-run benchmark" in settings): probe CPU model/cores/AVX2, RAM,
 
 ```
 %LOCALAPPDATA%\ClipperHelper\
-├─ bin\        # versioned sidecars (yt-dlp, quickjs, ffmpeg, whisper) + manifest cache
-├─ models\     # speech models (sha256-verified)
+├─ bin\        # versioned sidecars (bin/<component>/<version>/<exe>) + manifest cache
+├─ models\     # speech models (models/<file>, sha256-verified)
 ├─ cache\      # content-addressed artifacts (downloads, audio, transcripts, proxies, waveforms)
 ├─ projects\   # per-project folder: composition.json, thumbnails
 ├─ outbox\     # (in SQLite) pending finalize/telemetry
 ├─ logs\       # rotating, redacted
+├─ bootstrap.json # optional root override pointing to custom DataRoot
 └─ app.db      # SQLite
 Default output: %USERPROFILE%\Videos\ClipperHelper\
 ```
 
-**Workspace root** = `%LOCALAPPDATA%\ClipperHelper\`. All stored paths (composition, artifacts, cache keys) are POSIX-style and relative to this root, matching `^(cache|projects)/[A-Za-z0-9._/-]+$` — no `..`, no leading `/`, no drive letters, no UNC paths. Only one Rust function `resolve_workspace_path()` may convert a stored path into an absolute OS path; it canonicalizes the result and verifies it stays inside the workspace root (including across symlinks and NTFS junctions).
+**DataRoot abstraction:** default `%LOCALAPPDATA%\ClipperHelper\` (in debug builds: `%LOCALAPPDATA%\ClipperHelper-Dev\`). A small `bootstrap.json` in the default directory may redirect storage to another root (`{"workspace_root": "D:\\ClipperHelper"}`). Validation rules enforced at startup:
+- Must be an absolute path on a **LOCAL FIXED drive** (no UNC/network shares, no removable USB drives).
+- Must **not** be a system directory (Windows, System32, Program Files).
+- Must be writable and either empty or an existing ClipperHelper workspace directory.
+- Logs a warning if the path resides inside OneDrive.
+All resolvers strictly operate against the active DataRoot. Dev reset operations (`dev_reset_workspace`) refuse to execute unless the root's final component is exactly `ClipperHelper-Dev`.
+
+**Field reality — low disk space:** Development and user laptops frequently have low free disk space on drive C: (dev machines measured with 2.2–2.7 GB free). Because component downloads, whisper models (141–466 MB), and video artifacts require sufficient disk headroom, the DataRoot abstraction allows users to move their workspace to a secondary drive (e.g. D: or E:). The first-run wizard UI arrives in M1.1d. Before any download or render, `check_free_space(required_bytes)` runs preflight verification, mapping insufficient space to typed errors (`E_DISK_LOW` / `E_DISK_FULL`).
+
+**Component resolution:** binaries are stored in versioned paths `bin/<component>/<version>/<exe>` (e.g. `bin/yt-dlp/2026.10.26/yt-dlp.exe`). Models reside in `models/<file>` strictly against the models allowlist (`ggml-*.bin`). Only allowed components (`yt-dlp.exe`, `qjs.exe`, `ffmpeg.exe`, `ffprobe.exe`, `whisper-cli.exe`, and `fake-sidecar.exe` in debug/test) may be resolved.
+
+**Workspace path safety:** All stored paths (composition, artifacts, cache keys) are POSIX-style and relative to this root, matching `^(cache|projects)/[A-Za-z0-9._/-]+$` — no `..`, no leading `/`, no drive letters, no UNC paths. Only one Rust function `resolve_workspace_path()` may convert a stored path into an absolute OS path; it canonicalizes the result and verifies it stays inside the workspace root (including across symlinks and NTFS junctions).
 
 - **Cache policy:** LRU of unpinned artifacts; default cap 10 GB; sources older than 7 days eligible. Deleting a cached source only means a free re-download.
 - **Disk guard:** before download require free space ≥ 2 × estimated size + 1 GB; before render ≥ 1.5 × estimated output + 500 MB.
@@ -289,7 +301,12 @@ Cost drivers: Supabase plan, CDN requests, Sentry volume, payment fees. No per-m
 ## 13. Release and update management
 
 - **App:** Tauri updater with signed artifacts; channels `stable`/`beta`; staged rollout percentage in the update manifest; the previous version stays available for rollback.
-- **Components (yt-dlp, Deno, FFmpeg, whisper, models):** installed from a **signed manifest** (`get-component-manifest` → entries with url, size, SHA-256, version, rollout %, min/max app version). The manifest signature (Ed25519, separate key from ticket key) and each file hash are verified before install; install is atomic into a versioned folder; previous version is kept for rollback.
+- **Signed component manifest (`manifest.json`):**
+  - **Schema:** `{ schema: 1, sequence: monotonic_int, generated_at: ISO8601, channel: "stable"|"beta"|"dev", components: [...] }`. Each component entry declares `component`, `version`, `platform`, `url`, optional `mirrors`, `size_bytes`, `sha256`, `archive` (`"none"`|`"zip"`), relative `files` (with hashes/sizes for zip bundles), `min_app_version`, optional `max_app_version`, and `rollout_percent`.
+  - **Detached signature (`manifest.json.sig`):** Ed25519 signature evaluated over the **exact served bytes** of `manifest.json`. Checked using `ed25519_dalek::VerifyingKey::verify_strict`. Pinned embedded public keys carry an explicit `kid` (active + next, kept strictly separate from export ticket signing keys).
+  - **Anti-rollback floor:** Monotonic sequence number is persisted in local SQLite storage. Even if the local database is reset or reconstructed after corruption recovery, an embedded build-time constant `MIN_MANIFEST_SEQUENCE` serves as a permanent floor (`effective_floor = max(persisted, MIN_MANIFEST_SEQUENCE)`). Manifest sequences strictly below this floor are rejected with `E_MANIFEST_STALE`.
+  - **Component gating:** Incompatible app versions (`min_app_version` / `max_app_version`) or rollout buckets outside `rollout_percent` are cleanly skipped without erroring.
+- **Resumable downloader:** downloads are performed with reqwest + rustls over HTTPS (loopback `http://127.0.0.1` permitted only in debug/test builds), host-allowlist validated with redirect security, streaming SHA-256 verification, strict size bounds, `.part` file resume with `Range` / `If-Range` headers, per-component download mutex, and progress events with EWMA smoothed rate and ETA per PROGRESS_AND_ETA §4–§5.
 - **Emergency path:** `min_app_version`, `maintenance` flag, component rollback, kill switch for a bad component version (set `is_active=false`).
 - **Windows distribution:** per-user NSIS/MSI installer, Authenticode code signing, direct download from our site. Expect antivirus false positives for bundled downloaders; budget time for allow-listing/reputation.
 
