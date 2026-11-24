@@ -89,6 +89,7 @@ async fn test_download_success_and_sha256_verification() {
         size_bytes: test_data.len() as u64,
         sha256: sha.clone(),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -143,6 +144,7 @@ async fn test_download_wrong_content_sha_mismatch() {
         size_bytes: test_data.len() as u64,
         sha256: expected_sha,
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -181,6 +183,7 @@ async fn test_download_oversize_aborts() {
         size_bytes: test_data.len() as u64,
         sha256: compute_sha256(&test_data),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -213,6 +216,7 @@ async fn test_download_redirect_to_non_allowlisted_host_rejected() {
         size_bytes: 1024,
         sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -246,6 +250,7 @@ async fn test_download_dropped_connection() {
         size_bytes: test_data.len() as u64,
         sha256: compute_sha256(&test_data),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -280,6 +285,7 @@ async fn test_download_cancellation_preserves_part() {
         size_bytes: test_data.len() as u64,
         sha256: compute_sha256(&test_data),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -338,6 +344,7 @@ async fn test_download_resume_after_partial_transfer() {
         size_bytes: test_data.len() as u64,
         sha256: full_sha.clone(),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -379,6 +386,7 @@ async fn test_concurrent_download_lock() {
         size_bytes: test_data.len() as u64,
         sha256: compute_sha256(&test_data),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -422,6 +430,7 @@ async fn test_disk_space_preflight_check() {
         size_bytes: huge_bytes,
         sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
         archive: "none".into(),
+        mirrors: vec![],
         files: vec![],
         min_app_version: "0.1.0".into(),
         max_app_version: None,
@@ -462,6 +471,7 @@ async fn test_fetch_and_verify_manifest_via_dev_server() {
             size_bytes: 123456,
             sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
             archive: "none".into(),
+            mirrors: vec![],
             files: vec![],
             min_app_version: "0.1.0".into(),
             max_app_version: None,
@@ -533,4 +543,114 @@ async fn test_fetch_and_verify_manifest_via_dev_server() {
     .await;
 
     assert!(stale_res.is_err(), "stale sequence must be rejected");
+}
+
+#[tokio::test]
+async fn test_dev_panel_full_flow_sequence() {
+    use clipper_helper_desktop_lib::dev_commands::{
+        dev_start_fixture_server, dev_stop_fixture_server, DEV_EXTRA_KEYS,
+    };
+
+    // Ensure server stopped initially
+    let _ = dev_stop_fixture_server();
+
+    // 1. Start server
+    let start_res = dev_start_fixture_server().expect("start dev server");
+    assert_eq!(start_res.state, "running");
+    let server_url = start_res.url.expect("server url");
+
+    // Temp store for manifest sequence tracking
+    let temp_db_dir = TempDir::new().expect("db dir");
+    let db_path = temp_db_dir.path().join("panel_test.db");
+    let store = LocalStore::open(&db_path).expect("open store");
+
+    // 2. Fetch manifest OK
+    let manifest_url = format!("{}/manifest.json", server_url);
+    let sig_url = format!("{}/manifest.json.sig", server_url);
+    let manifest = fetch_and_verify_manifest(
+        &manifest_url,
+        &sig_url,
+        "0.1.0",
+        &store,
+        Some(DEV_EXTRA_KEYS),
+    )
+    .await
+    .expect("fetch and verify manifest must succeed");
+
+    assert!(manifest.sequence >= 1);
+    let tiny_entry = manifest
+        .components
+        .iter()
+        .find(|c| c.component == "ggml-tiny.bin")
+        .expect("ggml-tiny.bin must be present in dev fixtures");
+
+    // 3. Download ggml-tiny.bin with progress
+    let temp_dest = TempDir::new().expect("dest dir");
+    let dest_file = temp_dest.path().join("ggml-tiny.bin");
+    let progress_events = Arc::new(Mutex::new(Vec::<DownloadProgress>::new()));
+    let p_clone = progress_events.clone();
+
+    download_and_verify_component(
+        tiny_entry,
+        &dest_file,
+        move |p| {
+            p_clone.lock().unwrap().push(p);
+        },
+        None,
+    )
+    .await
+    .expect("download and verify component must succeed");
+
+    assert!(dest_file.exists(), "Downloaded file must exist");
+    {
+        let events = progress_events.lock().unwrap();
+        assert!(!events.is_empty(), "Must emit progress events");
+        let final_event = events.last().unwrap();
+        assert_eq!(final_event.percent, 100.0);
+        assert_eq!(final_event.stage, "download");
+    }
+
+    // 4. Tampered manifest refused (E_MANIFEST_INVALID)
+    let tampered_manifest_url = format!("{}/manifest-tampered.json", server_url);
+    let tampered_sig_url = format!("{}/manifest-tampered.json.sig", server_url);
+    let tampered_res = fetch_and_verify_manifest(
+        &tampered_manifest_url,
+        &tampered_sig_url,
+        "0.1.0",
+        &store,
+        Some(DEV_EXTRA_KEYS),
+    )
+    .await;
+
+    assert!(tampered_res.is_err(), "Tampered manifest must be refused");
+    let err = tampered_res.unwrap_err();
+    assert_eq!(
+        err.error_code(),
+        "E_MANIFEST_INVALID",
+        "Tampered manifest must produce E_MANIFEST_INVALID, got: {:?}",
+        err
+    );
+
+    // 5. Server stopped
+    let stop_res = dev_stop_fixture_server().expect("stop dev server");
+    assert_eq!(stop_res.state, "stopped");
+
+    // 6. Retry state (E_NET_OFFLINE, NOT refused)
+    let offline_res = fetch_and_verify_manifest(
+        &manifest_url,
+        &sig_url,
+        "0.1.0",
+        &store,
+        Some(DEV_EXTRA_KEYS),
+    )
+    .await;
+
+    assert!(offline_res.is_err(), "Offline server must fail");
+    let net_err = offline_res.unwrap_err();
+    assert_eq!(
+        net_err.error_code(),
+        "E_NET_OFFLINE",
+        "Offline server must produce E_NET_OFFLINE (neutral Retry state), got: {:?}",
+        net_err
+    );
 }

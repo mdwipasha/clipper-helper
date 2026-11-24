@@ -19,7 +19,33 @@ use crate::sidecars::{SidecarSpec, SidecarSupervisor};
 use crate::store::LocalStore;
 use crate::WorkspaceState;
 
-static DEV_SERVER_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct DevFixtureServerStatus {
+    pub state: String, // "stopped" | "starting" | "running" | "error"
+    pub port: Option<u16>,
+    pub url: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct DevManifestError {
+    pub code: String,
+    pub message: String,
+}
+
+struct FixtureServerState {
+    process: Option<Child>,
+    port: Option<u16>,
+    url: Option<String>,
+    last_error: Option<String>,
+}
+
+static FIXTURE_SERVER: Mutex<FixtureServerState> = Mutex::new(FixtureServerState {
+    process: None,
+    port: None,
+    url: None,
+    last_error: None,
+});
 
 pub const DEV_EXTRA_KEYS: &[crate::manifest::ManifestPublicKey] =
     &[crate::manifest::ManifestPublicKey {
@@ -211,37 +237,176 @@ pub async fn dev_run_fake_sidecar(mode: String) -> Result<DevSidecarRunResult, S
     }
 }
 
+/// Resolves the Node.js executable using an explicit path or debug override,
+/// avoiding reliance on stripped sidecar PATH environment (ARCHITECTURE §13, SECURITY §9).
+pub fn find_node_executable() -> Result<PathBuf, String> {
+    if let Ok(custom) = std::env::var("CLIPPER_DEV_NODE_PATH") {
+        let p = PathBuf::from(&custom);
+        if p.exists() {
+            return Ok(p);
+        }
+        tracing::warn!(
+            "CLIPPER_DEV_NODE_PATH was set to {:?}, but file does not exist",
+            custom
+        );
+    }
+
+    let candidates = [
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files (x86)\nodejs\node.exe",
+    ];
+    for c in &candidates {
+        let p = PathBuf::from(c);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        let fnm = PathBuf::from(&localappdata).join(r"fnm_multishells\default\node.exe");
+        if fnm.exists() {
+            return Ok(fnm);
+        }
+        let fnm2 = PathBuf::from(&localappdata).join(r"fnm\current\node.exe");
+        if fnm2.exists() {
+            return Ok(fnm2);
+        }
+    }
+
+    // Try `where.exe node` on Windows to find it from system PATH
+    if let Ok(output) = Command::new("where.exe").arg("node").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = stdout.lines().next() {
+                let p = PathBuf::from(first_line.trim());
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
+        }
+    }
+
+    Ok(PathBuf::from("node"))
+}
+
+/// Debug-only: inspects the status of the local fixture server.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_get_fixture_server_status() -> DevFixtureServerStatus {
+    let mut state = FIXTURE_SERVER.lock().unwrap();
+    if let Some(ref mut child) = state.process {
+        match child.try_wait() {
+            Ok(Some(exit_status)) => {
+                state.process = None;
+                let err_msg = format!("Process exited with status {}", exit_status);
+                state.last_error = Some(err_msg.clone());
+                return DevFixtureServerStatus {
+                    state: "stopped".to_string(),
+                    port: None,
+                    url: None,
+                    error: Some(err_msg),
+                };
+            }
+            Ok(None) => {
+                return DevFixtureServerStatus {
+                    state: "running".to_string(),
+                    port: state.port,
+                    url: state.url.clone(),
+                    error: None,
+                };
+            }
+            Err(e) => {
+                let err_msg = format!("Error checking process: {}", e);
+                state.last_error = Some(err_msg.clone());
+                return DevFixtureServerStatus {
+                    state: "error".to_string(),
+                    port: None,
+                    url: None,
+                    error: Some(err_msg),
+                };
+            }
+        }
+    }
+
+    DevFixtureServerStatus {
+        state: "stopped".to_string(),
+        port: None,
+        url: None,
+        error: state.last_error.clone(),
+    }
+}
+
+/// Debug-only: stops the local fixture server if running.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_stop_fixture_server() -> Result<DevFixtureServerStatus, String> {
+    let mut state = FIXTURE_SERVER.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut child) = state.process {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    state.process = None;
+    state.port = None;
+    state.url = None;
+    state.last_error = None;
+    Ok(DevFixtureServerStatus {
+        state: "stopped".to_string(),
+        port: None,
+        url: None,
+        error: None,
+    })
+}
+
 /// Debug-only: starts or verifies the local dev-server serving test fixtures.
 #[tauri::command]
 #[specta::specta]
-pub fn dev_start_fixture_server() -> Result<String, String> {
-    let mut guard = DEV_SERVER_PROCESS.lock().map_err(|e| e.to_string())?;
-    if let Some(ref mut child) = *guard {
+pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
+    let mut state = FIXTURE_SERVER.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut child) = state.process {
         if let Ok(None) = child.try_wait() {
-            return Ok("http://127.0.0.1:8080".to_string());
+            return Ok(DevFixtureServerStatus {
+                state: "running".to_string(),
+                port: state.port,
+                url: state.url.clone(),
+                error: None,
+            });
         }
     }
+
+    let node_bin = find_node_executable().map_err(|e| format!("Node resolution failed: {}", e))?;
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root_dir = manifest_dir.join("../../../tools/dev-fixtures");
     let script_path = manifest_dir.join("../../../tools/src/dev-server.js");
 
-    // If dev-fixtures does not exist or missing manifest, generate them
+    // If dev-fixtures does not exist or missing manifest, generate them using resolved node binary
     if !root_dir.join("manifest.json").exists() {
         let fixture_gen_script = manifest_dir.join("../../../tools/src/create-dev-fixtures.js");
-        let _ = Command::new("node").arg(fixture_gen_script).status();
+        let gen_status = Command::new(&node_bin)
+            .arg(&fixture_gen_script)
+            .status()
+            .map_err(|e| {
+                format!(
+                    "Failed to generate dev fixtures using {:?}: {}",
+                    node_bin, e
+                )
+            })?;
+        if !gen_status.success() {
+            return Err("create-dev-fixtures script failed".to_string());
+        }
     }
 
-    let mut child = Command::new("node")
-        .arg(script_path)
+    let port: u16 = 8080;
+    let mut child = Command::new(&node_bin)
+        .arg(&script_path)
         .arg("--root")
         .arg(&root_dir)
         .arg("--port")
-        .arg("8080")
+        .arg(port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("Failed to spawn dev-server: {}", e))?;
+        .map_err(|e| format!("Failed to spawn dev-server using {:?}: {}", node_bin, e))?;
 
     let stdout = child
         .stdout
@@ -249,16 +414,34 @@ pub fn dev_start_fixture_server() -> Result<String, String> {
         .ok_or_else(|| "Failed to capture dev-server stdout".to_string())?;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    reader
+        .read_line(&mut line)
+        .map_err(|e| format!("Failed to read dev-server ready signal: {}", e))?;
 
     let prefix = "SERVER_READY: ";
     if !line.starts_with(prefix) {
-        return Err(format!("Unexpected server output: {}", line));
+        let _ = child.kill();
+        let err = if line.trim().is_empty() {
+            "Failed to start fixture server: process exited before emitting ready signal (port 8080 may already be in use)".to_string()
+        } else {
+            format!("Unexpected dev-server output: {}", line)
+        };
+        state.last_error = Some(err.clone());
+        return Err(err);
     }
     let url = line[prefix.len()..].trim().to_string();
 
-    *guard = Some(child);
-    Ok(url)
+    state.process = Some(child);
+    state.port = Some(port);
+    state.url = Some(url.clone());
+    state.last_error = None;
+
+    Ok(DevFixtureServerStatus {
+        state: "running".to_string(),
+        port: Some(port),
+        url: Some(url),
+        error: None,
+    })
 }
 
 /// Debug-only: fetches and cryptographically verifies the component manifest.
@@ -268,13 +451,19 @@ pub async fn dev_fetch_manifest(
     app: tauri::AppHandle,
     manifest_url: String,
     sig_url: String,
-) -> Result<DevManifestInfo, String> {
+) -> Result<DevManifestInfo, DevManifestError> {
     let ws = app
         .try_state::<WorkspaceState>()
-        .ok_or_else(|| "Workspace state not available".to_string())?;
+        .ok_or_else(|| DevManifestError {
+            code: "E_DEV_STATE_UNAVAILABLE".to_string(),
+            message: "Workspace state not available".to_string(),
+        })?;
     let store = app
         .try_state::<LocalStore>()
-        .ok_or_else(|| "LocalStore not available".to_string())?;
+        .ok_or_else(|| DevManifestError {
+            code: "E_DEV_STORE_UNAVAILABLE".to_string(),
+            message: "LocalStore not available".to_string(),
+        })?;
 
     tracing::info!(
         "dev_fetch_manifest: fetching from {} and {}",
@@ -300,7 +489,10 @@ pub async fn dev_fetch_manifest(
         }
         Err(e) => {
             tracing::error!("dev_fetch_manifest: verification failed: {:?}", e);
-            return Err(format!("Manifest verification failed: {}", e));
+            return Err(DevManifestError {
+                code: e.error_code().to_string(),
+                message: e.to_string(),
+            });
         }
     };
 
@@ -380,6 +572,7 @@ pub async fn dev_download_component(
         version,
         platform: "windows-x86_64".to_string(),
         url,
+        mirrors: vec![],
         size_bytes: size_bytes as u64,
         sha256,
         archive,
@@ -414,4 +607,58 @@ pub async fn dev_download_component(
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_node_executable_resolves_valid_binary() {
+        let node_bin = find_node_executable().expect("find_node_executable should succeed");
+        let output = Command::new(&node_bin)
+            .arg("--version")
+            .output()
+            .expect("node --version must execute");
+        assert!(output.status.success(), "node --version must exit with 0");
+        let version_str = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            version_str.starts_with('v'),
+            "expected node version vX.Y.Z, got {}",
+            version_str
+        );
+    }
+
+    #[test]
+    fn test_dev_fixture_server_lifecycle() {
+        // Ensure stopped initially
+        let _ = dev_stop_fixture_server();
+        let status = dev_get_fixture_server_status();
+        assert_eq!(status.state, "stopped");
+
+        // Start server
+        let start_res = dev_start_fixture_server();
+        assert!(
+            start_res.is_ok(),
+            "Failed to start dev fixture server: {:?}",
+            start_res
+        );
+        let started = start_res.unwrap();
+        assert_eq!(started.state, "running");
+        assert_eq!(started.port, Some(8080));
+        assert!(started.url.is_some());
+
+        // Verify status reflects running state
+        let status_running = dev_get_fixture_server_status();
+        assert_eq!(status_running.state, "running");
+
+        // Stop server
+        let stop_res = dev_stop_fixture_server();
+        assert!(stop_res.is_ok());
+        let stopped = stop_res.unwrap();
+        assert_eq!(stopped.state, "stopped");
+
+        let status_stopped = dev_get_fixture_server_status();
+        assert_eq!(status_stopped.state, "stopped");
+    }
 }

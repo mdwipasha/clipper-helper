@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { commands, DevManifestInfo, DevSidecarRunResult, DevSystemInfo } from '../ipc/bindings';
+import {
+  commands,
+  DevFixtureServerStatus,
+  DevManifestError,
+  DevManifestInfo,
+  DevSidecarRunResult,
+  DevSystemInfo,
+} from '../ipc/bindings';
 
 export type DevDownloadProgressEvent = {
   component: string;
@@ -23,13 +30,22 @@ export function DevPanel() {
   const [runResult, setRunResult] = useState<DevSidecarRunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
 
+  // Fixture Server State
+  const [serverStatus, setServerStatus] = useState<DevFixtureServerStatus>({
+    state: 'stopped',
+    port: null,
+    url: null,
+    error: null,
+  });
+  const [serverStarting, setServerStarting] = useState<boolean>(false);
+  const [autoStartServer, setAutoStartServer] = useState<boolean>(true);
+
   // Components & Manifest State
   const [manifestUrl, setManifestUrl] = useState<string>('http://127.0.0.1:8080/manifest.json');
   const [sigUrl, setSigUrl] = useState<string>('http://127.0.0.1:8080/manifest.json.sig');
   const [fetchingManifest, setFetchingManifest] = useState<boolean>(false);
   const [manifestInfo, setManifestInfo] = useState<DevManifestInfo | null>(null);
-  const [manifestError, setManifestError] = useState<string | null>(null);
-  const [serverStarting, setServerStarting] = useState<boolean>(false);
+  const [manifestError, setManifestError] = useState<DevManifestError | null>(null);
 
   const [downloadProgressMap, setDownloadProgressMap] = useState<
     Record<string, DevDownloadProgressEvent>
@@ -90,89 +106,59 @@ export function DevPanel() {
     }
   };
 
-  useEffect(() => {
-    loadSysInfo();
-    // Run initial sidecar test to show exit code 0 on initial view
-    commands
-      .devRunFakeSidecar('normal')
-      .then((res) => {
-        if (res.status === 'ok') {
-          setRunResult(res.data);
-        }
-      })
-      .catch((err: unknown) => {
-        setRunError(String(err));
-      });
-
-    // Auto-fetch dev manifest on mount and auto-download model for verification
-    commands
-      .devFetchManifest(
-        'http://127.0.0.1:8080/manifest.json',
-        'http://127.0.0.1:8080/manifest.json.sig'
-      )
-      .then((res) => {
-        if (res.status === 'ok') {
-          console.log('[DevPanel] Auto-fetch manifest succeeded:', res.data);
-          setManifestInfo(res.data);
-          const downloaded = new Set<string>();
-          for (const c of res.data.components) {
-            if (c.is_downloaded) {
-              downloaded.add(c.component);
-            }
-          }
-          setDownloadedSet(downloaded);
-
-          // Auto-download first undownloaded component in dev
-          const firstUndownloaded = res.data.components.find((c) => !downloaded.has(c.component));
-          if (firstUndownloaded) {
-            console.log('[DevPanel] Auto-downloading component:', firstUndownloaded);
-            handleDownload(firstUndownloaded);
-          }
-        } else {
-          console.error('[DevPanel] Auto-fetch manifest returned error:', res.error);
-          setManifestError(res.error);
-        }
-      })
-      .catch((err) => {
-        console.error('[DevPanel] Auto-fetch manifest threw:', err);
-        setManifestError(String(err));
-      });
-
-    // Listen for streaming download progress events from core
-    const unlistenPromise = listen<DevDownloadProgressEvent>('download-progress', (event) => {
-      setDownloadProgressMap((prev) => ({
-        ...prev,
-        [event.payload.component]: event.payload,
-      }));
-      if (event.payload.percent >= 100) {
-        setDownloadedSet((prev) => new Set(prev).add(event.payload.component));
-        setDownloadingMap((prev) => ({
-          ...prev,
-          [event.payload.component]: false,
-        }));
+  const refreshServerStatus = async () => {
+    try {
+      const status = await commands.devGetFixtureServerStatus();
+      setServerStatus(status);
+      if (status.url) {
+        setManifestUrl(`${status.url}/manifest.json`);
+        setSigUrl(`${status.url}/manifest.json.sig`);
       }
-    });
-
-    return () => {
-      unlistenPromise.then((fn) => fn());
-    };
-  }, []);
+      return status;
+    } catch {
+      return null;
+    }
+  };
 
   const handleStartFixtureServer = async () => {
     setServerStarting(true);
+    setManifestError(null);
     try {
       const res = await commands.devStartFixtureServer();
       if (res.status === 'ok') {
-        const base = res.data;
-        setManifestUrl(`${base}/manifest.json`);
-        setSigUrl(`${base}/manifest.json.sig`);
+        setServerStatus(res.data);
+        if (res.data.url) {
+          setManifestUrl(`${res.data.url}/manifest.json`);
+          setSigUrl(`${res.data.url}/manifest.json.sig`);
+        }
       } else {
-        setManifestError(res.error);
+        setServerStatus({
+          state: 'error',
+          port: null,
+          url: null,
+          error: res.error,
+        });
       }
     } catch (err: unknown) {
-      setManifestError(String(err));
+      setServerStatus({
+        state: 'error',
+        port: null,
+        url: null,
+        error: String(err),
+      });
     } finally {
       setServerStarting(false);
+    }
+  };
+
+  const handleStopFixtureServer = async () => {
+    try {
+      const res = await commands.devStopFixtureServer();
+      if (res.status === 'ok') {
+        setServerStatus(res.data);
+      }
+    } catch (err: unknown) {
+      console.error('Failed to stop fixture server:', err);
     }
   };
 
@@ -197,12 +183,79 @@ export function DevPanel() {
         setManifestInfo(null);
       }
     } catch (err: unknown) {
-      setManifestError(String(err));
+      setManifestError({
+        code: 'E_NET_OFFLINE',
+        message: String(err),
+      });
       setManifestInfo(null);
     } finally {
       setFetchingManifest(false);
     }
   };
+
+  useEffect(() => {
+    loadSysInfo();
+    // Run initial sidecar test to show exit code 0 on initial view
+    commands
+      .devRunFakeSidecar('normal')
+      .then((res) => {
+        if (res.status === 'ok') {
+          setRunResult(res.data);
+        }
+      })
+      .catch((err: unknown) => {
+        setRunError(String(err));
+      });
+
+    // Initialize fixture server and fetch manifest
+    (async () => {
+      let currentStatus = await refreshServerStatus();
+      if (autoStartServer && currentStatus?.state !== 'running') {
+        setServerStarting(true);
+        try {
+          const startRes = await commands.devStartFixtureServer();
+          if (startRes.status === 'ok') {
+            currentStatus = startRes.data;
+            setServerStatus(startRes.data);
+            if (startRes.data.url) {
+              setManifestUrl(`${startRes.data.url}/manifest.json`);
+              setSigUrl(`${startRes.data.url}/manifest.json.sig`);
+            }
+          }
+        } catch (e) {
+          console.warn('Auto-start fixture server failed:', e);
+        } finally {
+          setServerStarting(false);
+        }
+      }
+
+      // If server is running, auto-fetch
+      if (currentStatus?.state === 'running') {
+        const mUrl = `${currentStatus.url || 'http://127.0.0.1:8080'}/manifest.json`;
+        const sUrl = `${currentStatus.url || 'http://127.0.0.1:8080'}/manifest.json.sig`;
+        await handleFetchManifest(mUrl, sUrl);
+      }
+    })();
+
+    // Listen for streaming download progress events from core
+    const unlistenPromise = listen<DevDownloadProgressEvent>('download-progress', (event) => {
+      setDownloadProgressMap((prev) => ({
+        ...prev,
+        [event.payload.component]: event.payload,
+      }));
+      if (event.payload.percent >= 100) {
+        setDownloadedSet((prev) => new Set(prev).add(event.payload.component));
+        setDownloadingMap((prev) => ({
+          ...prev,
+          [event.payload.component]: false,
+        }));
+      }
+    });
+
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, []);
 
   const handleFetchTamperedManifest = async () => {
     const base = 'http://127.0.0.1:8080';
@@ -319,16 +372,63 @@ export function DevPanel() {
         data-testid="components-section"
         className="bg-slate-950/80 rounded p-3 border border-slate-800 space-y-3"
       >
-        <div className="flex items-center justify-between">
-          <div className="text-slate-400 font-semibold">Components & Signed Manifest</div>
-          <button
-            onClick={handleStartFixtureServer}
-            disabled={serverStarting}
-            className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 px-2 py-0.5 rounded cursor-pointer"
-          >
-            {serverStarting ? 'Starting...' : 'Start Local Fixture Server'}
-          </button>
+        <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+          <div className="flex items-center space-x-2">
+            <span className="text-slate-400 font-semibold">Fixture Server:</span>
+            {serverStatus.state === 'running' ? (
+              <span className="bg-emerald-950/60 border border-emerald-800 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold">
+                RUNNING {serverStatus.port ? `:${serverStatus.port}` : ''}
+              </span>
+            ) : serverStarting || serverStatus.state === 'starting' ? (
+              <span className="bg-amber-950/60 border border-amber-800 text-amber-300 px-2 py-0.5 rounded text-[10px] animate-pulse">
+                STARTING...
+              </span>
+            ) : serverStatus.state === 'error' ? (
+              <span className="bg-rose-950/60 border border-rose-800 text-rose-300 px-2 py-0.5 rounded text-[10px]">
+                ERROR
+              </span>
+            ) : (
+              <span className="bg-slate-900 border border-slate-700 text-slate-400 px-2 py-0.5 rounded text-[10px]">
+                STOPPED
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <label className="flex items-center space-x-1 text-[10px] text-slate-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoStartServer}
+                onChange={(e) => setAutoStartServer(e.target.checked)}
+                className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 text-[10px]"
+              />
+              <span>Auto-start</span>
+            </label>
+
+            {serverStatus.state === 'running' ? (
+              <button
+                onClick={handleStopFixtureServer}
+                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 px-2 py-0.5 rounded cursor-pointer"
+              >
+                Stop Server
+              </button>
+            ) : (
+              <button
+                onClick={handleStartFixtureServer}
+                disabled={serverStarting}
+                className="text-[10px] bg-indigo-900/40 hover:bg-indigo-800/60 text-indigo-200 border border-indigo-700/60 px-2 py-0.5 rounded cursor-pointer"
+              >
+                {serverStarting ? 'Starting...' : 'Start Local Fixture Server'}
+              </button>
+            )}
+          </div>
         </div>
+
+        {serverStatus.error && (
+          <div className="text-rose-400 bg-rose-950/20 border border-rose-900/40 p-1.5 rounded text-[10px]">
+            Server error: {serverStatus.error}
+          </div>
+        )}
 
         {/* URL Inputs */}
         <div className="space-y-1.5">
@@ -371,19 +471,69 @@ export function DevPanel() {
           </button>
         </div>
 
-        {/* Refused / Error Banner */}
+        {/* Refused / Unreachable Banner */}
         {manifestError && (
           <div
             data-testid="manifest-error-banner"
-            className="bg-rose-950/30 border border-rose-800/60 p-2.5 rounded text-[11px] space-y-1"
+            className={
+              manifestError.code === 'E_MANIFEST_INVALID' ||
+              manifestError.code === 'E_MANIFEST_STALE'
+                ? 'bg-rose-950/30 border border-rose-800/60 p-2.5 rounded text-[11px] space-y-1.5'
+                : 'bg-amber-950/20 border border-amber-800/50 p-2.5 rounded text-[11px] space-y-1.5'
+            }
           >
-            <div className="flex items-center space-x-2 text-rose-400 font-bold">
-              <span className="bg-rose-900/60 border border-rose-700 text-rose-200 text-[10px] px-1.5 py-0.5 rounded uppercase">
-                Refused
-              </span>
-              <span>Cryptographic Verification Failed</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                {manifestError.code === 'E_MANIFEST_INVALID' ? (
+                  <>
+                    <span className="bg-rose-900/60 border border-rose-700 text-rose-200 text-[10px] px-1.5 py-0.5 rounded uppercase font-bold">
+                      REFUSED
+                    </span>
+                    <span className="text-rose-400 font-bold">
+                      Cryptographic Verification Failed
+                    </span>
+                  </>
+                ) : manifestError.code === 'E_MANIFEST_STALE' ? (
+                  <>
+                    <span className="bg-rose-900/60 border border-rose-700 text-rose-200 text-[10px] px-1.5 py-0.5 rounded uppercase font-bold">
+                      REFUSED
+                    </span>
+                    <span className="text-rose-400 font-bold">Sequence Rollback Rejected</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="bg-amber-900/60 border border-amber-700 text-amber-200 text-[10px] px-1.5 py-0.5 rounded uppercase font-bold">
+                      UNREACHABLE
+                    </span>
+                    <span className="text-amber-400 font-bold">
+                      Server Offline / Unreachable [{manifestError.code}]
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {manifestError.code !== 'E_MANIFEST_INVALID' &&
+                manifestError.code !== 'E_MANIFEST_STALE' && (
+                  <button
+                    onClick={() => handleFetchManifest()}
+                    disabled={fetchingManifest}
+                    className="bg-amber-800/50 hover:bg-amber-700/60 text-amber-200 border border-amber-700/60 px-2 py-0.5 rounded text-[10px] cursor-pointer"
+                  >
+                    {fetchingManifest ? 'Retrying...' : 'Retry'}
+                  </button>
+                )}
             </div>
-            <div className="text-rose-300 break-all">{manifestError}</div>
+
+            <div
+              className={
+                manifestError.code === 'E_MANIFEST_INVALID' ||
+                manifestError.code === 'E_MANIFEST_STALE'
+                  ? 'text-rose-300 break-all'
+                  : 'text-amber-300/90 break-all'
+              }
+            >
+              {manifestError.message}
+            </div>
           </div>
         )}
 
