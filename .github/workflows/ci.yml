@@ -40,26 +40,24 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path audit-reports
 
       - name: Run pnpm audit (report-only)
-        shell: powershell
+        shell: cmd
         run: |
-          pnpm audit > audit-reports/pnpm-audit.txt 2>&1
-          $global:LASTEXITCODE = 0
-          Write-Host "pnpm audit completed (report saved to audit-reports/pnpm-audit.txt)"
+          pnpm audit > audit-reports\pnpm-audit.txt 2>&1 || exit 0
 
       - name: Run license audit (report-only)
-        shell: powershell
+        shell: cmd
         run: |
-          pnpm licenses list > audit-reports/license-audit.txt 2>&1
-          $global:LASTEXITCODE = 0
-          Write-Host "license audit completed (report saved to audit-reports/license-audit.txt)"
+          pnpm licenses list > audit-reports\license-audit.txt 2>&1 || exit 0
 
-      - name: Install and run cargo audit (report-only)
-        shell: powershell
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo audit (report-only)
+        shell: cmd
         run: |
-          cargo install --locked cargo-audit
-          cargo audit --file apps/desktop/src-tauri/Cargo.lock > audit-reports/cargo-audit.txt 2>&1
-          $global:LASTEXITCODE = 0
-          Write-Host "cargo audit completed (report saved to audit-reports/cargo-audit.txt)"
+          cargo audit --file apps\desktop\src-tauri\Cargo.lock > audit-reports\cargo-audit.txt 2>&1 || exit 0
 
       - name: Upload Audit Reports Artifact
         uses: actions/upload-artifact@v4
@@ -102,9 +100,14 @@ jobs:
       - name: Verify Tauri version parity (tauri info)
         shell: powershell
         run: |
-          $info = pnpm --filter @clipper-helper/desktop tauri info 2>&1 | Out-String
-          Write-Host $info
-          if ($info -match '\(outdated|\(mismatch') {
+          $info = pnpm --filter @clipper-helper/desktop tauri info
+          $infoText = $info -join "`n"
+          Write-Host $infoText
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "tauri info exited with code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          if ($infoText -match '\(outdated|\(mismatch') {
             Write-Error "Tauri package/crate version mismatch detected!"
             exit 1
           }
@@ -148,9 +151,12 @@ jobs:
             exit 1
           }
           $content = [System.IO.File]::ReadAllText($item.FullName, [System.Text.Encoding]::GetEncoding("ISO-8859-1"))
-          if ($content.Contains("dev_run_fake_sidecar") -or $content.Contains("dev_get_system_info")) {
-            Write-Error "Security guard violation: dev commands detected in release binary!"
-            exit 1
+          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace")
+          foreach ($cmd in $devCmds) {
+            if ($content.Contains($cmd)) {
+              Write-Error "Security guard violation: dev command '$cmd' detected in release binary!"
+              exit 1
+            }
           }
           Write-Host "Release binary verified: strict isolation confirmed (zero dev commands present)."
 
