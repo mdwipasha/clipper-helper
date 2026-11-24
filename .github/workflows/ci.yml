@@ -118,6 +118,9 @@ jobs:
       - name: Run ESLint
         run: pnpm run lint
 
+      - name: Build workspace packages
+        run: pnpm run build
+
       - name: TypeScript typecheck
         run: pnpm run typecheck
 
