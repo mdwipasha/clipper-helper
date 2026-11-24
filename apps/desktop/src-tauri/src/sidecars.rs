@@ -624,6 +624,34 @@ mod tests {
         }
     }
 
+    fn harness_supervisor_path() -> PathBuf {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest_bin = manifest_dir
+            .join("target")
+            .join("debug")
+            .join("harness-supervisor.exe");
+        if manifest_bin.exists() {
+            return manifest_bin;
+        }
+
+        let current_exe = std::env::current_exe().expect("current exe");
+        let mut curr = current_exe.parent();
+        while let Some(dir) = curr {
+            if dir.file_name().is_some_and(|n| n == "debug") {
+                let p = dir.join("harness-supervisor.exe");
+                if p.exists() {
+                    return p;
+                }
+            }
+            curr = dir.parent();
+        }
+
+        panic!(
+            "harness-supervisor binary not found at {:?}. Build it with `cargo build -p harness-supervisor`.",
+            manifest_bin
+        );
+    }
+
     #[cfg(windows)]
     fn is_pid_alive(pid: u32) -> bool {
         use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
@@ -845,27 +873,31 @@ mod tests {
     #[tokio::test]
     async fn test_abrupt_app_kill_terminates_job_tree() {
         use std::io::BufRead;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Threading::TerminateProcess;
 
-        let bin = fake_sidecar_path();
-        let mut supervisor = std::process::Command::new(&bin)
-            .args(["--mode", "supervisor-sim"])
+        let fake_bin = fake_sidecar_path();
+        let harness_bin = harness_supervisor_path();
+
+        let mut harness = std::process::Command::new(&harness_bin)
+            .arg(&fake_bin)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("spawn supervisor-sim");
+            .expect("spawn harness-supervisor");
 
-        let out = supervisor.stdout.take().expect("take supervisor stdout");
+        let out = harness.stdout.take().expect("take harness stdout");
         let mut reader = std::io::BufReader::new(out);
         let mut line = String::new();
         reader
             .read_line(&mut line)
-            .expect("read supervisor ready line");
+            .expect("read harness ready line");
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(
             parts.first(),
-            Some(&"SUPERVISOR_READY"),
-            "line was: {}",
+            Some(&"TREE_READY"),
+            "expected TREE_READY line, got: {}",
             line
         );
 
@@ -885,9 +917,25 @@ mod tests {
         assert!(child_pid > 0);
         assert!(grandchild_pid > 0);
 
-        let status = supervisor.wait().expect("wait supervisor exit");
-        assert_eq!(status.code(), Some(42));
+        // Verify both child and grandchild are alive
+        assert!(
+            is_pid_alive(child_pid),
+            "child PID {} must be running initially",
+            child_pid
+        );
+        assert!(
+            is_pid_alive(grandchild_pid),
+            "grandchild PID {} must be running initially",
+            grandchild_pid
+        );
 
+        // Abruptly terminate the harness supervisor process via Win32 TerminateProcess
+        unsafe {
+            let res = TerminateProcess(harness.as_raw_handle() as _, 99);
+            assert_ne!(res, 0, "TerminateProcess on harness must succeed");
+        }
+
+        // Wait up to 3 seconds for OS process cleanup of child and grandchild
         let mut child_dead = false;
         let mut grandchild_dead = false;
         for _ in 0..30 {

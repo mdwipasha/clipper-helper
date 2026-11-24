@@ -8,6 +8,7 @@ edition = "2021"
 members = [
     ".",
     "crates/fake-sidecar",
+    "crates/harness-supervisor",
 ]
 
 [lib]
