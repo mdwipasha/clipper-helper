@@ -103,7 +103,7 @@ pub fn is_host_allowed_release(host: &str) -> bool {
 
 /// Checks if a hostname is permitted by the security host allowlist.
 pub fn is_host_allowed(host: &str) -> bool {
-    #[cfg(any(debug_assertions, test))]
+    #[cfg(debug_assertions)]
     {
         let lower = host.to_lowercase();
         if lower == "127.0.0.1" || lower == "localhost" {
@@ -146,11 +146,11 @@ pub(crate) fn validate_download_url_internal(
     Ok(url)
 }
 
-/// Validates that a URL satisfies HTTPS-only (except loopback in dev/test) and host allowlist.
+/// Validates that a URL satisfies HTTPS-only (except loopback in debug builds) and host allowlist.
 pub fn validate_download_url(url_str: &str) -> Result<reqwest::Url, NetError> {
-    #[cfg(any(debug_assertions, test))]
+    #[cfg(debug_assertions)]
     let allow_loopback = true;
-    #[cfg(not(any(debug_assertions, test)))]
+    #[cfg(not(debug_assertions))]
     let allow_loopback = false;
 
     validate_download_url_internal(url_str, allow_loopback)
@@ -199,7 +199,8 @@ mod tests {
         )
         .is_ok());
 
-        // Local loopback in dev/test
+        // Local loopback in debug builds only
+        #[cfg(debug_assertions)]
         assert!(validate_download_url("http://127.0.0.1:8080/manifest.json").is_ok());
 
         // Release-assets on githubusercontent
@@ -297,5 +298,90 @@ mod tests {
                 .error_code(),
             "E_VERIFY_FAILED"
         );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn test_release_profile_rejects_loopback_and_no_debug_allowlist() {
+        assert!(!is_host_allowed("127.0.0.1"));
+        assert!(!is_host_allowed("localhost"));
+        assert!(!is_host_allowed("LOCALHOST"));
+
+        assert!(matches!(
+            validate_download_url("http://127.0.0.1:8080/manifest.json").unwrap_err(),
+            NetError::HttpsRequired(_)
+        ));
+        assert!(matches!(
+            validate_download_url("https://127.0.0.1:8080/manifest.json").unwrap_err(),
+            NetError::HostNotAllowed(_)
+        ));
+        assert!(matches!(
+            validate_download_url("http://localhost:8080/manifest.json").unwrap_err(),
+            NetError::HttpsRequired(_)
+        ));
+        assert!(matches!(
+            validate_download_url("https://localhost:8080/manifest.json").unwrap_err(),
+            NetError::HostNotAllowed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reqwest_connect_error_maps_to_net_offline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener); // Port is now closed
+
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("build client");
+
+        let err = client
+            .get(format!("http://127.0.0.1:{}/manifest.json", port))
+            .send()
+            .await
+            .expect_err("closed port must fail to connect");
+
+        assert!(
+            err.is_connect(),
+            "expected reqwest connect error: {:?}",
+            err
+        );
+        let mapped = map_reqwest_error(err);
+        assert!(matches!(mapped, NetError::Offline(_)));
+        assert_eq!(mapped.error_code(), "E_NET_OFFLINE");
+    }
+
+    #[tokio::test]
+    async fn test_reqwest_timeout_maps_to_net_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stalling listener");
+        let port = listener.local_addr().expect("local addr").port();
+
+        std::thread::spawn(move || {
+            if let Ok((_socket, _)) = listener.accept() {
+                // Hold connection open without sending any response bytes
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(150))
+            .build()
+            .expect("build client");
+
+        let err = client
+            .get(format!("http://127.0.0.1:{}/manifest.json", port))
+            .send()
+            .await
+            .expect_err("stalled server must trigger timeout");
+
+        assert!(
+            err.is_timeout(),
+            "expected reqwest timeout error: {:?}",
+            err
+        );
+        let mapped = map_reqwest_error(err);
+        assert!(matches!(mapped, NetError::Timeout(_)));
+        assert_eq!(mapped.error_code(), "E_NET_TIMEOUT");
     }
 }

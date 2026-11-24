@@ -648,15 +648,22 @@ mod tests {
         assert_eq!(started.port, Some(8080));
         assert!(started.url.is_some());
 
-        // Verify status reflects running state
+        // Verify status reflects running state & start is idempotent
         let status_running = dev_get_fixture_server_status();
         assert_eq!(status_running.state, "running");
+        let idempotent_start = dev_start_fixture_server().expect("idempotent start");
+        assert_eq!(idempotent_start.state, "running");
+        assert_eq!(idempotent_start.port, Some(8080));
 
         // Stop server
         let stop_res = dev_stop_fixture_server();
         assert!(stop_res.is_ok());
         let stopped = stop_res.unwrap();
         assert_eq!(stopped.state, "stopped");
+
+        // Idempotent stop
+        let stop_again = dev_stop_fixture_server().expect("idempotent stop");
+        assert_eq!(stop_again.state, "stopped");
 
         let status_stopped = dev_get_fixture_server_status();
         assert_eq!(status_stopped.state, "stopped");

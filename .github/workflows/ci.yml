@@ -138,8 +138,11 @@ jobs:
       - name: Build test binaries (fake-sidecar & harness-supervisor)
         run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p fake-sidecar -p harness-supervisor
 
-      - name: Rust Unit Tests
+      - name: Rust Unit Tests (Debug)
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+
+      - name: Rust Unit Tests (Release Profile)
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --release --all
 
       - name: Check build-time manifest sequence floor
         run: node tools/src/check-manifest-sequence.js

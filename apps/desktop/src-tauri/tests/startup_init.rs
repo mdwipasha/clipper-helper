@@ -3,6 +3,7 @@ use std::fs;
 use clipper_helper_desktop_lib::security::{self, ensure_workspace_with_root, SecurityError};
 use clipper_helper_desktop_lib::store::LocalStore;
 
+#[cfg(debug_assertions)]
 #[test]
 fn test_startup_from_non_existent_root_creates_workspace_and_initializes_db() {
     let unique_id = format!("test_ws_startup_{}", std::process::id());
@@ -117,4 +118,21 @@ fn test_junction_escape_outside_workspace_refused() {
     }
 
     let _ = fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn test_startup_explicit_root_creates_workspace_and_initializes_db() {
+    let dir = tempfile::TempDir::new().expect("create temp dir");
+    let test_dir = dir.path().join("workspace");
+
+    let ensured_root = ensure_workspace_with_root(&test_dir).expect("ensure_workspace_with_root");
+    assert!(ensured_root.exists());
+    for sub in &["bin", "models", "cache", "projects", "logs"] {
+        assert!(ensured_root.join(sub).is_dir());
+    }
+
+    let db_path = ensured_root.join("clipper.db");
+    let store = LocalStore::open(&db_path).expect("failed to open LocalStore");
+    assert!(db_path.exists());
+    assert!(store.schema_version().expect("schema version") >= 1);
 }
