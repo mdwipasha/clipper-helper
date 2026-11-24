@@ -165,7 +165,7 @@ jobs:
             exit 1
           }
           $content = [System.IO.File]::ReadAllText($item.FullName, [System.Text.Encoding]::GetEncoding("ISO-8859-1"))
-          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace")
+          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace", "find_node_executable", "CLIPPER_DEV_NODE_PATH", "fnm_multishells", "NVM_HOME", "where.exe")
           foreach ($cmd in $devCmds) {
             if ($content.Contains($cmd)) {
               Write-Error "Security guard violation: dev command '$cmd' detected in release binary!"

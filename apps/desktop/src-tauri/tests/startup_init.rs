@@ -136,3 +136,47 @@ fn test_startup_explicit_root_creates_workspace_and_initializes_db() {
     assert!(db_path.exists());
     assert!(store.schema_version().expect("schema version") >= 1);
 }
+
+#[test]
+fn test_node_discovery_exists_only_under_debug_assertions() {
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src.contains("#[cfg(debug_assertions)]\r\npub mod dev_commands;")
+            || lib_src.contains("#[cfg(debug_assertions)]\npub mod dev_commands;"),
+        "dev_commands module must be strictly gated under #[cfg(debug_assertions)]"
+    );
+
+    let dev_src = include_str!("../src/dev_commands.rs");
+    assert!(
+        dev_src.contains("#![cfg(debug_assertions)]"),
+        "dev_commands.rs must enforce #![cfg(debug_assertions)] at crate module level"
+    );
+
+    let prod_modules: &[(&str, &str)] = &[
+        ("commands.rs", include_str!("../src/commands.rs")),
+        ("manifest.rs", include_str!("../src/manifest.rs")),
+        ("net.rs", include_str!("../src/net.rs")),
+        ("security.rs", include_str!("../src/security.rs")),
+        ("sidecars.rs", include_str!("../src/sidecars.rs")),
+        ("store.rs", include_str!("../src/store.rs")),
+        ("updater.rs", include_str!("../src/updater.rs")),
+    ];
+
+    for (name, src) in prod_modules {
+        for forbidden in [
+            "find_node_executable",
+            "CLIPPER_DEV_NODE_PATH",
+            "fnm_multishells",
+            "NVM_HOME",
+            "NVM_SYMLINK",
+            "where.exe",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "Production module {} must not contain Node discovery reference '{}'",
+                name,
+                forbidden
+            );
+        }
+    }
+}

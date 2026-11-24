@@ -128,6 +128,27 @@ describe('Security Baseline Guard', () => {
       expect(str.includes('dev_start_fixture_server')).toBe(false);
       expect(str.includes('dev_fetch_manifest')).toBe(false);
       expect(str.includes('dev_download_component')).toBe(false);
+      expect(str.includes('find_node_executable')).toBe(false);
+      expect(str.includes('CLIPPER_DEV_NODE_PATH')).toBe(false);
+      expect(str.includes('fnm_multishells')).toBe(false);
+      expect(str.includes('NVM_HOME')).toBe(false);
+      expect(str.includes('where.exe')).toBe(false);
+    }
+  });
+
+  it('asserts Node discovery (nvm/fnm/where.exe) exists strictly under cfg(debug_assertions)', () => {
+    const srcDir = path.resolve(__dirname, '../apps/desktop/src-tauri/src');
+    const rustFiles = fs.readdirSync(srcDir).filter((f) => f.endsWith('.rs'));
+
+    const devCmdsContent = fs.readFileSync(path.join(srcDir, 'dev_commands.rs'), 'utf8');
+    expect(devCmdsContent).toContain('#![cfg(debug_assertions)]');
+
+    for (const file of rustFiles) {
+      if (file === 'dev_commands.rs' || file === 'lib.rs') continue;
+      const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
+      expect(content).not.toMatch(
+        /find_node_executable|where\.exe|fnm_multishells|NVM_HOME|NVM_SYMLINK/
+      );
     }
   });
 

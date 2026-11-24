@@ -273,6 +273,23 @@ pub fn find_node_executable() -> Result<PathBuf, String> {
         }
     }
 
+    if let Ok(nvm_symlink) = std::env::var("NVM_SYMLINK") {
+        let p = PathBuf::from(&nvm_symlink).join("node.exe");
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    if let Ok(nvm_home) = std::env::var("NVM_HOME") {
+        if let Ok(entries) = std::fs::read_dir(&nvm_home) {
+            for entry in entries.flatten() {
+                let p = entry.path().join("node.exe");
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
+        }
+    }
+
     // Try `where.exe node` on Windows to find it from system PATH
     if let Ok(output) = Command::new("where.exe").arg("node").output() {
         if output.status.success() {
