@@ -19,6 +19,10 @@ pub enum NetError {
     RedirectForbidden(String),
     #[error("HTTP error {0}: {1}")]
     HttpError(u16, String),
+    #[error("Manifest verification failed: {0}")]
+    ManifestInvalid(String),
+    #[error("Manifest sequence rollback rejected: received {received}, expected >= {floor}")]
+    ManifestStale { received: u64, floor: u64 },
     #[error("Downloaded payload exceeds declared size: received {actual} bytes, expected {declared} bytes")]
     SizeExceeded { actual: u64, declared: u64 },
     #[error("Streamed payload size mismatch: received {actual} bytes, expected {declared} bytes")]
@@ -40,6 +44,8 @@ pub enum NetError {
 impl NetError {
     pub fn error_code(&self) -> &'static str {
         match self {
+            NetError::ManifestInvalid(_) => "E_MANIFEST_INVALID",
+            NetError::ManifestStale { .. } => "E_MANIFEST_STALE",
             NetError::Timeout(_) => "E_NET_TIMEOUT",
             NetError::Offline(_) => "E_NET_OFFLINE",
             NetError::DiskFull(_) => "E_DISK_FULL",
@@ -57,26 +63,36 @@ impl NetError {
     }
 }
 
+/// Maps a reqwest::Error to the appropriate NetError taxonomy variant.
+pub fn map_reqwest_error(e: reqwest::Error) -> NetError {
+    if e.is_timeout() {
+        NetError::Timeout(e.to_string())
+    } else if e.is_connect() {
+        NetError::Offline(e.to_string())
+    } else if let Some(status) = e.status() {
+        NetError::HttpError(status.as_u16(), status.to_string())
+    } else {
+        NetError::Offline(e.to_string())
+    }
+}
+
+/// Primary owned CDN host for official binary and model artifact distribution (SECURITY §11).
+pub const PRIMARY_CDN_HOST: &str = "cdn.clipperhelper.com";
+
 /// Allowlisted hosts for manifest and component artifact downloads.
+/// Includes redirect destinations like release-assets.githubusercontent.com.
 const ALLOWED_HOST_SUFFIXES: &[&str] = &[
     "clipperhelper.com",
     "r2.cloudflarestorage.com",
     "github.com",
     "githubusercontent.com",
+    "release-assets.githubusercontent.com",
     "huggingface.co",
 ];
 
-/// Checks if a hostname is permitted by the security host allowlist.
-pub fn is_host_allowed(host: &str) -> bool {
+/// Checks if a hostname is permitted strictly under production release rules.
+pub fn is_host_allowed_release(host: &str) -> bool {
     let lower = host.to_lowercase();
-
-    #[cfg(any(debug_assertions, test))]
-    {
-        if lower == "127.0.0.1" || lower == "localhost" {
-            return true;
-        }
-    }
-
     for suffix in ALLOWED_HOST_SUFFIXES {
         if lower == *suffix || lower.ends_with(&format!(".{}", suffix)) {
             return true;
@@ -85,31 +101,59 @@ pub fn is_host_allowed(host: &str) -> bool {
     false
 }
 
-/// Validates that a URL satisfies HTTPS-only (except loopback in dev/test) and host allowlist.
-pub fn validate_download_url(url_str: &str) -> Result<reqwest::Url, NetError> {
+/// Checks if a hostname is permitted by the security host allowlist.
+pub fn is_host_allowed(host: &str) -> bool {
+    #[cfg(any(debug_assertions, test))]
+    {
+        let lower = host.to_lowercase();
+        if lower == "127.0.0.1" || lower == "localhost" {
+            return true;
+        }
+    }
+
+    is_host_allowed_release(host)
+}
+
+/// Internal URL validator parameterized by loopback permission.
+pub(crate) fn validate_download_url_internal(
+    url_str: &str,
+    allow_loopback: bool,
+) -> Result<reqwest::Url, NetError> {
     let url = reqwest::Url::parse(url_str).map_err(|e| NetError::UrlInvalid(e.to_string()))?;
 
     let host = url
         .host_str()
         .ok_or_else(|| NetError::UrlInvalid("URL has no host".to_string()))?;
 
+    let lower = host.to_lowercase();
+    let is_loopback = lower == "127.0.0.1" || lower == "localhost";
+
     if url.scheme() != "https" {
-        #[cfg(any(debug_assertions, test))]
-        {
-            let is_loopback = host == "127.0.0.1" || host == "localhost";
-            if is_loopback && url.scheme() == "http" {
-                // Permitted in debug/test for local dev-server
-                return Ok(url);
-            }
+        if allow_loopback && is_loopback && url.scheme() == "http" {
+            return Ok(url);
         }
         return Err(NetError::HttpsRequired(url_str.to_string()));
     }
 
-    if !is_host_allowed(host) {
+    if allow_loopback && is_loopback {
+        return Ok(url);
+    }
+
+    if !is_host_allowed_release(&lower) {
         return Err(NetError::HostNotAllowed(host.to_string()));
     }
 
     Ok(url)
+}
+
+/// Validates that a URL satisfies HTTPS-only (except loopback in dev/test) and host allowlist.
+pub fn validate_download_url(url_str: &str) -> Result<reqwest::Url, NetError> {
+    #[cfg(any(debug_assertions, test))]
+    let allow_loopback = true;
+    #[cfg(not(any(debug_assertions, test)))]
+    let allow_loopback = false;
+
+    validate_download_url_internal(url_str, allow_loopback)
 }
 
 /// Creates a hardened `reqwest::Client` with rustls TLS, strict redirect filtering, and timeouts.
@@ -158,6 +202,12 @@ mod tests {
         // Local loopback in dev/test
         assert!(validate_download_url("http://127.0.0.1:8080/manifest.json").is_ok());
 
+        // Release-assets on githubusercontent
+        assert!(validate_download_url(
+            "https://release-assets.githubusercontent.com/123/asset.zip"
+        )
+        .is_ok());
+
         // Disallowed external HTTP
         assert!(matches!(
             validate_download_url("http://cdn.clipperhelper.com/manifest.json").unwrap_err(),
@@ -173,5 +223,79 @@ mod tests {
             validate_download_url("https://malicious.org/model.bin").unwrap_err(),
             NetError::HostNotAllowed(_)
         ));
+    }
+
+    #[test]
+    fn test_release_validation_rejects_loopback() {
+        // In release mode (allow_loopback = false), all loopback URLs must be rejected
+        let res_http = validate_download_url_internal("http://127.0.0.1:8080/manifest.json", false);
+        assert!(matches!(res_http.unwrap_err(), NetError::HttpsRequired(_)));
+
+        let res_https =
+            validate_download_url_internal("https://127.0.0.1:8080/manifest.json", false);
+        assert!(matches!(
+            res_https.unwrap_err(),
+            NetError::HostNotAllowed(_)
+        ));
+
+        let res_localhost =
+            validate_download_url_internal("http://localhost:8080/manifest.json", false);
+        assert!(matches!(
+            res_localhost.unwrap_err(),
+            NetError::HttpsRequired(_)
+        ));
+
+        // Legitimate CDN and GitHub assets must still be accepted in release
+        assert!(
+            validate_download_url_internal("https://cdn.clipperhelper.com/yt-dlp.zip", false)
+                .is_ok()
+        );
+        assert!(validate_download_url_internal(
+            "https://release-assets.githubusercontent.com/asset.zip",
+            false
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn test_error_code_mapping() {
+        assert_eq!(
+            NetError::Offline("connection refused".into()).error_code(),
+            "E_NET_OFFLINE"
+        );
+        assert_eq!(
+            NetError::Timeout("timed out".into()).error_code(),
+            "E_NET_TIMEOUT"
+        );
+        assert_eq!(
+            NetError::ManifestInvalid("bad signature".into()).error_code(),
+            "E_MANIFEST_INVALID"
+        );
+        assert_eq!(
+            NetError::ManifestStale {
+                received: 1,
+                floor: 2
+            }
+            .error_code(),
+            "E_MANIFEST_STALE"
+        );
+        assert_eq!(
+            NetError::DiskFull("0 bytes free".into()).error_code(),
+            "E_DISK_FULL"
+        );
+        assert_eq!(
+            NetError::DiskLow("10 MB free".into()).error_code(),
+            "E_DISK_LOW"
+        );
+        assert_eq!(
+            NetError::VerificationFailed("whisper.bin".into(), "expected".into(), "actual".into())
+                .error_code(),
+            "E_MODEL_DOWNLOAD_FAILED"
+        );
+        assert_eq!(
+            NetError::VerificationFailed("ffmpeg.exe".into(), "expected".into(), "actual".into())
+                .error_code(),
+            "E_VERIFY_FAILED"
+        );
     }
 }

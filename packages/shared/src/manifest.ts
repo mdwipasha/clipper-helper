@@ -19,6 +19,7 @@ export const ComponentManifestEntrySchema = z.object({
   version: z.string().min(1),
   platform: z.string().min(1),
   url: z.string().url(),
+  mirrors: z.array(z.string().url()).default([]),
   size_bytes: z.number().int().nonnegative(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i, 'Must be valid 64-character lowercase hex SHA-256'),
   archive: z.enum(['none', 'zip']),

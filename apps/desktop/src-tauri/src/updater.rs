@@ -15,7 +15,7 @@ use specta::Type;
 use tokio_util::sync::CancellationToken;
 
 use crate::manifest::{self, ComponentManifest, ComponentManifestEntry, ManifestPublicKey};
-use crate::net::{create_secure_client, validate_download_url, NetError};
+use crate::net::{create_secure_client, map_reqwest_error, validate_download_url, NetError};
 use crate::security;
 
 /// Lock tracking in-progress downloads to prevent duplicate concurrent transfers of the same component.
@@ -198,7 +198,7 @@ where
                     tokio::time::sleep(Duration::from_millis(500 * (1 << (attempts - 1)))).await;
                     continue;
                 }
-                return Err(NetError::Offline(e.to_string()));
+                return Err(map_reqwest_error(e));
             }
         }
     }
@@ -256,7 +256,7 @@ where
             }
         }
 
-        let chunk = chunk_res.map_err(|e| NetError::Offline(e.to_string()))?;
+        let chunk = chunk_res.map_err(map_reqwest_error)?;
         let chunk_len = chunk.len() as u64;
 
         // Strict size check: abort if streamed bytes exceed declared size
@@ -387,33 +387,27 @@ pub async fn fetch_and_verify_manifest(
         .get(valid_manifest_url)
         .send()
         .await
-        .map_err(|e| NetError::Offline(e.to_string()))?;
+        .map_err(map_reqwest_error)?;
     if !manifest_resp.status().is_success() {
         return Err(NetError::HttpError(
             manifest_resp.status().as_u16(),
             manifest_resp.status().to_string(),
         ));
     }
-    let manifest_bytes = manifest_resp
-        .bytes()
-        .await
-        .map_err(|e| NetError::Offline(e.to_string()))?;
+    let manifest_bytes = manifest_resp.bytes().await.map_err(map_reqwest_error)?;
 
     let sig_resp = client
         .get(valid_sig_url)
         .send()
         .await
-        .map_err(|e| NetError::Offline(e.to_string()))?;
+        .map_err(map_reqwest_error)?;
     if !sig_resp.status().is_success() {
         return Err(NetError::HttpError(
             sig_resp.status().as_u16(),
             sig_resp.status().to_string(),
         ));
     }
-    let sig_bytes = sig_resp
-        .bytes()
-        .await
-        .map_err(|e| NetError::Offline(e.to_string()))?;
+    let sig_bytes = sig_resp.bytes().await.map_err(map_reqwest_error)?;
 
     manifest::verify_and_accept_manifest(
         &manifest_bytes,
@@ -423,11 +417,13 @@ pub async fn fetch_and_verify_manifest(
         extra_keys,
     )
     .map_err(|e| match e {
-        manifest::ManifestError::BadSignature(_) => NetError::VerificationFailed(
-            "manifest.json".into(),
-            "valid signature".into(),
-            "invalid".into(),
-        ),
-        other => NetError::Offline(other.to_string()),
+        manifest::ManifestError::SequenceRollback {
+            received,
+            last_accepted,
+        } => NetError::ManifestStale {
+            received,
+            floor: last_accepted,
+        },
+        other => NetError::ManifestInvalid(other.to_string()),
     })
 }

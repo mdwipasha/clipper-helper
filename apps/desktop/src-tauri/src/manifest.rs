@@ -26,9 +26,17 @@ pub enum ManifestError {
 
 impl ManifestError {
     pub fn error_code(&self) -> &'static str {
-        "E_VERIFY_FAILED"
+        match self {
+            ManifestError::SequenceRollback { .. } => "E_MANIFEST_STALE",
+            _ => "E_MANIFEST_INVALID",
+        }
     }
 }
+
+/// Build-time floor for manifest sequence number.
+/// Prevents replay and rollback attacks even if the local database is reset, recreated,
+/// or recovered from corruption (ARCHITECTURE §9, §13).
+pub const MIN_MANIFEST_SEQUENCE: u64 = 1;
 
 /// Embedded public key entry with kid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +71,8 @@ pub struct ComponentManifestEntry {
     pub version: String,
     pub platform: String,
     pub url: String,
+    #[serde(default)]
+    pub mirrors: Vec<String>,
     pub size_bytes: u64,
     pub sha256: String,
     pub archive: String, // "none" | "zip"
@@ -280,6 +290,7 @@ pub fn verify_and_accept_manifest(
     let last_seq = store
         .get_manifest_sequence()
         .map_err(|e| ManifestError::MalformedManifest(e.to_string()))?;
+    let effective_floor = std::cmp::max(last_seq, MIN_MANIFEST_SEQUENCE);
     let install_id = store
         .get_or_create_install_id()
         .map_err(|e| ManifestError::MalformedManifest(e.to_string()))?;
@@ -289,7 +300,7 @@ pub fn verify_and_accept_manifest(
         raw_sig_bytes,
         app_version,
         &install_id,
-        last_seq,
+        effective_floor,
         extra_keys,
     )?;
 
@@ -490,5 +501,44 @@ mod tests {
             }
         ));
         assert_eq!(store.get_manifest_sequence().unwrap(), 12);
+    }
+
+    #[test]
+    fn test_anti_rollback_floor_survives_db_reset() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("clipper.db");
+        let store = crate::store::LocalStore::open(&db_path).unwrap();
+
+        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+        let pub_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let extra_keys = [ManifestPublicKey {
+            kid: "dev-floor-test-key",
+            public_key_hex: Box::leak(pub_hex.into_boxed_str()),
+        }];
+
+        // Manifest with sequence 0 (< MIN_MANIFEST_SEQUENCE which is 1)
+        let manifest_0 = br#"{"schema": 1, "sequence": 0, "generated_at": "2026-11-24T12:00:00Z", "channel": "dev", "components": []}"#;
+        use ed25519_dalek::Signer;
+        let sig_0 = signing_key.sign(manifest_0);
+        let sig_0_json = format!(
+            r#"{{"kid": "dev-floor-test-key", "signature": "{}"}}"#,
+            hex::encode(sig_0.to_bytes())
+        );
+
+        // Even with a freshly initialized store (persisted seq = 0), sequence 0 must be rejected!
+        let res_0 = verify_and_accept_manifest(
+            manifest_0,
+            sig_0_json.as_bytes(),
+            "0.1.0",
+            &store,
+            Some(&extra_keys),
+        );
+        assert!(matches!(
+            res_0.unwrap_err(),
+            ManifestError::SequenceRollback {
+                received: 0,
+                last_accepted: 1
+            }
+        ));
     }
 }

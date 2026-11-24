@@ -155,6 +155,8 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 |------|---------|-----------|---------|
 | `E_NET_OFFLINE` | No internet | yes | Retry · Check connection |
 | `E_NET_TIMEOUT` | Request/download timed out | yes | Retry |
+| `E_MANIFEST_INVALID` | Manifest verification failed (bad signature, unknown kid, malformed JSON, schema mismatch) | no | Contact support · Retry · Update app |
+| `E_MANIFEST_STALE` | Manifest sequence is older than last accepted or build floor (rollback attack prevention) | no | Check update channel · Retry |
 | `E_YT_URL_INVALID` | Not a supported YouTube video URL | no | Fix link |
 | `E_YT_UNAVAILABLE` | Video unavailable on YouTube. Carries a `reason` enum (`members_only` \| `age_restricted` \| `region_blocked` \| `private` \| `deleted` \| `unknown`) to choose the exact Indonesian message per PRD FR-SRC-2 | no | Try another video / local file |
 | `E_YT_LIVE_NOT_ENDED` | Stream still live or premiere not started (VOD not ready) | yes | Try again after the stream ends |
