@@ -105,19 +105,21 @@ export function startDevServer({ port = 0, rootDir }) {
             : 'application/octet-stream',
         };
 
+        // Mode: oversize body (send more bytes than declared size)
+        if (testMode === 'oversize') {
+          headers['Content-Length'] = contentLength + 8192;
+          res.writeHead(200, headers);
+          res.write(sliceToSend);
+          res.write(Buffer.alloc(8192, 0xaa));
+          res.end();
+          return;
+        }
+
         if (isRange) {
           headers['Content-Range'] = `bytes ${start}-${end}/${totalSize}`;
           res.writeHead(206, headers);
         } else {
           res.writeHead(200, headers);
-        }
-
-        // Mode: oversize body (send more bytes than declared Content-Length)
-        if (testMode === 'oversize') {
-          res.write(sliceToSend);
-          res.write(Buffer.alloc(8192, 0xaa));
-          res.end();
-          return;
         }
 
         // Mode: drop connection mid-transfer
@@ -174,3 +176,33 @@ export function startDevServer({ port = 0, rootDir }) {
     server.on('error', reject);
   });
 }
+
+// CLI runner
+if (
+  process.argv[1] &&
+  (path.resolve(process.argv[1]) === path.resolve(url.fileURLToPath(import.meta.url)) ||
+    process.argv[1].endsWith('dev-server.js'))
+) {
+  let port = 0;
+  let rootDir = process.cwd();
+
+  for (let i = 2; i < process.argv.length; i++) {
+    if (process.argv[i] === '--port' && process.argv[i + 1]) {
+      port = parseInt(process.argv[i + 1], 10);
+      i++;
+    } else if (process.argv[i] === '--root' && process.argv[i + 1]) {
+      rootDir = path.resolve(process.argv[i + 1]);
+      i++;
+    }
+  }
+
+  startDevServer({ port, rootDir })
+    .then(({ url: serverUrl }) => {
+      console.log(`SERVER_READY: ${serverUrl}`);
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+}
+
