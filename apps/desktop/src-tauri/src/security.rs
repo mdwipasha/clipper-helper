@@ -361,6 +361,74 @@ pub fn resolve_workspace_path_with_root(
     Ok(target)
 }
 
+/// Validates an individual path segment (component, version, filename).
+fn validate_path_segment(segment: &str) -> Result<(), SecurityError> {
+    if segment.is_empty() || segment.len() > 100 {
+        return Err(SecurityError::InvalidFormat(format!(
+            "Invalid segment length: {}",
+            segment.len()
+        )));
+    }
+    if segment.contains('/')
+        || segment.contains('\\')
+        || segment.contains(':')
+        || segment.contains("..")
+    {
+        return Err(SecurityError::InvalidFormat(segment.to_string()));
+    }
+    if SHORT_NAME_REGEX.is_match(segment) {
+        return Err(SecurityError::ShortNameForbidden(segment.to_string()));
+    }
+    if RESERVED_DEVICE_REGEX.is_match(segment) {
+        return Err(SecurityError::ReservedDeviceNameForbidden(
+            segment.to_string(),
+        ));
+    }
+    if segment.ends_with('.') || segment.ends_with(' ') {
+        return Err(SecurityError::TrailingDotOrSpaceForbidden(
+            segment.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Checks whether an executable name is in the trusted binary allowlist.
+pub fn is_allowed_bin(exe: &str) -> bool {
+    match exe {
+        "yt-dlp.exe" | "qjs.exe" | "ffmpeg.exe" | "ffprobe.exe" | "whisper-cli.exe" => true,
+        #[cfg(any(debug_assertions, test))]
+        "fake-sidecar.exe" => true,
+        _ => false,
+    }
+}
+
+/// Checks whether a component and executable pair is allowed.
+pub fn is_valid_component_and_exe(component: &str, exe: &str) -> bool {
+    match (component, exe) {
+        ("yt-dlp", "yt-dlp.exe") => true,
+        ("quickjs" | "qjs", "qjs.exe") => true,
+        ("ffmpeg", "ffmpeg.exe" | "ffprobe.exe") => true,
+        ("whisper" | "whisper-cli", "whisper-cli.exe") => true,
+        #[cfg(any(debug_assertions, test))]
+        ("fake-sidecar", "fake-sidecar.exe") => true,
+        _ => false,
+    }
+}
+
+/// Checks whether a speech model filename is in the models allowlist.
+pub fn is_allowed_model(filename: &str) -> bool {
+    matches!(
+        filename,
+        "ggml-silero-v6.2.0.bin"
+            | "ggml-base.bin"
+            | "ggml-small-q5_1.bin"
+            | "ggml-small.bin"
+            | "ggml-medium.bin"
+            | "ggml-tiny.bin"
+            | "ggml-large-v3.bin"
+    )
+}
+
 /// Category of trusted workspace components (sidecar binaries or speech models).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentKind {
@@ -378,59 +446,39 @@ impl ComponentKind {
 
     pub fn is_allowed(&self, filename: &str) -> bool {
         match self {
-            ComponentKind::Bin => matches!(
-                filename,
-                "yt-dlp.exe"
-                    | "ffmpeg.exe"
-                    | "ffprobe.exe"
-                    | "qjs.exe"
-                    | "whisper.exe"
-                    | "fake-sidecar.exe"
-            ),
-            ComponentKind::Models => matches!(
-                filename,
-                "ggml-tiny.bin"
-                    | "ggml-base.bin"
-                    | "ggml-small.bin"
-                    | "ggml-small-q5_1.bin"
-                    | "ggml-medium.bin"
-                    | "ggml-large-v3.bin"
-            ),
+            ComponentKind::Bin => is_allowed_bin(filename),
+            ComponentKind::Models => is_allowed_model(filename),
         }
     }
 }
 
-/// Resolves a component executable or model file against the default workspace root.
-pub fn resolve_component_path(kind: ComponentKind, name: &str) -> Result<PathBuf, SecurityError> {
+/// Resolves a versioned component binary against the default workspace root.
+pub fn resolve_component_path(
+    component: &str,
+    version: &str,
+    exe: &str,
+) -> Result<PathBuf, SecurityError> {
     let root = get_workspace_root()?;
-    resolve_component_path_with_root(&root, kind, name)
+    resolve_component_path_with_root(&root, component, version, exe)
 }
 
-/// Resolves a component file against an explicit workspace root, enforcing allowlist and containment.
+/// Resolves a versioned component binary `bin/<component>/<version>/<exe>` against an explicit workspace root.
 pub fn resolve_component_path_with_root(
     root: &Path,
-    kind: ComponentKind,
-    name: &str,
+    component: &str,
+    version: &str,
+    exe: &str,
 ) -> Result<PathBuf, SecurityError> {
-    if !kind.is_allowed(name) {
-        return Err(SecurityError::ComponentNotAllowlisted(name.to_string()));
+    if !is_valid_component_and_exe(component, exe) {
+        return Err(SecurityError::ComponentNotAllowlisted(format!(
+            "{}/{}",
+            component, exe
+        )));
     }
 
-    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains(':') {
-        return Err(SecurityError::InvalidFormat(name.to_string()));
-    }
-
-    if SHORT_NAME_REGEX.is_match(name) {
-        return Err(SecurityError::ShortNameForbidden(name.to_string()));
-    }
-
-    if RESERVED_DEVICE_REGEX.is_match(name) {
-        return Err(SecurityError::ReservedDeviceNameForbidden(name.to_string()));
-    }
-
-    if name.ends_with('.') || name.ends_with(' ') {
-        return Err(SecurityError::TrailingDotOrSpaceForbidden(name.to_string()));
-    }
+    validate_path_segment(component)?;
+    validate_path_segment(version)?;
+    validate_path_segment(exe)?;
 
     if !root.exists() {
         return Err(SecurityError::WorkspaceRootMissing(
@@ -438,8 +486,10 @@ pub fn resolve_component_path_with_root(
         ));
     }
 
-    let comp_dir = root.join(kind.subdir());
-    let target = comp_dir.join(name);
+    let bin_dir = root.join("bin");
+    let comp_dir = bin_dir.join(component);
+    let ver_dir = comp_dir.join(version);
+    let target = ver_dir.join(exe);
 
     let canonical_root = dunce::canonicalize(root).map_err(|e| {
         if !root.exists() {
@@ -453,9 +503,17 @@ pub fn resolve_component_path_with_root(
         dunce::canonicalize(&target).map_err(|e| {
             SecurityError::BoundaryEscape(format!("Canonicalize target failed: {}", e))
         })?
+    } else if ver_dir.exists() {
+        dunce::canonicalize(&ver_dir).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize version dir failed: {}", e))
+        })?
     } else if comp_dir.exists() {
         dunce::canonicalize(&comp_dir).map_err(|e| {
             SecurityError::BoundaryEscape(format!("Canonicalize component dir failed: {}", e))
+        })?
+    } else if bin_dir.exists() {
+        dunce::canonicalize(&bin_dir).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize bin dir failed: {}", e))
         })?
     } else {
         canonical_root.clone()
@@ -466,6 +524,62 @@ pub fn resolve_component_path_with_root(
     if !norm_check.starts_with(&norm_root) {
         return Err(SecurityError::BoundaryEscape(format!(
             "Component path '{}' escapes root '{}'",
+            check_path.display(),
+            canonical_root.display()
+        )));
+    }
+
+    Ok(target)
+}
+
+/// Resolves a speech model file against the default workspace root.
+pub fn resolve_model_path(file: &str) -> Result<PathBuf, SecurityError> {
+    let root = get_workspace_root()?;
+    resolve_model_path_with_root(&root, file)
+}
+
+/// Resolves a speech model file `models/<file>` against an explicit workspace root.
+pub fn resolve_model_path_with_root(root: &Path, file: &str) -> Result<PathBuf, SecurityError> {
+    if !is_allowed_model(file) {
+        return Err(SecurityError::ComponentNotAllowlisted(file.to_string()));
+    }
+
+    validate_path_segment(file)?;
+
+    if !root.exists() {
+        return Err(SecurityError::WorkspaceRootMissing(
+            root.display().to_string(),
+        ));
+    }
+
+    let models_dir = root.join("models");
+    let target = models_dir.join(file);
+
+    let canonical_root = dunce::canonicalize(root).map_err(|e| {
+        if !root.exists() {
+            SecurityError::WorkspaceRootMissing(root.display().to_string())
+        } else {
+            SecurityError::RootResolutionFailed(format!("Canonicalize root failed: {}", e))
+        }
+    })?;
+
+    let check_path = if target.exists() {
+        dunce::canonicalize(&target).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize target failed: {}", e))
+        })?
+    } else if models_dir.exists() {
+        dunce::canonicalize(&models_dir).map_err(|e| {
+            SecurityError::BoundaryEscape(format!("Canonicalize models dir failed: {}", e))
+        })?
+    } else {
+        canonical_root.clone()
+    };
+
+    let norm_check = check_path.to_string_lossy().to_lowercase();
+    let norm_root = canonical_root.to_string_lossy().to_lowercase();
+    if !norm_check.starts_with(&norm_root) {
+        return Err(SecurityError::BoundaryEscape(format!(
+            "Model path '{}' escapes root '{}'",
             check_path.display(),
             canonical_root.display()
         )));
@@ -837,61 +951,92 @@ mod tests {
         let _ = fs::remove_dir_all(&test_base);
         ensure_workspace_with_root(&test_base).unwrap();
 
-        // Allowlisted binaries
+        // Allowlisted versioned binaries
         assert!(
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "yt-dlp.exe").is_ok()
+            resolve_component_path_with_root(&test_base, "yt-dlp", "2026.10.26", "yt-dlp.exe")
+                .is_ok()
         );
         assert!(
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "ffmpeg.exe").is_ok()
+            resolve_component_path_with_root(&test_base, "ffmpeg", "n9.0.2", "ffmpeg.exe").is_ok()
         );
         assert!(
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "ffprobe.exe").is_ok()
+            resolve_component_path_with_root(&test_base, "ffmpeg", "n9.0.2", "ffprobe.exe").is_ok()
         );
         assert!(
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "qjs.exe").is_ok()
+            resolve_component_path_with_root(&test_base, "quickjs", "2024.01", "qjs.exe").is_ok()
         );
-        assert!(
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "whisper.exe").is_ok()
-        );
+        assert!(resolve_component_path_with_root(&test_base, "qjs", "2024.01", "qjs.exe").is_ok());
         assert!(resolve_component_path_with_root(
             &test_base,
-            ComponentKind::Bin,
+            "whisper-cli",
+            "v1.9.5",
+            "whisper-cli.exe"
+        )
+        .is_ok());
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            "whisper",
+            "v1.9.5",
+            "whisper-cli.exe"
+        )
+        .is_ok());
+        #[cfg(any(debug_assertions, test))]
+        assert!(resolve_component_path_with_root(
+            &test_base,
+            "fake-sidecar",
+            "1.0.0",
             "fake-sidecar.exe"
         )
         .is_ok());
 
-        // Disallowed binary
-        let disallowed =
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "cmd.exe");
+        // Disallowed binary executable
+        let disallowed_exe =
+            resolve_component_path_with_root(&test_base, "yt-dlp", "2026.10.26", "cmd.exe");
         assert!(matches!(
-            disallowed.unwrap_err(),
+            disallowed_exe.unwrap_err(),
             SecurityError::ComponentNotAllowlisted(_)
         ));
 
-        // Allowlisted models
-        assert!(resolve_component_path_with_root(
-            &test_base,
-            ComponentKind::Models,
-            "ggml-tiny.bin"
-        )
-        .is_ok());
-        assert!(resolve_component_path_with_root(
-            &test_base,
-            ComponentKind::Models,
-            "ggml-base.bin"
-        )
-        .is_ok());
-        assert!(resolve_component_path_with_root(
-            &test_base,
-            ComponentKind::Models,
-            "ggml-small.bin"
-        )
-        .is_ok());
+        // Disallowed component
+        let disallowed_comp =
+            resolve_component_path_with_root(&test_base, "powershell", "1.0", "powershell.exe");
+        assert!(matches!(
+            disallowed_comp.unwrap_err(),
+            SecurityError::ComponentNotAllowlisted(_)
+        ));
 
-        // Traversal attempt in component name
-        let trav =
-            resolve_component_path_with_root(&test_base, ComponentKind::Bin, "../bin/yt-dlp.exe");
-        assert!(trav.is_err());
+        // Mismatched component and binary
+        let mismatched =
+            resolve_component_path_with_root(&test_base, "yt-dlp", "2026.10.26", "ffmpeg.exe");
+        assert!(matches!(
+            mismatched.unwrap_err(),
+            SecurityError::ComponentNotAllowlisted(_)
+        ));
+
+        // Traversal attempt in version or component
+        assert!(
+            resolve_component_path_with_root(&test_base, "yt-dlp", "../v1", "yt-dlp.exe").is_err()
+        );
+        assert!(
+            resolve_component_path_with_root(&test_base, "../yt-dlp", "v1", "yt-dlp.exe").is_err()
+        );
+
+        // Allowlisted models in models/<file>
+        assert!(resolve_model_path_with_root(&test_base, "ggml-silero-v6.2.0.bin").is_ok());
+        assert!(resolve_model_path_with_root(&test_base, "ggml-base.bin").is_ok());
+        assert!(resolve_model_path_with_root(&test_base, "ggml-small-q5_1.bin").is_ok());
+        assert!(resolve_model_path_with_root(&test_base, "ggml-small.bin").is_ok());
+        assert!(resolve_model_path_with_root(&test_base, "ggml-medium.bin").is_ok());
+
+        // Disallowed model
+        let disallowed_model = resolve_model_path_with_root(&test_base, "untrusted-model.bin");
+        assert!(matches!(
+            disallowed_model.unwrap_err(),
+            SecurityError::ComponentNotAllowlisted(_)
+        ));
+
+        // Traversal attempt in model name
+        assert!(resolve_model_path_with_root(&test_base, "../models/ggml-base.bin").is_err());
 
         let _ = fs::remove_dir_all(&test_base);
     }
