@@ -37,32 +37,31 @@ pub struct DevSidecarRunResult {
 
 /// Locate the fake-sidecar executable in the target directory.
 fn find_fake_sidecar_binary() -> Result<PathBuf, String> {
-    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // When running under tauri dev, current_exe is in target\debug\
-    let target_dir = if current_exe
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|n| n == "deps")
-    {
-        current_exe
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| "Failed to find target debug directory".to_string())?
-    } else {
-        current_exe
-            .parent()
-            .ok_or_else(|| "Failed to find parent directory of executable".to_string())?
-    };
-
-    let bin_path = target_dir.join("fake-sidecar.exe");
-    if !bin_path.exists() {
-        return Err(format!(
-            "fake-sidecar binary not found at {:?}. Build it with `cargo build -p fake-sidecar`.",
-            bin_path
-        ));
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_bin = manifest_dir
+        .join("target")
+        .join("debug")
+        .join("fake-sidecar.exe");
+    if manifest_bin.exists() {
+        return Ok(manifest_bin);
     }
 
-    Ok(bin_path)
+    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut curr = current_exe.parent();
+    while let Some(dir) = curr {
+        if dir.file_name().is_some_and(|n| n == "debug") {
+            let p = dir.join("fake-sidecar.exe");
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+        curr = dir.parent();
+    }
+
+    Err(format!(
+        "fake-sidecar binary not found at {:?}. Build it with `cargo build -p fake-sidecar`.",
+        manifest_bin
+    ))
 }
 
 /// Returns internal system information for the dev panel.

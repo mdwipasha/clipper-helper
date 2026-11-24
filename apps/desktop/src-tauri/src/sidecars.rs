@@ -568,22 +568,60 @@ mod tests {
 
     /// Locate the fake-sidecar executable.
     fn fake_sidecar_path() -> PathBuf {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest_bin = manifest_dir
+            .join("target")
+            .join("debug")
+            .join("fake-sidecar.exe");
+
         let current_exe = std::env::current_exe().expect("get current exe");
-        // current_exe is target\debug\deps\clipper_helper_desktop_lib-xxxx.exe
-        let target_dir = current_exe
-            .parent()
-            .and_then(Path::parent)
-            .expect("target debug dir");
-        let bin_path = target_dir.join("fake-sidecar.exe");
+        let mut target_debug = None;
+        let mut curr = current_exe.parent();
+        while let Some(dir) = curr {
+            if dir.file_name().is_some_and(|n| n == "debug") {
+                target_debug = Some(dir.to_path_buf());
+                break;
+            }
+            curr = dir.parent();
+        }
+
+        let bin_path = if manifest_bin.exists() {
+            manifest_bin.clone()
+        } else if let Some(ref debug_dir) = target_debug {
+            let p = debug_dir.join("fake-sidecar.exe");
+            if p.exists() {
+                p
+            } else {
+                manifest_bin.clone()
+            }
+        } else {
+            manifest_bin.clone()
+        };
+
         if !bin_path.exists() {
             // Build it if not already present
+            let manifest_path = manifest_dir.join("Cargo.toml");
             let status = std::process::Command::new("cargo")
-                .args(["build", "-p", "fake-sidecar"])
+                .args(["build", "--manifest-path"])
+                .arg(&manifest_path)
+                .args(["-p", "fake-sidecar"])
                 .status()
                 .expect("build fake-sidecar");
             assert!(status.success(), "cargo build -p fake-sidecar failed");
         }
-        bin_path
+
+        if bin_path.exists() {
+            bin_path
+        } else if let Some(debug_dir) = target_debug {
+            let p = debug_dir.join("fake-sidecar.exe");
+            if p.exists() {
+                p
+            } else {
+                panic!("fake-sidecar binary not found at {:?} or {:?}", bin_path, p);
+            }
+        } else {
+            panic!("fake-sidecar binary not found at {:?}", bin_path);
+        }
     }
 
     #[cfg(windows)]
