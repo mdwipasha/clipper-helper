@@ -1,4 +1,4 @@
 {
   "kid": "clipper-manifest-dev",
-  "signature": "64572cfd078e1d067546a7ba86b15c46ef303e97f92c76eacb2af14263c92db4f2319ba45282c6cf57481d49778f51d2ebf6be283ad6571aaf774a08b5d6cd0c"
+  "signature": "4bdaa886d88a116ca353c45e47610c8d71ef5aa0d2dd8e55652c0cfcb4a8e6a3c5e549fb869ae46735eec86e39e6cee1937ad61264ae19090e491ad08b3eee0a"
 }

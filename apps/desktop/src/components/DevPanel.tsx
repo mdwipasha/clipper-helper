@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import {
-  commands,
-  DevDownloadProgressEvent,
-  DevManifestInfo,
-  DevSidecarRunResult,
-  DevSystemInfo,
-} from '../ipc/bindings';
+import { commands, DevManifestInfo, DevSidecarRunResult, DevSystemInfo } from '../ipc/bindings';
+
+export type DevDownloadProgressEvent = {
+  component: string;
+  stage: string;
+  unit: string;
+  completed_bytes: number;
+  total_bytes: number;
+  percent: number;
+  rate_bps: number;
+  eta_seconds: number | null;
+};
 
 export function DevPanel() {
   const [sysInfo, setSysInfo] = useState<DevSystemInfo | null>(null);
@@ -49,6 +54,42 @@ export function DevPanel() {
       });
   };
 
+  const handleDownload = async (c: {
+    component: string;
+    version: string;
+    url: string;
+    size_bytes: number;
+    sha256: string;
+    archive: string;
+  }) => {
+    setDownloadingMap((prev) => ({ ...prev, [c.component]: true }));
+    setDownloadErrors((prev) => {
+      const copy = { ...prev };
+      delete copy[c.component];
+      return copy;
+    });
+
+    try {
+      const res = await commands.devDownloadComponent(
+        c.component,
+        c.version,
+        c.url,
+        c.size_bytes,
+        c.sha256,
+        c.archive
+      );
+      if (res.status === 'ok') {
+        setDownloadedSet((prev) => new Set(prev).add(c.component));
+      } else {
+        setDownloadErrors((prev) => ({ ...prev, [c.component]: res.error }));
+      }
+    } catch (err: unknown) {
+      setDownloadErrors((prev) => ({ ...prev, [c.component]: String(err) }));
+    } finally {
+      setDownloadingMap((prev) => ({ ...prev, [c.component]: false }));
+    }
+  };
+
   useEffect(() => {
     loadSysInfo();
     // Run initial sidecar test to show exit code 0 on initial view
@@ -61,6 +102,40 @@ export function DevPanel() {
       })
       .catch((err: unknown) => {
         setRunError(String(err));
+      });
+
+    // Auto-fetch dev manifest on mount and auto-download model for verification
+    commands
+      .devFetchManifest(
+        'http://127.0.0.1:8080/manifest.json',
+        'http://127.0.0.1:8080/manifest.json.sig'
+      )
+      .then((res) => {
+        if (res.status === 'ok') {
+          console.log('[DevPanel] Auto-fetch manifest succeeded:', res.data);
+          setManifestInfo(res.data);
+          const downloaded = new Set<string>();
+          for (const c of res.data.components) {
+            if (c.is_downloaded) {
+              downloaded.add(c.component);
+            }
+          }
+          setDownloadedSet(downloaded);
+
+          // Auto-download first undownloaded component in dev
+          const firstUndownloaded = res.data.components.find((c) => !downloaded.has(c.component));
+          if (firstUndownloaded) {
+            console.log('[DevPanel] Auto-downloading component:', firstUndownloaded);
+            handleDownload(firstUndownloaded);
+          }
+        } else {
+          console.error('[DevPanel] Auto-fetch manifest returned error:', res.error);
+          setManifestError(res.error);
+        }
+      })
+      .catch((err) => {
+        console.error('[DevPanel] Auto-fetch manifest threw:', err);
+        setManifestError(String(err));
       });
 
     // Listen for streaming download progress events from core
@@ -136,42 +211,6 @@ export function DevPanel() {
     setManifestUrl(tManifest);
     setSigUrl(tSig);
     await handleFetchManifest(tManifest, tSig);
-  };
-
-  const handleDownload = async (c: {
-    component: string;
-    version: string;
-    url: string;
-    size_bytes: number;
-    sha256: string;
-    archive: string;
-  }) => {
-    setDownloadingMap((prev) => ({ ...prev, [c.component]: true }));
-    setDownloadErrors((prev) => {
-      const copy = { ...prev };
-      delete copy[c.component];
-      return copy;
-    });
-
-    try {
-      const res = await commands.devDownloadComponent(
-        c.component,
-        c.version,
-        c.url,
-        c.size_bytes,
-        c.sha256,
-        c.archive
-      );
-      if (res.status === 'ok') {
-        setDownloadedSet((prev) => new Set(prev).add(c.component));
-      } else {
-        setDownloadErrors((prev) => ({ ...prev, [c.component]: res.error }));
-      }
-    } catch (err: unknown) {
-      setDownloadErrors((prev) => ({ ...prev, [c.component]: String(err) }));
-    } finally {
-      setDownloadingMap((prev) => ({ ...prev, [c.component]: false }));
-    }
   };
 
   const formatBytes = (bytes: number) => {

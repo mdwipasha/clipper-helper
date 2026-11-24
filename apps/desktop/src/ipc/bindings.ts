@@ -51,7 +51,7 @@ export const commands = {
     }
   },
   /**
-   * Starts or verifies the local dev server serving fixtures.
+   * Debug-only: starts or verifies the local dev-server serving test fixtures.
    */
   async devStartFixtureServer(): Promise<Result<string, string>> {
     try {
@@ -62,7 +62,7 @@ export const commands = {
     }
   },
   /**
-   * Fetches and verifies the component manifest.
+   * Debug-only: fetches and cryptographically verifies the component manifest.
    */
   async devFetchManifest(
     manifestUrl: string,
@@ -79,7 +79,7 @@ export const commands = {
     }
   },
   /**
-   * Downloads and verifies a component from the manifest with live progress.
+   * Debug-only: downloads and verifies a component from the manifest with live progress.
    */
   async devDownloadComponent(
     component: string,
@@ -118,6 +118,23 @@ export const commands = {
  * Application metadata returned to the frontend.
  */
 export type AppInfo = { name: string; version: string; platform: string };
+export type DevManifestComponent = {
+  component: string;
+  version: string;
+  platform: string;
+  url: string;
+  size_bytes: number;
+  sha256: string;
+  archive: string;
+  is_downloaded: boolean;
+};
+export type DevManifestInfo = {
+  sequence: number;
+  channel: string;
+  generated_at: string;
+  signature_valid: boolean;
+  components: DevManifestComponent[];
+};
 export type DevSidecarRunResult = {
   exit_code: number;
   lines: string[];
@@ -133,36 +150,6 @@ export type DevSystemInfo = {
   platform: string;
   arch: string;
 };
-export type DevManifestComponent = {
-  component: string;
-  version: string;
-  platform: string;
-  url: string;
-  size_bytes: number;
-  sha256: string;
-  archive: string;
-  is_downloaded: boolean;
-};
-
-export type DevManifestInfo = {
-  sequence: number;
-  channel: string;
-  generated_at: string;
-  signature_valid: boolean;
-  components: DevManifestComponent[];
-};
-
-export type DevDownloadProgressEvent = {
-  component: string;
-  stage: string;
-  unit: string;
-  completed_bytes: number;
-  total_bytes: number;
-  percent: number;
-  rate_bps: number;
-  eta_seconds: number | null;
-};
-
 /**
  * Workspace initialization status returned to the frontend.
  */

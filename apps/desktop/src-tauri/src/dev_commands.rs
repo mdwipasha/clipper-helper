@@ -33,7 +33,7 @@ pub struct DevManifestComponent {
     pub version: String,
     pub platform: String,
     pub url: String,
-    pub size_bytes: u64,
+    pub size_bytes: f64,
     pub sha256: String,
     pub archive: String,
     pub is_downloaded: bool,
@@ -41,7 +41,7 @@ pub struct DevManifestComponent {
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct DevManifestInfo {
-    pub sequence: u64,
+    pub sequence: f64,
     pub channel: String,
     pub generated_at: String,
     pub signature_valid: bool,
@@ -53,8 +53,8 @@ pub struct DevDownloadProgressEvent {
     pub component: String,
     pub stage: String,
     pub unit: String,
-    pub completed_bytes: u64,
-    pub total_bytes: u64,
+    pub completed_bytes: f64,
+    pub total_bytes: f64,
     pub percent: f64,
     pub rate_bps: f64,
     pub eta_seconds: Option<f64>,
@@ -276,7 +276,12 @@ pub async fn dev_fetch_manifest(
         .try_state::<LocalStore>()
         .ok_or_else(|| "LocalStore not available".to_string())?;
 
-    let manifest = crate::updater::fetch_and_verify_manifest(
+    tracing::info!(
+        "dev_fetch_manifest: fetching from {} and {}",
+        manifest_url,
+        sig_url
+    );
+    let manifest = match crate::updater::fetch_and_verify_manifest(
         &manifest_url,
         &sig_url,
         "0.1.0",
@@ -284,7 +289,20 @@ pub async fn dev_fetch_manifest(
         Some(DEV_EXTRA_KEYS),
     )
     .await
-    .map_err(|e| format!("Manifest verification failed: {}", e))?;
+    {
+        Ok(m) => {
+            tracing::info!(
+                "dev_fetch_manifest: verification succeeded! seq={}, components={}",
+                m.sequence,
+                m.components.len()
+            );
+            m
+        }
+        Err(e) => {
+            tracing::error!("dev_fetch_manifest: verification failed: {:?}", e);
+            return Err(format!("Manifest verification failed: {}", e));
+        }
+    };
 
     let mut dev_components = Vec::new();
     for c in manifest.components {
@@ -310,7 +328,7 @@ pub async fn dev_fetch_manifest(
             version: c.version,
             platform: c.platform,
             url: c.url,
-            size_bytes: c.size_bytes,
+            size_bytes: c.size_bytes as f64,
             sha256: c.sha256,
             archive: c.archive,
             is_downloaded,
@@ -318,7 +336,7 @@ pub async fn dev_fetch_manifest(
     }
 
     Ok(DevManifestInfo {
-        sequence: manifest.sequence,
+        sequence: manifest.sequence as f64,
         channel: manifest.channel,
         generated_at: manifest.generated_at,
         signature_valid: true,
@@ -334,10 +352,15 @@ pub async fn dev_download_component(
     component: String,
     version: String,
     url: String,
-    size_bytes: u64,
+    size_bytes: f64,
     sha256: String,
     archive: String,
 ) -> Result<(), String> {
+    tracing::info!(
+        "dev_download_component invoked for '{}' from '{}'",
+        component,
+        url
+    );
     let ws = app
         .try_state::<WorkspaceState>()
         .ok_or_else(|| "Workspace state not available".to_string())?;
@@ -357,7 +380,7 @@ pub async fn dev_download_component(
         version,
         platform: "windows-x86_64".to_string(),
         url,
-        size_bytes,
+        size_bytes: size_bytes as u64,
         sha256,
         archive,
         files: vec![],
@@ -377,8 +400,8 @@ pub async fn dev_download_component(
                     component: progress.component,
                     stage: progress.stage,
                     unit: progress.unit,
-                    completed_bytes: progress.completed_bytes,
-                    total_bytes: progress.total_bytes,
+                    completed_bytes: progress.completed_bytes as f64,
+                    total_bytes: progress.total_bytes as f64,
                     percent: progress.percent,
                     rate_bps: progress.rate_bps,
                     eta_seconds: progress.eta_seconds,
