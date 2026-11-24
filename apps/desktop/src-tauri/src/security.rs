@@ -6,6 +6,7 @@
 //! - Implement logging redaction to ensure no tokens, query strings, emails, or Windows usernames leak into logs.
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -39,6 +40,12 @@ pub enum SecurityError {
     WorkspacePermissionDenied(String),
     #[error("Disk full when creating workspace: {0}")]
     WorkspaceDiskFull(String),
+    #[error("Disk full: available {available} bytes, required {required} bytes")]
+    DiskFull { available: u64, required: u64 },
+    #[error("Disk low: available {available} bytes, required {required} bytes")]
+    DiskLow { available: u64, required: u64 },
+    #[error("Invalid data root: {0}")]
+    InvalidDataRoot(String),
     #[error("Component is not allowlisted: {0}")]
     ComponentNotAllowlisted(String),
     #[error("Failed to resolve workspace root: {0}")]
@@ -48,7 +55,8 @@ pub enum SecurityError {
 impl SecurityError {
     pub fn error_code(&self) -> &'static str {
         match self {
-            SecurityError::WorkspaceDiskFull(_) => "E_DISK_FULL",
+            SecurityError::DiskFull { .. } | SecurityError::WorkspaceDiskFull(_) => "E_DISK_FULL",
+            SecurityError::DiskLow { .. } => "E_DISK_LOW",
             SecurityError::WorkspacePermissionDenied(_) => "E_APP_INIT_FAILED",
             SecurityError::WorkspaceRootMissing(_) => "E_APP_INIT_FAILED",
             SecurityError::ComponentNotAllowlisted(_) => "E_COMPONENT_MISSING",
@@ -85,19 +93,8 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static USER_PROFILE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[A-Z]:[/\\]Users[/\\]([^/\\]+)").expect("valid regex"));
 
-/// Returns the default workspace root directory `%LOCALAPPDATA%\ClipperHelper\` (or `ClipperHelper-Dev` in debug builds).
-/// Supports `CLIPPER_WORKSPACE_ROOT` override only in debug and test builds.
-pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
-    #[cfg(any(debug_assertions, test))]
-    {
-        if let Ok(override_path) = std::env::var("CLIPPER_WORKSPACE_ROOT") {
-            let trimmed = override_path.trim();
-            if !trimmed.is_empty() {
-                return Ok(PathBuf::from(trimmed));
-            }
-        }
-    }
-
+/// Returns the hardcoded default workspace root directory `%LOCALAPPDATA%\ClipperHelper\` (or `ClipperHelper-Dev` in debug builds).
+pub fn get_default_workspace_root() -> Result<PathBuf, SecurityError> {
     let local_app_data = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("USERPROFILE").map(|u| format!("{}\\AppData\\Local", u)))
         .map_err(|e| SecurityError::RootResolutionFailed(format!("Environment error: {}", e)))?;
@@ -109,6 +106,362 @@ pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
 
     let root = PathBuf::from(local_app_data).join(app_folder);
     Ok(root)
+}
+
+/// JSON configuration stored in `bootstrap.json` at the default data root.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapConfig {
+    pub data_root: String,
+}
+
+/// Managed DataRoot abstraction resolving active workspace storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataRoot {
+    pub path: PathBuf,
+    pub is_default: bool,
+    pub is_onedrive: bool,
+}
+
+#[cfg(windows)]
+fn get_drive_prefix(path: &Path) -> Result<Vec<u16>, SecurityError> {
+    use std::os::windows::ffi::OsStrExt;
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with(r"\\") {
+        return Err(SecurityError::InvalidDataRoot(
+            "UNC network paths are not allowed as DataRoot".into(),
+        ));
+    }
+    let chars: Vec<char> = path_str.chars().collect();
+    if chars.len() >= 2 && chars[1] == ':' && chars[0].is_ascii_alphabetic() {
+        let drive = format!("{}:\\\0", chars[0]);
+        let wide: Vec<u16> = std::ffi::OsStr::new(&drive).encode_wide().collect();
+        return Ok(wide);
+    }
+    Err(SecurityError::InvalidDataRoot(format!(
+        "Invalid drive specification in path: {}",
+        path.display()
+    )))
+}
+
+#[cfg(windows)]
+pub fn is_local_fixed_drive(path: &Path) -> Result<bool, SecurityError> {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_FIXED: u32 = 3;
+
+    let drive_root_wide = get_drive_prefix(path)?;
+    let drive_type = unsafe { GetDriveTypeW(drive_root_wide.as_ptr()) };
+    Ok(drive_type == DRIVE_FIXED)
+}
+
+#[cfg(not(windows))]
+pub fn is_local_fixed_drive(_path: &Path) -> Result<bool, SecurityError> {
+    Ok(true)
+}
+
+pub fn is_system_directory(path: &Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    let norm = path_str.replace('/', "\\");
+
+    // Reject drive root alone (e.g. "C:\" or "C:")
+    if (norm.len() <= 3 && norm.ends_with(':')) || norm.ends_with(r":\") {
+        return true;
+    }
+
+    let sys_root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("SYSTEMROOT"))
+        .unwrap_or_else(|_| r"C:\Windows".to_string())
+        .to_lowercase();
+    if norm.starts_with(&sys_root) {
+        return true;
+    }
+
+    let prog_files = std::env::var("ProgramFiles")
+        .unwrap_or_else(|_| r"C:\Program Files".to_string())
+        .to_lowercase();
+    if norm.starts_with(&prog_files) {
+        return true;
+    }
+
+    if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+        if norm.starts_with(&pf86.to_lowercase()) {
+            return true;
+        }
+    }
+
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let user_prof_lower = user_profile.to_lowercase();
+        if norm == user_prof_lower || norm == format!("{}\\", user_prof_lower) {
+            return true;
+        }
+    }
+
+    if norm == r"c:\users" || norm == r"c:\users\" {
+        return true;
+    }
+
+    false
+}
+
+pub fn is_onedrive_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    if path_str.contains("onedrive") {
+        return true;
+    }
+    for env_var in &["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        if let Ok(od_dir) = std::env::var(env_var) {
+            if path_str.starts_with(&od_dir.to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn is_valid_or_empty_clipper_dir(path: &Path) -> Result<bool, SecurityError> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    if !path.is_dir() {
+        return Err(SecurityError::InvalidDataRoot(format!(
+            "Data root path is not a directory: {}",
+            path.display()
+        )));
+    }
+
+    let read_dir = std::fs::read_dir(path).map_err(|e| {
+        SecurityError::InvalidDataRoot(format!(
+            "Failed to read directory '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    let mut entry_count = 0;
+    let mut has_clipper_marker = false;
+
+    for entry in read_dir {
+        let entry = entry.map_err(|e| {
+            SecurityError::InvalidDataRoot(format!(
+                "Failed to read entry in '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+        entry_count += 1;
+        let file_name = entry.file_name().to_string_lossy().to_lowercase();
+        if file_name == "clipper.db"
+            || file_name == ".clipperhelper"
+            || file_name == "bootstrap.json"
+            || file_name == "bin"
+            || file_name == "models"
+            || file_name == "cache"
+            || file_name == "projects"
+            || file_name == "logs"
+        {
+            has_clipper_marker = true;
+        }
+    }
+
+    if entry_count == 0 || has_clipper_marker {
+        Ok(true)
+    } else {
+        Err(SecurityError::InvalidDataRoot(format!(
+            "Directory '{}' is not empty and is not an existing ClipperHelper data directory",
+            path.display()
+        )))
+    }
+}
+
+pub fn verify_dir_writable(path: &Path) -> Result<(), SecurityError> {
+    let probe_dir = if path.exists() {
+        path.to_path_buf()
+    } else {
+        let mut ancestor = path.parent();
+        while let Some(a) = ancestor {
+            if a.exists() {
+                break;
+            }
+            ancestor = a.parent();
+        }
+        ancestor
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(r"C:\"))
+    };
+
+    let probe_file = probe_dir.join(format!(
+        "._clipper_write_probe_{}_{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+
+    std::fs::write(&probe_file, b"probe").map_err(|e| {
+        SecurityError::WorkspacePermissionDenied(format!(
+            "Data root location '{}' is not writable: {}",
+            probe_dir.display(),
+            e
+        ))
+    })?;
+
+    let _ = std::fs::remove_file(&probe_file);
+    Ok(())
+}
+
+impl DataRoot {
+    pub fn validate(path: &Path) -> Result<Self, SecurityError> {
+        if !path.is_absolute() {
+            return Err(SecurityError::InvalidDataRoot(format!(
+                "Data root must be an absolute path: {}",
+                path.display()
+            )));
+        }
+
+        if path.to_string_lossy().starts_with(r"\\") {
+            return Err(SecurityError::InvalidDataRoot(format!(
+                "UNC / network paths are forbidden: {}",
+                path.display()
+            )));
+        }
+
+        #[cfg(windows)]
+        {
+            if !is_local_fixed_drive(path)? {
+                return Err(SecurityError::InvalidDataRoot(format!(
+                    "Data root must be on a local fixed drive: {}",
+                    path.display()
+                )));
+            }
+        }
+
+        if is_system_directory(path) {
+            return Err(SecurityError::InvalidDataRoot(format!(
+                "Data root cannot be a system directory: {}",
+                path.display()
+            )));
+        }
+
+        is_valid_or_empty_clipper_dir(path)?;
+        verify_dir_writable(path)?;
+
+        let is_onedrive = is_onedrive_path(path);
+        if is_onedrive {
+            tracing::warn!(
+                "Data root '{}' is inside OneDrive. Sync conflicts may occur.",
+                path.display()
+            );
+        }
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            is_default: false,
+            is_onedrive,
+        })
+    }
+
+    pub fn read_bootstrap(default_root: &Path) -> Result<Option<PathBuf>, SecurityError> {
+        let bootstrap_path = default_root.join("bootstrap.json");
+        if !bootstrap_path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&bootstrap_path).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Failed to read bootstrap.json: {}", e))
+        })?;
+        let config: BootstrapConfig = serde_json::from_str(&content).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Invalid bootstrap.json format: {}", e))
+        })?;
+        let trimmed = config.data_root.trim();
+        if trimmed.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(PathBuf::from(trimmed)))
+        }
+    }
+
+    pub fn write_bootstrap(default_root: &Path, target_root: &Path) -> Result<(), SecurityError> {
+        std::fs::create_dir_all(default_root).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Failed to create default root dir: {}", e))
+        })?;
+        let config = BootstrapConfig {
+            data_root: target_root.to_string_lossy().to_string(),
+        };
+        let json = serde_json::to_string_pretty(&config).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Failed to serialize bootstrap: {}", e))
+        })?;
+        let bootstrap_path = default_root.join("bootstrap.json");
+        std::fs::write(&bootstrap_path, json).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Failed to write bootstrap.json: {}", e))
+        })?;
+        Ok(())
+    }
+
+    pub fn resolve_active() -> Result<Self, SecurityError> {
+        #[cfg(any(debug_assertions, test))]
+        {
+            if let Ok(override_path) = std::env::var("CLIPPER_WORKSPACE_ROOT") {
+                let trimmed = override_path.trim();
+                if !trimmed.is_empty() {
+                    let p = PathBuf::from(trimmed);
+                    return Ok(Self {
+                        path: p,
+                        is_default: false,
+                        is_onedrive: false,
+                    });
+                }
+            }
+        }
+
+        let default_root = get_default_workspace_root()?;
+        if let Some(target) = Self::read_bootstrap(&default_root)? {
+            let mut dr = Self::validate(&target)?;
+            dr.is_default = false;
+            return Ok(dr);
+        }
+
+        let is_od = is_onedrive_path(&default_root);
+        Ok(Self {
+            path: default_root,
+            is_default: true,
+            is_onedrive: is_od,
+        })
+    }
+
+    pub fn check_free_space(&self, required_bytes: u64) -> Result<(), SecurityError> {
+        check_free_space_at(&self.path, required_bytes)
+    }
+}
+
+/// Returns the active workspace root directory from DataRoot.
+pub fn get_workspace_root() -> Result<PathBuf, SecurityError> {
+    DataRoot::resolve_active().map(|dr| dr.path)
+}
+
+/// Checks that the active workspace root has sufficient free disk space.
+pub fn check_free_space(required_bytes: u64) -> Result<(), SecurityError> {
+    let ws = get_workspace_root()?;
+    check_free_space_at(&ws, required_bytes)
+}
+
+/// Checks that the given path has sufficient free disk space (required + 500 MB headroom).
+pub fn check_free_space_at(path: &Path, required_bytes: u64) -> Result<(), SecurityError> {
+    let available = get_free_disk_space(path)?;
+    const HEADROOM_BYTES: u64 = 500 * 1024 * 1024; // 500 MB headroom
+    let minimum_safe = required_bytes.saturating_add(HEADROOM_BYTES);
+
+    if available < required_bytes {
+        return Err(SecurityError::DiskFull {
+            available,
+            required: required_bytes,
+        });
+    }
+    if available < minimum_safe {
+        return Err(SecurityError::DiskLow {
+            available,
+            required: minimum_safe,
+        });
+    }
+    Ok(())
 }
 
 /// Asserts that a workspace root is permitted to be reset by dev commands.
@@ -1126,5 +1479,142 @@ mod tests {
         // Exact match required: lowercase/variation must be refused
         let lower = PathBuf::from(r"C:\Users\test\AppData\Local\clipperhelper-dev");
         assert!(assert_can_reset_dev_workspace(&lower).is_err());
+    }
+
+    #[test]
+    fn test_dataroot_validation_rules() {
+        // 1. Relative path rejected
+        let rel = Path::new("relative/data/root");
+        assert!(matches!(
+            DataRoot::validate(rel).unwrap_err(),
+            SecurityError::InvalidDataRoot(_)
+        ));
+
+        // 2. UNC path rejected
+        let unc = Path::new(r"\\network_server\share\clipper");
+        assert!(matches!(
+            DataRoot::validate(unc).unwrap_err(),
+            SecurityError::InvalidDataRoot(_)
+        ));
+
+        // 3. System directories rejected
+        assert!(matches!(
+            DataRoot::validate(Path::new(r"C:\Windows")).unwrap_err(),
+            SecurityError::InvalidDataRoot(_)
+        ));
+        assert!(matches!(
+            DataRoot::validate(Path::new(r"C:\Program Files")).unwrap_err(),
+            SecurityError::InvalidDataRoot(_)
+        ));
+        assert!(matches!(
+            DataRoot::validate(Path::new(r"C:\")).unwrap_err(),
+            SecurityError::InvalidDataRoot(_)
+        ));
+
+        // 4. Valid empty directory accepted
+        let test_dir =
+            std::env::temp_dir().join(format!("test_dataroot_valid_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).unwrap();
+
+        let valid_res = DataRoot::validate(&test_dir);
+        assert!(valid_res.is_ok(), "Empty directory must be accepted");
+
+        // 5. Existing ClipperHelper directory with marker accepted
+        let marker_file = test_dir.join("clipper.db");
+        fs::write(&marker_file, b"sqlite header").unwrap();
+        assert!(DataRoot::validate(&test_dir).is_ok());
+
+        // 6. Non-empty foreign directory rejected
+        let _ = fs::remove_file(&marker_file);
+        let foreign_file = test_dir.join("vacation_photo.jpg");
+        fs::write(&foreign_file, b"jpeg bytes").unwrap();
+        let foreign_res = DataRoot::validate(&test_dir);
+        assert!(
+            matches!(foreign_res.unwrap_err(), SecurityError::InvalidDataRoot(_)),
+            "Non-empty foreign directory must be rejected"
+        );
+
+        let _ = fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn test_dataroot_onedrive_detection() {
+        let onedrive_path = Path::new(r"C:\Users\User\OneDrive\Documents\ClipperHelper");
+        assert!(is_onedrive_path(onedrive_path));
+
+        let local_path = Path::new(r"C:\Users\User\AppData\Local\ClipperHelper");
+        assert!(!is_onedrive_path(local_path));
+    }
+
+    #[test]
+    fn test_dataroot_bootstrap_roundtrip() {
+        let test_base = std::env::temp_dir().join(format!("test_bootstrap_{}", std::process::id()));
+        let default_root = test_base.join("default");
+        let custom_root = test_base.join("custom");
+
+        let _ = fs::remove_dir_all(&test_base);
+        fs::create_dir_all(&default_root).unwrap();
+        fs::create_dir_all(&custom_root).unwrap();
+
+        // Initially no bootstrap
+        assert_eq!(DataRoot::read_bootstrap(&default_root).unwrap(), None);
+
+        // Write bootstrap
+        DataRoot::write_bootstrap(&default_root, &custom_root).unwrap();
+
+        // Read bootstrap back
+        let read_back = DataRoot::read_bootstrap(&default_root).unwrap();
+        assert_eq!(read_back, Some(custom_root.clone()));
+
+        let _ = fs::remove_dir_all(&test_base);
+    }
+
+    #[test]
+    fn test_check_free_space_typed_errors() {
+        let temp_dir = std::env::temp_dir();
+        let available = get_free_disk_space(&temp_dir).unwrap();
+        assert!(available > 0);
+
+        // 1. Available space sufficient
+        assert!(check_free_space_at(&temp_dir, 1000).is_ok());
+
+        // 2. Disk full: requested > available
+        let req_full = available.saturating_add(1024 * 1024);
+        let err_full = check_free_space_at(&temp_dir, req_full);
+        assert!(err_full.is_err());
+        let err = err_full.unwrap_err();
+        assert_eq!(err.error_code(), "E_DISK_FULL");
+        match err {
+            SecurityError::DiskFull {
+                available: a,
+                required: r,
+            } => {
+                assert!(a > 0);
+                assert!(a < r);
+                assert_eq!(r, req_full);
+            }
+            other => panic!("Expected DiskFull, got: {:?}", other),
+        }
+
+        // 3. Disk low: available < required + 500MB
+        if available > 100 * 1024 * 1024 {
+            let required = available.saturating_sub(100 * 1024 * 1024);
+            let err_low = check_free_space_at(&temp_dir, required);
+            assert!(err_low.is_err());
+            let err = err_low.unwrap_err();
+            assert_eq!(err.error_code(), "E_DISK_LOW");
+            match err {
+                SecurityError::DiskLow {
+                    available: a,
+                    required: r,
+                } => {
+                    assert!(a > 0);
+                    assert!(a < r);
+                    assert_eq!(r, required + 500 * 1024 * 1024);
+                }
+                other => panic!("Expected DiskLow, got: {:?}", other),
+            }
+        }
     }
 }
