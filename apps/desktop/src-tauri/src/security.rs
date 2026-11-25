@@ -69,7 +69,8 @@ static WORKSPACE_PATH_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(cache|projects)/[A-Za-z0-9._/-]+$").expect("valid regex"));
 
 static RESERVED_DEVICE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$").expect("valid regex")
+    Regex::new(r"(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CONIN\$|CONOUT\$)(\..*)?$")
+        .expect("valid regex")
 });
 
 static SHORT_NAME_REGEX: LazyLock<Regex> =
@@ -614,28 +615,7 @@ pub fn resolve_workspace_path_with_root(
 
     // 4. Inspect individual segments
     for segment in rel_path.split('/') {
-        if segment.is_empty() {
-            return Err(SecurityError::InvalidFormat("Empty segment".to_string()));
-        }
-
-        // Trailing dot or space check
-        if segment.ends_with('.') || segment.ends_with(' ') {
-            return Err(SecurityError::TrailingDotOrSpaceForbidden(
-                segment.to_string(),
-            ));
-        }
-
-        // 8.3 short name check
-        if SHORT_NAME_REGEX.is_match(segment) {
-            return Err(SecurityError::ShortNameForbidden(segment.to_string()));
-        }
-
-        // Reserved Windows device names
-        if RESERVED_DEVICE_REGEX.is_match(segment) {
-            return Err(SecurityError::ReservedDeviceNameForbidden(
-                segment.to_string(),
-            ));
-        }
+        check_windows_segment_invariants(segment)?;
     }
 
     // 5. Strict regex validation for POSIX format
@@ -710,8 +690,42 @@ pub fn resolve_workspace_path_with_root(
     Ok(target)
 }
 
+/// Checks Windows filesystem segment safety invariants (no trailing dot/space,
+/// no 8.3 short names, no reserved device names, no control/illegal chars).
+pub fn check_windows_segment_invariants(segment: &str) -> Result<(), SecurityError> {
+    if segment.is_empty() {
+        return Err(SecurityError::InvalidFormat("Empty segment".to_string()));
+    }
+    if segment == "." || segment == ".." {
+        return Err(SecurityError::TraversalAttempt(segment.to_string()));
+    }
+    if segment
+        .chars()
+        .any(|c| (c as u32) < 0x20 || matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return Err(SecurityError::InvalidFormat(format!(
+            "Illegal character in segment '{}'",
+            segment
+        )));
+    }
+    if segment.ends_with('.') || segment.ends_with(' ') {
+        return Err(SecurityError::TrailingDotOrSpaceForbidden(
+            segment.to_string(),
+        ));
+    }
+    if SHORT_NAME_REGEX.is_match(segment) {
+        return Err(SecurityError::ShortNameForbidden(segment.to_string()));
+    }
+    if RESERVED_DEVICE_REGEX.is_match(segment) {
+        return Err(SecurityError::ReservedDeviceNameForbidden(
+            segment.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validates an individual path segment (component, version, filename).
-fn validate_path_segment(segment: &str) -> Result<(), SecurityError> {
+pub fn validate_path_segment(segment: &str) -> Result<(), SecurityError> {
     if segment.is_empty() || segment.len() > 100 {
         return Err(SecurityError::InvalidFormat(format!(
             "Invalid segment length: {}",
@@ -725,20 +739,7 @@ fn validate_path_segment(segment: &str) -> Result<(), SecurityError> {
     {
         return Err(SecurityError::InvalidFormat(segment.to_string()));
     }
-    if SHORT_NAME_REGEX.is_match(segment) {
-        return Err(SecurityError::ShortNameForbidden(segment.to_string()));
-    }
-    if RESERVED_DEVICE_REGEX.is_match(segment) {
-        return Err(SecurityError::ReservedDeviceNameForbidden(
-            segment.to_string(),
-        ));
-    }
-    if segment.ends_with('.') || segment.ends_with(' ') {
-        return Err(SecurityError::TrailingDotOrSpaceForbidden(
-            segment.to_string(),
-        ));
-    }
-    Ok(())
+    check_windows_segment_invariants(segment)
 }
 
 /// Checks whether an executable name is in the trusted binary allowlist.

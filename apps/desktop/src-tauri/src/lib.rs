@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod commands;
 #[cfg(debug_assertions)]
 pub mod dev_commands;

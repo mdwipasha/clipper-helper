@@ -153,6 +153,7 @@ fn test_node_discovery_exists_only_under_debug_assertions() {
     );
 
     let prod_modules: &[(&str, &str)] = &[
+        ("archive.rs", include_str!("../src/archive.rs")),
         ("commands.rs", include_str!("../src/commands.rs")),
         ("manifest.rs", include_str!("../src/manifest.rs")),
         ("net.rs", include_str!("../src/net.rs")),
