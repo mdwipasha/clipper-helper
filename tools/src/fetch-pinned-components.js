@@ -48,8 +48,8 @@ export const PINNED_COMPONENTS = {
   ffmpegGplZip: {
     component: 'ffmpeg',
     version: '9.0.2-essentials-gpl',
-    url: 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
-    cacheName: 'ffmpeg-release-essentials.zip',
+    url: 'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip',
+    cacheName: 'ffmpeg-9.0.2-essentials_build.zip',
     sha256: '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
     localSpikePath: 'spikes/s1-downloader/bin/ffmpeg-release-essentials.zip',
   },
@@ -656,7 +656,7 @@ export async function runFetchPinnedComponents({
 if (
   process.argv[1] &&
   path.resolve(process.argv[1]) ===
-    path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'))
+  path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'))
 ) {
   const args = process.argv.slice(2);
   const skipModels = args.includes('--skip-models');
