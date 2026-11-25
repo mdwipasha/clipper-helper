@@ -147,6 +147,20 @@ jobs:
       - name: Rust Unit Tests (Debug)
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all
 
+      - name: Cache Pinned Real Binaries (by inventory SHA-256)
+        uses: actions/cache@v4
+        with:
+          path: tools/dev-fixtures/real
+          key: ${{ runner.os }}-pinned-components-${{ hashFiles('tools/src/fetch-pinned-components.js') }}
+
+      - name: Fetch & Verify Pinned Real Components
+        run: node tools/src/fetch-pinned-components.js --skip-models
+
+      - name: Real-Binary Capability Tests (SidecarSupervisor)
+        env:
+          CLIPPER_REQUIRE_REAL_COMPONENTS: '1'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test real_components_capabilities
+
       - name: Rust Unit Tests (Release Profile)
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --release --all
 
@@ -171,7 +185,7 @@ jobs:
             exit 1
           }
           $content = [System.IO.File]::ReadAllText($item.FullName, [System.Text.Encoding]::GetEncoding("ISO-8859-1"))
-          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace", "dev_install_component", "dev_rollback_component", "dev_set_custom_ffmpeg", "find_node_executable", "CLIPPER_DEV_NODE_PATH", "fnm_multishells", "NVM_HOME", "where.exe")
+          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace", "dev_install_component", "dev_rollback_component", "dev_retry_quarantined_component", "dev_reset_manifest_sequence_floor", "dev_set_custom_ffmpeg", "find_node_executable", "CLIPPER_DEV_NODE_PATH", "fnm_multishells", "NVM_HOME", "where.exe")
           foreach ($cmd in $devCmds) {
             if ($content.Contains($cmd)) {
               Write-Error "Security guard violation: dev command '$cmd' detected in release binary!"

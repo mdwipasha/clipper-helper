@@ -57,7 +57,9 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         dev_commands::dev_rollback_component,
         dev_commands::dev_gc_component,
         dev_commands::dev_verify_component,
+        dev_commands::dev_retry_quarantined_component,
         dev_commands::dev_repair_component,
+        dev_commands::dev_reset_manifest_sequence_floor,
         dev_commands::dev_set_custom_ffmpeg,
         dev_commands::dev_clear_custom_ffmpeg,
     ])

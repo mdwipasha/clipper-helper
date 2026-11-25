@@ -194,6 +194,23 @@ export const commands = {
     }
   },
   /**
+   * Debug-only: retries strict capability verification on an already-extracted quarantined version.
+   */
+  async devRetryQuarantinedComponent(
+    component: string,
+    version: string
+  ): Promise<Result<VerifyRepairOutcome, DevCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_retry_quarantined_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Debug-only: re-downloads and verifies a missing or damaged component from the active manifest.
    */
   async devRepairComponent(
@@ -205,6 +222,18 @@ export const commands = {
         status: 'ok',
         data: await TAURI_INVOKE('dev_repair_component', { component, version }),
       };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: resets the persisted manifest sequence floor so seq 1 -> 2 -> 3 presets can replay
+   * without wiping the workspace. Never compiled into release builds.
+   */
+  async devResetManifestSequenceFloor(): Promise<Result<number, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_reset_manifest_sequence_floor') };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: 'error', error: e as any };

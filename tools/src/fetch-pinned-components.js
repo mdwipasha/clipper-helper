@@ -79,7 +79,7 @@ export const PINNED_COMPONENTS = {
   },
   sileroVad: {
     component: 'ggml-silero-v6.2.0.bin',
-    version: '6.2.0',
+    version: 'silero-v6.2.0-2aa269b7',
     url: 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin',
     cacheName: 'ggml-silero-v6.2.0.bin',
     sha256: '2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987',
@@ -87,11 +87,19 @@ export const PINNED_COMPONENTS = {
   },
   whisperModelBase: {
     component: 'ggml-base.bin',
-    version: '1.9.5',
+    version: 'whisper-base-60ed5bc3',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
     cacheName: 'ggml-base.bin',
     sha256: '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe',
     localSpikePath: 'spikes/s3-speech/models/ggml-base.bin',
+  },
+  whisperModelSmallQ5_1: {
+    component: 'ggml-small-q5_1.bin',
+    version: 'whisper-small-q5_1-ae85e4a9',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin',
+    cacheName: 'ggml-small-q5_1.bin',
+    sha256: 'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb',
+    localSpikePath: 'spikes/s3-speech/models/ggml-small-q5_1.bin',
   },
 };
 
@@ -518,7 +526,11 @@ export async function runFetchPinnedComponents({
   ];
 
   if (!skipModels) {
-    for (const modelItem of [PINNED_COMPONENTS.sileroVad, PINNED_COMPONENTS.whisperModelBase]) {
+    for (const modelItem of [
+      PINNED_COMPONENTS.sileroVad,
+      PINNED_COMPONENTS.whisperModelBase,
+      PINNED_COMPONENTS.whisperModelSmallQ5_1,
+    ]) {
       const mRaw = await ensureVerifiedFile(modelItem, cacheDir);
       const mDest = path.join(outDir, 'models', modelItem.component);
       fs.mkdirSync(path.dirname(mDest), { recursive: true });

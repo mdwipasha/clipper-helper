@@ -769,25 +769,34 @@ pub async fn dev_install_component(
     );
 
     match res {
-        Ok(outcome) => Ok(DevInstallOutcome {
-            ok: true,
-            component: outcome.component,
-            version: outcome.version,
-            kind: outcome.kind,
-            already_installed: outcome.already_installed,
-            quarantined: false,
-            rolled_back_to: None,
-            error_code: None,
-            message: if outcome.already_installed {
-                "Already installed & verified".to_string()
-            } else {
-                "Installed and passed capability verification".to_string()
-            },
-            capability_report: outcome
-                .capability_report
-                .as_ref()
-                .map(CapabilityReportView::from),
-        }),
+        Ok(outcome) => {
+            let is_model = outcome.kind == "model";
+            Ok(DevInstallOutcome {
+                ok: true,
+                component: outcome.component,
+                version: outcome.version,
+                kind: outcome.kind,
+                already_installed: outcome.already_installed,
+                quarantined: false,
+                rolled_back_to: None,
+                error_code: None,
+                message: if is_model {
+                    if outcome.already_installed {
+                        "Model already installed & hash verified".to_string()
+                    } else {
+                        "Model hash verified (SHA-256 intact)".to_string()
+                    }
+                } else if outcome.already_installed {
+                    "Already installed & verified".to_string()
+                } else {
+                    "Installed and passed capability verification".to_string()
+                },
+                capability_report: outcome
+                    .capability_report
+                    .as_ref()
+                    .map(CapabilityReportView::from),
+            })
+        }
         Err(installer::InstallError::CapabilityFailed {
             component,
             version,
@@ -885,6 +894,36 @@ pub async fn dev_verify_component(
 ) -> Result<VerifyRepairOutcome, String> {
     let (ws_root, store, _) = get_app_deps(&app).map_err(|e| e.message)?;
     Ok(installer::verify_active_component_full(&ws_root, &store, &component).await)
+}
+
+/// Debug-only: retries strict capability verification on an already-extracted quarantined version.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_retry_quarantined_component(
+    app: tauri::AppHandle,
+    component: String,
+    version: String,
+) -> Result<VerifyRepairOutcome, DevCommandError> {
+    let (ws_root, store, _) = get_app_deps(&app)?;
+    installer::retry_quarantined_component_verification(&ws_root, &store, &component, &version)
+        .await
+        .map_err(|e| DevCommandError {
+            code: e.error_code().to_string(),
+            message: e.to_string(),
+        })
+}
+
+/// Debug-only: resets the persisted manifest sequence floor so seq 1 -> 2 -> 3 presets can replay
+/// without wiping the workspace. Never compiled into release builds.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_reset_manifest_sequence_floor(app: tauri::AppHandle) -> Result<f64, String> {
+    let (_, store, _) = get_app_deps(&app).map_err(|e| e.message)?;
+    store.set_manifest_sequence(0).map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = LAST_VERIFIED_MANIFEST.lock() {
+        *guard = None;
+    }
+    Ok(crate::manifest::MIN_MANIFEST_SEQUENCE as f64)
 }
 
 /// Debug-only: re-downloads and verifies a missing or damaged component from the active manifest.

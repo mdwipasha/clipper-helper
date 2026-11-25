@@ -24,6 +24,15 @@ export type DevDownloadProgressEvent = {
   eta_seconds: number | null;
 };
 
+function formatVersion(version: string | null | undefined): string {
+  if (!version) return '';
+  return /^\d/.test(version) ? `v${version}` : version;
+}
+
+function isModelComponent(name: string): boolean {
+  return name.startsWith('ggml-');
+}
+
 function CapabilityDetails({ report }: { report: CapabilityReportView }) {
   const statusColor =
     report.status === 'pass'
@@ -37,7 +46,7 @@ function CapabilityDetails({ report }: { report: CapabilityReportView }) {
       <div className="flex items-center justify-between">
         <span className="text-slate-400">
           Capability Check ({report.mode})
-          {report.reported_version ? ` · reported v${report.reported_version}` : ''}
+          {report.reported_version ? ` · reported ${formatVersion(report.reported_version)}` : ''}
         </span>
         <span className={`px-1.5 py-0.5 rounded border font-bold uppercase ${statusColor}`}>
           {report.status}
@@ -52,7 +61,7 @@ function CapabilityDetails({ report }: { report: CapabilityReportView }) {
             </span>
             <span>ffprobe: {report.ffmpeg.ffprobe_version}</span>
             <span>
-              HW encoders:{' '}
+              Encoders in build:{' '}
               {report.ffmpeg.hardware_encoders_available.length > 0
                 ? report.ffmpeg.hardware_encoders_available.join(', ')
                 : 'none'}
@@ -120,6 +129,7 @@ export function DevPanel() {
   const [fetchingManifest, setFetchingManifest] = useState<boolean>(false);
   const [manifestInfo, setManifestInfo] = useState<DevManifestInfo | null>(null);
   const [manifestError, setManifestError] = useState<DevManifestError | null>(null);
+  const [sequenceFloorMsg, setSequenceFloorMsg] = useState<string | null>(null);
 
   const [downloadProgressMap, setDownloadProgressMap] = useState<
     Record<string, DevDownloadProgressEvent>
@@ -222,6 +232,7 @@ export function DevPanel() {
     const targetS = sUrl || sigUrl;
     setFetchingManifest(true);
     setManifestError(null);
+    setSequenceFloorMsg(null);
     try {
       const res = await commands.devFetchManifest(targetM, targetS);
       if (res.status === 'ok') {
@@ -239,6 +250,23 @@ export function DevPanel() {
       setManifestInfo(null);
     } finally {
       setFetchingManifest(false);
+    }
+  };
+
+  const handleResetSequenceFloor = async () => {
+    setManifestError(null);
+    try {
+      const res = await commands.devResetManifestSequenceFloor();
+      if (res.status === 'ok') {
+        setManifestInfo(null);
+        setSequenceFloorMsg(
+          `Manifest sequence floor reset to #${res.data}; seq 1 -> 2 -> 3 presets can replay.`
+        );
+      } else {
+        setSequenceFloorMsg(`Reset failed: ${res.error}`);
+      }
+    } catch (err: unknown) {
+      setSequenceFloorMsg(String(err));
     }
   };
 
@@ -312,7 +340,7 @@ export function DevPanel() {
       if (res.status === 'ok') {
         setActionMessages((prev) => ({
           ...prev,
-          [component]: `Switched active version to v${res.data}`,
+          [component]: `Switched active version to ${formatVersion(res.data)}`,
         }));
       } else {
         setActionMessages((prev) => ({ ...prev, [component]: `Rollback failed: ${res.error}` }));
@@ -367,6 +395,35 @@ export function DevPanel() {
     }
   };
 
+  const handleRetryQuarantined = async (component: string, version: string) => {
+    setInstallingMap((prev) => ({ ...prev, [component]: true }));
+    try {
+      const res = await commands.devRetryQuarantinedComponent(component, version);
+      if (res.status === 'ok') {
+        const r = res.data;
+        setActionMessages((prev) => ({
+          ...prev,
+          [component]: r.intact
+            ? `Retry passed (${formatVersion(version)}): ${r.message}`
+            : `[${r.error_code ?? 'E_VERIFY_FAILED'}] ${r.message}`,
+        }));
+        if (r.intact && manifestInfo) {
+          await handleFetchManifest();
+        }
+      } else {
+        setActionMessages((prev) => ({
+          ...prev,
+          [component]: `[${res.error.code}] ${res.error.message}`,
+        }));
+      }
+    } catch (err: unknown) {
+      setActionMessages((prev) => ({ ...prev, [component]: String(err) }));
+    } finally {
+      setInstallingMap((prev) => ({ ...prev, [component]: false }));
+      await refreshDiagnostics();
+    }
+  };
+
   const handleRepair = async (component: string, version: string | null) => {
     setInstallingMap((prev) => ({ ...prev, [component]: true }));
     try {
@@ -374,8 +431,11 @@ export function DevPanel() {
       if (res.status === 'ok') {
         setActionMessages((prev) => ({
           ...prev,
-          [component]: `Repair complete: v${res.data.version ?? ''} — ${res.data.message}`,
+          [component]: `Repair complete: ${formatVersion(res.data.version)} — ${res.data.message}`,
         }));
+        if (manifestInfo) {
+          await handleFetchManifest();
+        }
       } else {
         setActionMessages((prev) => ({
           ...prev,
@@ -735,7 +795,7 @@ export function DevPanel() {
         </div>
 
         {/* Fetch Controls */}
-        <div className="flex space-x-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => handleFetchManifest()}
@@ -753,7 +813,22 @@ export function DevPanel() {
           >
             Test Tampered Manifest
           </button>
+          <button
+            type="button"
+            onClick={handleResetSequenceFloor}
+            disabled={fetchingManifest}
+            className="bg-amber-950/50 hover:bg-amber-900/60 text-amber-300 border border-amber-800/60 font-medium py-1 px-2.5 rounded transition text-xs cursor-pointer"
+            title="Debug-only: resets local manifest sequence floor so seq 1 -> 2 -> 3 presets can replay without wiping the workspace"
+          >
+            Reset manifest sequence floor
+          </button>
         </div>
+
+        {sequenceFloorMsg && (
+          <div className="bg-amber-950/20 border border-amber-800/50 text-amber-200 p-2 rounded text-[10px]">
+            {sequenceFloorMsg}
+          </div>
+        )}
 
         {/* Manifest Error Banner */}
         {manifestError && (
@@ -829,6 +904,7 @@ export function DevPanel() {
                 const progress = downloadProgressMap[comp.component];
                 const outcome = installOutcomes[comp.component];
                 const error = installErrors[comp.component];
+                const isModel = isModelComponent(comp.component);
 
                 return (
                   <div
@@ -840,10 +916,10 @@ export function DevPanel() {
                         <div className="text-slate-200 font-bold flex items-center space-x-2">
                           <span>{comp.component}</span>
                           <span className="text-[10px] text-slate-400 font-normal">
-                            v{comp.version}
+                            {formatVersion(comp.version)}
                           </span>
                           <span className="text-[10px] text-slate-500 font-normal">
-                            [{comp.archive}
+                            [{isModel ? 'model · hash check' : comp.archive}
                             {comp.files_count > 0 ? ` · ${comp.files_count} files` : ''}]
                           </span>
                         </div>
@@ -856,7 +932,7 @@ export function DevPanel() {
                       <div>
                         {comp.is_downloaded ? (
                           <span className="bg-emerald-950/60 border border-emerald-800/80 text-emerald-400 text-[10px] font-bold px-2 py-1 rounded">
-                            Installed & Current
+                            {isModel ? 'Hash Verified & Current' : 'Installed & Current'}
                           </span>
                         ) : (
                           <button
@@ -915,7 +991,7 @@ export function DevPanel() {
                         </div>
                         {outcome.rolled_back_to && (
                           <div className="text-amber-300">
-                            Rolled back automatically to v{outcome.rolled_back_to}.
+                            Rolled back automatically to {formatVersion(outcome.rolled_back_to)}.
                           </div>
                         )}
                         {outcome.capability_report && (
@@ -1069,7 +1145,9 @@ export function DevPanel() {
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 text-[10px]">
                           <div className="flex items-center space-x-2">
-                            <span className="text-slate-200 font-semibold">v{ver.version}</span>
+                            <span className="text-slate-200 font-semibold">
+                              {formatVersion(ver.version)}
+                            </span>
                             <span className="text-slate-500">seq #{ver.manifest_sequence}</span>
                             {ver.is_current && (
                               <span className="bg-emerald-950/80 border border-emerald-700 text-emerald-300 px-1.5 py-0.2 rounded font-bold">
@@ -1079,6 +1157,11 @@ export function DevPanel() {
                             {ver.is_previous && (
                               <span className="bg-indigo-950/80 border border-indigo-700 text-indigo-300 px-1.5 py-0.2 rounded font-bold">
                                 PREVIOUS
+                              </span>
+                            )}
+                            {state.kind === 'model' && ver.status === 'installed' && (
+                              <span className="bg-cyan-950/70 border border-cyan-800 text-cyan-300 px-1.5 py-0.2 rounded font-semibold">
+                                HASH VERIFIED
                               </span>
                             )}
                             {ver.status === 'quarantined' ? (
@@ -1107,6 +1190,30 @@ export function DevPanel() {
                                   Activate
                                 </button>
                               )}
+                            {ver.status === 'quarantined' && state.kind === 'bin' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleRetryQuarantined(state.component, ver.version)
+                                  }
+                                  disabled={!!installingMap[state.component]}
+                                  className="bg-amber-900/50 hover:bg-amber-800/70 disabled:opacity-50 text-amber-200 border border-amber-700/70 px-2 py-0.5 rounded cursor-pointer"
+                                  title="Re-runs strict capability verification on this quarantined version"
+                                >
+                                  Retry
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRepair(state.component, ver.version)}
+                                  disabled={!!installingMap[state.component]}
+                                  className="bg-indigo-800/60 hover:bg-indigo-700/70 disabled:opacity-50 text-indigo-100 border border-indigo-600/70 px-2 py-0.5 rounded cursor-pointer"
+                                  title="Re-downloads and re-verifies this quarantined version from active manifest"
+                                >
+                                  Repair
+                                </button>
+                              </>
+                            )}
                             {ver.capability_report && (
                               <button
                                 type="button"

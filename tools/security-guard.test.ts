@@ -133,7 +133,9 @@ describe('Security Baseline Guard', () => {
       expect(str.includes('dev_rollback_component')).toBe(false);
       expect(str.includes('dev_gc_component')).toBe(false);
       expect(str.includes('dev_verify_component')).toBe(false);
+      expect(str.includes('dev_retry_quarantined_component')).toBe(false);
       expect(str.includes('dev_repair_component')).toBe(false);
+      expect(str.includes('dev_reset_manifest_sequence_floor')).toBe(false);
       expect(str.includes('dev_set_custom_ffmpeg')).toBe(false);
       expect(str.includes('dev_clear_custom_ffmpeg')).toBe(false);
       expect(str.includes('find_node_executable')).toBe(false);
