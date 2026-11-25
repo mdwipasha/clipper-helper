@@ -11,6 +11,7 @@ pub mod license;
 pub mod manifest;
 pub mod net;
 pub mod render;
+pub mod resolver;
 pub mod security;
 pub mod sidecars;
 pub mod store;

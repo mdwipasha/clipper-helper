@@ -163,6 +163,7 @@ fn test_node_discovery_exists_only_under_debug_assertions() {
         ("installer.rs", include_str!("../src/installer.rs")),
         ("manifest.rs", include_str!("../src/manifest.rs")),
         ("net.rs", include_str!("../src/net.rs")),
+        ("resolver.rs", include_str!("../src/resolver.rs")),
         ("security.rs", include_str!("../src/security.rs")),
         ("sidecars.rs", include_str!("../src/sidecars.rs")),
         ("store.rs", include_str!("../src/store.rs")),
