@@ -2254,7 +2254,7 @@ mod tests {
             "v1"
         );
 
-        // 4. Pointer to a missing dir / vanished executable (e.g. antivirus removed `v1/qjs.exe`)
+        // 4. Vanished executable while `current` directory exists (e.g. antivirus removed `v1/qjs.exe`)
         fs::remove_file(ws.join("bin/qjs/v1/qjs.exe")).unwrap();
         let rec3 = reconcile_startup(&ws, &store).unwrap();
         assert_eq!(rec3.missing_components.len(), 1);
@@ -2265,6 +2265,61 @@ mod tests {
             .to_lowercase()
             .contains("antivirus"));
         assert!(rec3.missing_components[0].repair_action);
+
+        // 5. Pointer to a missing directory while `previous` is intact -> automatic fallback to `previous`
+        let (yt1, yt_p1) =
+            make_zip_manifest_entry(tmp.path(), "yt-dlp", "v1", "yt-dlp.exe", b"yt1");
+        let (yt2, yt_p2) =
+            make_zip_manifest_entry(tmp.path(), "yt-dlp", "v2", "yt-dlp.exe", b"yt2");
+        install_verified_artifact_with_options(
+            &ws,
+            &store,
+            &in_use,
+            &yt1,
+            1,
+            &yt_p1,
+            &ArchiveLimits::default(),
+            None,
+            Some(always_pass_checker),
+        )
+        .await
+        .unwrap();
+        install_verified_artifact_with_options(
+            &ws,
+            &store,
+            &in_use,
+            &yt2,
+            2,
+            &yt_p2,
+            &ArchiveLimits::default(),
+            None,
+            Some(always_pass_checker),
+        )
+        .await
+        .unwrap();
+        fs::remove_dir_all(ws.join("bin/yt-dlp/v2")).unwrap();
+        let rec4 = reconcile_startup(&ws, &store).unwrap();
+        assert!(rec4
+            .fallbacks_activated
+            .iter()
+            .any(|msg| msg.contains("yt-dlp") && msg.contains("v1")));
+        assert_eq!(
+            store
+                .get_current_component("yt-dlp")
+                .unwrap()
+                .unwrap()
+                .version,
+            "v1"
+        );
+
+        // 6. Pointer to a completely missing directory with no intact fallback -> E_COMPONENT_MISSING
+        fs::remove_dir_all(ws.join("bin/yt-dlp/v1")).unwrap();
+        let rec5 = reconcile_startup(&ws, &store).unwrap();
+        assert_eq!(rec5.missing_components.len(), 1);
+        assert_eq!(rec5.missing_components[0].component, "yt-dlp");
+        assert_eq!(rec5.missing_components[0].code, "E_COMPONENT_MISSING");
+        assert!(rec5.missing_components[0].mentions_antivirus);
+        assert!(rec5.missing_components[0].repair_action);
     }
 
     #[tokio::test]
