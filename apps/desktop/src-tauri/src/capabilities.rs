@@ -171,10 +171,16 @@ fn map_sidecar_err(err: SidecarError, bin: &Path) -> CapabilityError {
 
 async fn run_probe(
     supervisor: &SidecarSupervisor,
+    component: &str,
     binary: &Path,
     args: &[&str],
+    workspace_root: &Path,
 ) -> Result<String, CapabilityError> {
-    let spec = SidecarSpec::new(binary, args.iter().copied()).timeout(CAPABILITY_PROBE_TIMEOUT);
+    let sidecar_env = crate::sidecars::SidecarEnv::for_component(component, workspace_root);
+    let spec = SidecarSpec::new(binary, args.iter().copied())
+        .with_component_env(&sidecar_env)
+        .map_err(|e| map_sidecar_err(e, binary))?
+        .timeout(CAPABILITY_PROBE_TIMEOUT);
     let res = supervisor
         .run_to_completion(&spec, None)
         .await
@@ -596,6 +602,7 @@ pub async fn verify_ffmpeg_capabilities(
     version_label: &str,
     mode: VerifyMode,
     supervisor: &SidecarSupervisor,
+    workspace_root: &Path,
 ) -> Result<CapabilityReport, CapabilityError> {
     if !ffmpeg_path.is_file() {
         return Err(CapabilityError::BinaryMissing(
@@ -608,14 +615,70 @@ pub async fn verify_ffmpeg_capabilities(
         ));
     }
 
-    let version_out = run_probe(supervisor, ffmpeg_path, &["-version"]).await?;
-    let ffprobe_out = run_probe(supervisor, ffprobe_path, &["-version"]).await?;
-    let buildconf_out = run_probe(supervisor, ffmpeg_path, &["-buildconf"]).await?;
-    let encoders_out = run_probe(supervisor, ffmpeg_path, &["-v", "error", "-encoders"]).await?;
-    let decoders_out = run_probe(supervisor, ffmpeg_path, &["-v", "error", "-decoders"]).await?;
-    let filters_out = run_probe(supervisor, ffmpeg_path, &["-v", "error", "-filters"]).await?;
-    let protocols_out = run_probe(supervisor, ffmpeg_path, &["-v", "error", "-protocols"]).await?;
-    let formats_out = run_probe(supervisor, ffmpeg_path, &["-v", "error", "-formats"]).await?;
+    let version_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-version"],
+        workspace_root,
+    )
+    .await?;
+    let ffprobe_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffprobe_path,
+        &["-version"],
+        workspace_root,
+    )
+    .await?;
+    let buildconf_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-buildconf"],
+        workspace_root,
+    )
+    .await?;
+    let encoders_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-v", "error", "-encoders"],
+        workspace_root,
+    )
+    .await?;
+    let decoders_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-v", "error", "-decoders"],
+        workspace_root,
+    )
+    .await?;
+    let filters_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-v", "error", "-filters"],
+        workspace_root,
+    )
+    .await?;
+    let protocols_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-v", "error", "-protocols"],
+        workspace_root,
+    )
+    .await?;
+    let formats_out = run_probe(
+        supervisor,
+        "ffmpeg",
+        ffmpeg_path,
+        &["-v", "error", "-formats"],
+        workspace_root,
+    )
+    .await?;
 
     let report = verify_ffmpeg_outputs(
         &version_out,
@@ -831,19 +894,31 @@ pub async fn verify_installed_component_capabilities(
     expected_version: &str,
     mode: VerifyMode,
     supervisor: &SidecarSupervisor,
+    workspace_root: &Path,
 ) -> Result<CapabilityReport, CapabilityError> {
     match component {
         "ffmpeg" => {
             let ffmpeg = version_dir.join("ffmpeg.exe");
             let ffprobe = version_dir.join("ffprobe.exe");
-            verify_ffmpeg_capabilities(&ffmpeg, &ffprobe, expected_version, mode, supervisor).await
+            verify_ffmpeg_capabilities(
+                &ffmpeg,
+                &ffprobe,
+                expected_version,
+                mode,
+                supervisor,
+                workspace_root,
+            )
+            .await
         }
         "yt-dlp" => {
             let bin = version_dir.join("yt-dlp.exe");
             if !bin.is_file() {
                 return Err(CapabilityError::BinaryMissing(bin.display().to_string()));
             }
-            let out = run_probe(supervisor, &bin, &["--version"]).await?;
+            let mut args_owned = crate::sidecars::yt_dlp_standard_args(workspace_root);
+            args_owned.push("--version".to_string());
+            let args_refs: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+            let out = run_probe(supervisor, "yt-dlp", &bin, &args_refs, workspace_root).await?;
             let report = verify_yt_dlp_output(&out, expected_version, mode);
             if report.status == CapabilityStatus::Fail {
                 return Err(CapabilityError::CapabilityCheckFailed {
@@ -858,9 +933,17 @@ pub async fn verify_installed_component_capabilities(
             if !bin.is_file() {
                 return Err(CapabilityError::BinaryMissing(bin.display().to_string()));
             }
-            let eval_out =
-                run_probe(supervisor, &bin, &["-e", "print('clipper-qjs-ok', 1 + 2)"]).await?;
-            let ver_out = run_probe(supervisor, &bin, &["--version"]).await.ok();
+            let eval_out = run_probe(
+                supervisor,
+                "qjs",
+                &bin,
+                &["-e", "print('clipper-qjs-ok', 1 + 2)"],
+                workspace_root,
+            )
+            .await?;
+            let ver_out = run_probe(supervisor, "qjs", &bin, &["--version"], workspace_root)
+                .await
+                .ok();
             let report = verify_qjs_output(&eval_out, ver_out.as_deref(), expected_version, mode);
             if report.status == CapabilityStatus::Fail {
                 return Err(CapabilityError::CapabilityCheckFailed {
@@ -875,7 +958,14 @@ pub async fn verify_installed_component_capabilities(
             if !bin.is_file() {
                 return Err(CapabilityError::BinaryMissing(bin.display().to_string()));
             }
-            let out = run_probe(supervisor, &bin, &["--version"]).await?;
+            let out = run_probe(
+                supervisor,
+                "whisper-cli",
+                &bin,
+                &["--version"],
+                workspace_root,
+            )
+            .await?;
             let report = verify_whisper_output(&out, expected_version, mode);
             if report.status == CapabilityStatus::Fail {
                 return Err(CapabilityError::CapabilityCheckFailed {
@@ -891,7 +981,14 @@ pub async fn verify_installed_component_capabilities(
             if !bin.is_file() {
                 return Err(CapabilityError::BinaryMissing(bin.display().to_string()));
             }
-            let out = run_probe(supervisor, &bin, &["--mode", "normal"]).await?;
+            let out = run_probe(
+                supervisor,
+                "fake-sidecar",
+                &bin,
+                &["--mode", "normal"],
+                workspace_root,
+            )
+            .await?;
             let ok = out.contains("hello");
             let report = CapabilityReport {
                 component: "fake-sidecar".to_string(),
@@ -1138,6 +1235,7 @@ mod tests {
             "1.0.0",
             VerifyMode::Strict,
             &supervisor,
+            temp.path(),
         )
         .await;
         assert!(matches!(res, Err(CapabilityError::BinaryMissing(_))));

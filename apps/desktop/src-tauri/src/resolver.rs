@@ -319,9 +319,17 @@ impl ComponentResolver {
         raw_path: &str,
     ) -> Result<CustomFfmpegStatus, ResolverError> {
         let supervisor = SidecarSupervisor::new();
+        let ws_root = self.ws_root.clone();
         self.set_custom_ffmpeg_path_with_verifier(raw_path, |ffmpeg, ffprobe| async move {
-            verify_ffmpeg_capabilities(&ffmpeg, &ffprobe, "custom", VerifyMode::Warn, &supervisor)
-                .await
+            verify_ffmpeg_capabilities(
+                &ffmpeg,
+                &ffprobe,
+                "custom",
+                VerifyMode::Warn,
+                &supervisor,
+                &ws_root,
+            )
+            .await
         })
         .await
     }

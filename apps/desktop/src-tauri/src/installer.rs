@@ -455,10 +455,10 @@ fn check_manifest_matches_receipt(
     }
 }
 
-type DefaultCapCheckFuture = std::pin::Pin<
+pub type DefaultCapCheckFuture = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<CapabilityReport, CapabilityError>> + Send>,
 >;
-type DefaultCapCheckHook = fn(String, PathBuf, String) -> DefaultCapCheckFuture;
+pub type DefaultCapCheckHook = fn(String, PathBuf, String) -> DefaultCapCheckFuture;
 
 fn try_idempotent_bin_install(
     ws_root: &Path,
@@ -770,6 +770,7 @@ where
                 &entry.version,
                 VerifyMode::Strict,
                 &supervisor,
+                ws_root,
             )
             .await
         }
@@ -1389,6 +1390,21 @@ pub fn reconcile_startup(
         }
     }
 
+    // 3b. Clean stale per-component temporary directories under `cache/temp/` from prior runs.
+    let cache_temp_dir = ws_root.join("cache").join("temp");
+    if cache_temp_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&cache_temp_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let _ = fs::remove_dir_all(&p);
+                } else {
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
+    }
+
     // 4. Verify every `current` component/model (quick check) & fall back to intact `previous` if broken.
     let all_rows = store.list_all_components()?;
     let mut components_seen: HashSet<String> = HashSet::new();
@@ -1587,6 +1603,7 @@ pub async fn verify_active_component_full(
             &curr.version,
             VerifyMode::Strict,
             &supervisor,
+            ws_root,
         )
         .await
         {
@@ -1632,7 +1649,109 @@ pub async fn verify_active_component_full(
     }
 }
 
-/// Repairs a missing/broken component by cleaning broken current state and re-installing from manifest.
+/// Re-runs strict capability verification on an already-extracted `quarantined` binary version
+/// without requiring a full re-download. Promotes to `current` if verification passes.
+pub async fn retry_quarantined_component_verification(
+    ws_root: &Path,
+    store: &LocalStore,
+    component: &str,
+    version: &str,
+) -> Result<VerifyRepairOutcome, InstallError> {
+    let row = store
+        .get_component_version(component, version)?
+        .ok_or_else(|| InstallError::ComponentMissing {
+            component: component.to_string(),
+            detail: format!("Version '{}' is not present in database", version),
+        })?;
+
+    if row.kind != "bin" {
+        return Ok(verify_active_component_full(ws_root, store, component).await);
+    }
+
+    let ver_dir = ws_root.join(Path::new(&row.install_rel_path.replace('/', "\\")));
+    let receipt_res: Result<InstallReceipt, String> =
+        fs::read_to_string(ver_dir.join("install.json"))
+            .map_err(|_| format!("Missing install.json in '{}'", ver_dir.display()))
+            .and_then(|raw| {
+                serde_json::from_str(&raw).map_err(|e| format!("Corrupt install.json: {}", e))
+            });
+
+    if let Err(err_msg) =
+        receipt_res.and_then(|r| verify_expected_files_on_disk(&ver_dir, &r.files, true))
+    {
+        return Ok(VerifyRepairOutcome {
+            component: component.to_string(),
+            version: Some(version.to_string()),
+            intact: false,
+            repaired: false,
+            error_code: Some("E_COMPONENT_MISSING".to_string()),
+            message: format!(
+                "{}. Antivirus software may have quarantined or removed component files. Click Repair to re-download.",
+                err_msg
+            ),
+            capability_report: None,
+        });
+    }
+
+    let supervisor = SidecarSupervisor::new();
+    match verify_installed_component_capabilities(
+        &row.component,
+        &ver_dir,
+        &row.version,
+        VerifyMode::Strict,
+        &supervisor,
+        ws_root,
+    )
+    .await
+    {
+        Ok(report) => {
+            let report_json = serde_json::to_string(&report).ok();
+            store.set_component_installed_current(
+                &row.component,
+                &row.version,
+                "bin",
+                &row.install_rel_path,
+                row.manifest_sequence,
+                &row.files_json,
+                report_json.as_deref(),
+                row.installed_at,
+            )?;
+            Ok(VerifyRepairOutcome {
+                component: component.to_string(),
+                version: Some(version.to_string()),
+                intact: true,
+                repaired: true,
+                error_code: None,
+                message: "Quarantined version passed capability verification and is now current"
+                    .to_string(),
+                capability_report: Some(CapabilityReportView::from(&report)),
+            })
+        }
+        Err(cap_err) => {
+            if let Some(rep) = cap_err.report() {
+                if let Ok(json) = serde_json::to_string(rep) {
+                    let _ = store.update_component_capability_report(
+                        &row.component,
+                        &row.version,
+                        &json,
+                    );
+                }
+            }
+            Ok(VerifyRepairOutcome {
+                component: component.to_string(),
+                version: Some(version.to_string()),
+                intact: false,
+                repaired: false,
+                error_code: Some(cap_err.error_code().to_string()),
+                message: format!("Quarantine retry failed: {}", cap_err),
+                capability_report: cap_err.report().map(CapabilityReportView::from),
+            })
+        }
+    }
+}
+
+/// Repairs a missing, broken, or quarantined component by cleaning stale state and
+/// re-downloading + re-verifying from the active manifest.
 pub async fn repair_component_from_manifest<F>(
     ws_root: &Path,
     store: &LocalStore,
@@ -1645,26 +1764,45 @@ pub async fn repair_component_from_manifest<F>(
 where
     F: Fn(DownloadProgress) + Send + Sync + 'static,
 {
-    // Remove broken on-disk dir / stale DB row for this exact version if corrupted
     let kind = classify_component_kind(&entry.component)?;
+    let existing_quarantined = store
+        .get_component_version(&entry.component, &entry.version)?
+        .is_some_and(|r| r.status == "quarantined");
+
     if kind == "bin" {
         let ver_dir = ws_root
             .join("bin")
             .join(&entry.component)
             .join(&entry.version);
-        if ver_dir.exists() {
-            let intact = fs::read_to_string(ver_dir.join("install.json"))
+        let intact = if ver_dir.exists() {
+            fs::read_to_string(ver_dir.join("install.json"))
                 .ok()
                 .and_then(|s| serde_json::from_str::<InstallReceipt>(&s).ok())
                 .map(|r| {
                     check_manifest_matches_receipt(entry, &r)
                         && verify_expected_files_on_disk(&ver_dir, &r.files, true).is_ok()
                 })
-                .unwrap_or(false);
-            if !intact {
-                store.delete_component_version_row(&entry.component, &entry.version)?;
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if existing_quarantined || !intact {
+            store.delete_component_version_row(&entry.component, &entry.version)?;
+            if ver_dir.exists() {
                 let _ = remove_dir_with_deferred_fallback(&ver_dir, store)?;
             }
+        }
+    } else if kind == "model" {
+        let model_path = security::resolve_model_path_with_root(ws_root, &entry.component)?;
+        let intact = try_idempotent_model_install(ws_root, store, entry)?.is_some();
+        if existing_quarantined || !intact {
+            store.delete_component_version_row(&entry.component, &entry.version)?;
+            let _ = fs::remove_file(&model_path);
+            let _ = fs::remove_file(model_receipt_path(
+                &ws_root.join("models"),
+                &entry.component,
+            ));
         }
     }
 
@@ -1685,7 +1823,11 @@ where
         intact: true,
         repaired: true,
         error_code: None,
-        message: "Component repaired and verified".to_string(),
+        message: if outcome.kind == "model" {
+            "Model re-downloaded and hash verified".to_string()
+        } else {
+            "Component repaired and verified".to_string()
+        },
         capability_report: outcome
             .capability_report
             .as_ref()
@@ -2253,5 +2395,51 @@ mod tests {
         assert!(!vr.intact);
         assert_eq!(vr.error_code.as_deref(), Some("E_COMPONENT_MISSING"));
         assert!(vr.message.to_lowercase().contains("antivirus"));
+    }
+
+    #[tokio::test]
+    async fn test_quarantine_retry_and_repair_and_temp_cleanup() {
+        let (tmp, ws, store, in_use) = setup_ws();
+
+        // 1. Seed stale temp files under cache/temp -> reconcile_startup cleans them cleanly.
+        let stale_temp = ws.join("cache").join("temp").join("yt-dlp").join("_MEI123");
+        fs::create_dir_all(&stale_temp).unwrap();
+        fs::write(stale_temp.join("old.tmp"), b"stale").unwrap();
+        reconcile_startup(&ws, &store).unwrap();
+        assert!(!stale_temp.exists());
+
+        // 2. Quarantined version: retry fails when binary bad, detects E_COMPONENT_MISSING when deleted
+        let (e1, p1) = make_zip_manifest_entry(tmp.path(), "qjs", "v0.18.0", "qjs.exe", b"bad-qjs");
+        let _ = install_verified_artifact_with_options(
+            &ws,
+            &store,
+            &in_use,
+            &e1,
+            1,
+            &p1,
+            &ArchiveLimits::default(),
+            None,
+            Some(always_fail_gpl_checker),
+        )
+        .await
+        .unwrap_err();
+
+        let retry_res = retry_quarantined_component_verification(&ws, &store, "qjs", &e1.version)
+            .await
+            .unwrap();
+        assert!(!retry_res.intact);
+
+        // Missing files inside quarantined dir -> retry detects E_COMPONENT_MISSING mentioning antivirus
+        fs::remove_file(ws.join("bin/qjs").join(&e1.version).join("qjs.exe")).unwrap();
+        let retry_missing =
+            retry_quarantined_component_verification(&ws, &store, "qjs", &e1.version)
+                .await
+                .unwrap();
+        assert!(!retry_missing.intact);
+        assert_eq!(
+            retry_missing.error_code.as_deref(),
+            Some("E_COMPONENT_MISSING")
+        );
+        assert!(retry_missing.message.to_lowercase().contains("antivirus"));
     }
 }
