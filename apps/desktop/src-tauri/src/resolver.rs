@@ -200,9 +200,18 @@ fn validate_custom_ffmpeg_path_internal(
             }
             Component::Normal(seg) => {
                 let seg_str = seg.to_string_lossy();
-                security::check_windows_segment_invariants(&seg_str).map_err(|e| {
-                    ResolverError::InvalidCustomPath(format!("Unsafe path segment: {}", e))
-                })?;
+                match security::check_windows_segment_invariants(&seg_str) {
+                    Ok(()) => {}
+                    // Defer 8.3 short-name rejection until after `dunce::canonicalize` resolves
+                    // legitimate Windows OS short aliases (e.g. `C:\Users\RUNNER~1\...`).
+                    Err(security::SecurityError::ShortNameForbidden(_)) => {}
+                    Err(e) => {
+                        return Err(ResolverError::InvalidCustomPath(format!(
+                            "Unsafe path segment: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
     }
@@ -247,12 +256,22 @@ fn validate_custom_ffmpeg_path_internal(
         ));
     }
 
-    // Re-check canonical destinations stay on a local fixed drive (guards against drive-escaping junctions).
+    // Re-check canonical destinations stay on a local fixed drive and contain no unsafe
+    // canonical segments (including real `~N` directory names after Windows alias expansion).
     let canon_ffmpeg = dunce::canonicalize(path)
         .map_err(|e| ResolverError::InvalidCustomPath(format!("Canonicalize failed: {}", e)))?;
     let canon_ffprobe = dunce::canonicalize(&ffprobe_path).map_err(|e| {
         ResolverError::InvalidCustomPath(format!("Canonicalize ffprobe failed: {}", e))
     })?;
+
+    for comp in canon_ffmpeg.components() {
+        if let Component::Normal(seg) = comp {
+            let seg_str = seg.to_string_lossy();
+            security::check_windows_segment_invariants(&seg_str).map_err(|e| {
+                ResolverError::InvalidCustomPath(format!("Unsafe canonical path segment: {}", e))
+            })?;
+        }
+    }
 
     if fixed_drive_override.is_none() {
         let canon_fixed = security::is_local_fixed_drive(&canon_ffmpeg)
@@ -857,6 +876,16 @@ mod tests {
         let valid = validate_custom_ffmpeg_path(&ffmpeg_exe.to_string_lossy()).unwrap();
         assert!(valid.ffmpeg_exe.ends_with("ffmpeg.exe"));
         assert!(valid.ffprobe_exe.ends_with("ffprobe.exe"));
+
+        // Literal `~1` directory segment whose canonical name itself is an 8.3 form -> rejected!
+        let literal_short_dir = tmp.path().join("SHORT~1");
+        fs::create_dir_all(&literal_short_dir).unwrap();
+        fs::write(literal_short_dir.join("ffmpeg.exe"), b"ff").unwrap();
+        fs::write(literal_short_dir.join("ffprobe.exe"), b"fp").unwrap();
+        assert!(validate_custom_ffmpeg_path(
+            &literal_short_dir.join("ffmpeg.exe").to_string_lossy()
+        )
+        .is_err());
     }
 
     #[tokio::test]
