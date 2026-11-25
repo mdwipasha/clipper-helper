@@ -40,10 +40,17 @@ pnpm run lint
 ```
 
 ### Debug Dev Panel (Development Only)
-When running in development mode (`pnpm tauri dev`), the app renders an internal debug panel showcasing:
+When running in development mode (`pnpm tauri dev`), the app renders an internal collapsible debug panel showcasing:
 - **SQLite Store & Workspace**: Displays current schema version (from `PRAGMA user_version`) and canonical workspace root.
 - **Sidecar Supervisor**: Interactive runner for `fake-sidecar` across test modes (`progress`, `sleep`, `exit-code`, `invalid-utf8`, `grandchild`, `flood`) showing live stdout, execution time, and Windows Job Object process tree termination.
 - **Security Invariant**: Dev commands and UI components are strictly gated behind `#[cfg(debug_assertions)]` and `import.meta.env.DEV`, excluded from production release builds, and enforced by `tools/security-guard.test.ts`.
+
+### Reporting Problems (Local Diagnostics)
+During beta/MVP, no telemetry or crash data is uploaded automatically over the network. To report an issue:
+1. Open the **Diagnostik** tab in the app (or click **Salin laporan** on the unexpected-exit banner if the app previously crashed).
+2. Type what you were doing in *"Apa yang sedang kamu lakukan?"* (optional) and verify the exact preview.
+3. Click **Salin laporan** (copies `≤ 100 KB` plain text/Markdown with a `CH-XXXX-XXXX` report ID) or **Simpan sebagai file .txt** (`≤ 1 MB`), and paste it to support.
+- **Privacy & redaction:** Windows usernames/profile paths, emails, JWT/Bearer tokens, secrets/API keys, URL query strings/fragments, IP addresses, machine GUIDs/serials, and license keys are scrubbed across rotating log files (`<DataRoot>/logs/`, max 7 days / 20 MB), `error_events` (max 30 days / 500 rows), crash records, and the exported report. Video/audio content, transcripts, and full URLs are never included.
 
 ## Read order
 

@@ -261,21 +261,25 @@ fn record_error(store: &LocalStore, code: &str, stage: &str, detail: &str, stder
 }
 
 fn resolve_manifest_urls(override_url: Option<&str>) -> ManifestUrlConfig {
-    let mut url = DEFAULT_PRODUCTION_MANIFEST_URL.to_string();
     #[cfg(debug_assertions)]
-    {
+    let url = {
+        let mut resolved = DEFAULT_PRODUCTION_MANIFEST_URL.to_string();
         if let Ok(env_url) = std::env::var("CLIPPER_MANIFEST_URL") {
             let trimmed = env_url.trim();
             if !trimmed.is_empty() {
-                url = trimmed.to_string();
+                resolved = trimmed.to_string();
             }
         }
         if let Some(ov) = override_url.map(str::trim).filter(|s| !s.is_empty()) {
-            url = ov.to_string();
+            resolved = ov.to_string();
         }
-    }
+        resolved
+    };
     #[cfg(not(debug_assertions))]
-    let _ = override_url;
+    let url = {
+        let _ = override_url;
+        DEFAULT_PRODUCTION_MANIFEST_URL.to_string()
+    };
 
     let sig_url = if url.ends_with(".sig") {
         url.clone()

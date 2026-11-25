@@ -81,11 +81,23 @@ describe('Security Baseline Guard', () => {
     expect(cap.permissions, 'Permissions array must exist').toBeDefined();
     expect(Array.isArray(cap.permissions)).toBe(true);
 
-    // Disallow dangerous broad permissions (fs:*, shell:*)
+    // Disallow dangerous broad permissions (fs:*, shell:*, dialog:default) and inspect scopes
     for (const perm of cap.permissions) {
       const permName = typeof perm === 'string' ? perm : perm.identifier;
       expect(permName).not.toMatch(/^(fs|shell):/);
       expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
+      expect(permName).not.toBe('dialog:default');
+      if (permName.startsWith('dialog:')) {
+        expect(['dialog:allow-open', 'dialog:allow-save']).toContain(permName);
+      }
+      if (permName === 'opener:allow-open-path') {
+        expect(typeof perm).toBe('object');
+        const allowed = (perm.allow ?? []).map((entry: { path?: string }) => entry.path);
+        expect(allowed).toEqual([
+          '$LOCALDATA/ClipperHelper/logs',
+          '$LOCALDATA/ClipperHelper-Dev/logs',
+        ]);
+      }
       // Disallow dev commands in production default capabilities
       expect(permName).not.toMatch(/dev_/);
     }
@@ -100,9 +112,9 @@ describe('Security Baseline Guard', () => {
     // dev_commands module must be cfg(debug_assertions)
     expect(libContent).toMatch(/#\[cfg\(debug_assertions\)\]\s+pub mod dev_commands;/);
 
-    // dev commands must only be registered in debug builder
+    // Production commands must appear in release builder without any dev_ commands
     expect(libContent).toMatch(
-      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status\s*,?\s*\]\)/
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status[\s\S]*?commands::install_all_required_components[\s\S]*?commands::generate_diagnostics_report[\s\S]*?commands::open_logs_folder\s*,?\s*\]\)/
     );
     expect(libContent).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?dev_/);
 
