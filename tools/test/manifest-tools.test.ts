@@ -9,6 +9,7 @@ import {
   signManifestBytes,
 } from '../src/manifest-signer.js';
 import { checkManifestSequence } from '../src/check-manifest-sequence.js';
+import { buildCleanZip, readZipEntries } from '../src/fetch-pinned-components.js';
 
 describe('Manifest Signer & Dev Server Tools', () => {
   const tmpDir = path.resolve(__dirname, '../../target/test-tools-tmp');
@@ -137,5 +138,17 @@ describe('Manifest Signer & Dev Server Tools', () => {
     // Equal or higher succeeds
     expect(checkManifestSequence({ minSequenceEnv: '5', manifestPath: mPath }).ok).toBe(true);
     expect(checkManifestSequence({ minSequenceEnv: '6', manifestPath: mPath }).ok).toBe(true);
+  });
+
+  it('buildCleanZip and readZipEntries roundtrip flat component packages cleanly', () => {
+    const entries = [
+      { name: 'ffmpeg.exe', data: Buffer.from('MZ_fake_ffmpeg_binary_content_123456') },
+      { name: 'ffprobe.exe', data: Buffer.from('MZ_fake_ffprobe_binary_content_987654') },
+    ];
+    const zipBuf = buildCleanZip(entries);
+    const decoded = readZipEntries(zipBuf);
+    expect(decoded.map((e) => e.name)).toEqual(['ffmpeg.exe', 'ffprobe.exe']);
+    expect(decoded[0]!.data.toString('utf8')).toBe('MZ_fake_ffmpeg_binary_content_123456');
+    expect(decoded[1]!.data.toString('utf8')).toBe('MZ_fake_ffprobe_binary_content_987654');
   });
 });

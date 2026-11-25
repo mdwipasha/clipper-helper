@@ -52,7 +52,28 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         dev_commands::dev_stop_fixture_server,
         dev_commands::dev_fetch_manifest,
         dev_commands::dev_download_component,
+        dev_commands::dev_install_component,
+        dev_commands::dev_get_component_diagnostics,
+        dev_commands::dev_rollback_component,
+        dev_commands::dev_gc_component,
+        dev_commands::dev_verify_component,
+        dev_commands::dev_repair_component,
+        dev_commands::dev_set_custom_ffmpeg,
+        dev_commands::dev_clear_custom_ffmpeg,
     ])
+}
+
+#[cfg(debug_assertions)]
+pub fn export_typescript_bindings() -> Result<(), String> {
+    let specta_builder = create_specta_builder();
+    let bindings_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default().header("// @ts-nocheck\n"),
+            bindings_path,
+        )
+        .map_err(|e| format!("Failed to export TypeScript bindings: {}", e))
 }
 
 #[cfg(not(debug_assertions))]
@@ -65,6 +86,12 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
+    if std::env::args().any(|arg| arg == "--export-bindings") {
+        export_typescript_bindings().expect("Failed to export TypeScript bindings");
+        return;
+    }
+
     init_logging();
     tracing::info!("Starting ClipperHelper Core");
 

@@ -24,6 +24,30 @@
       "title": "No internet connection",
       "body": "Check your internet connection and try again."
     },
+    "E_NET_TIMEOUT": {
+      "title": "Connection timed out",
+      "body": "The request or download timed out. Please try again."
+    },
+    "E_DISK_LOW": {
+      "title": "Low disk space",
+      "body": "Available disk space is running low. Free up space or clean cache."
+    },
+    "E_DISK_FULL": {
+      "title": "Insufficient disk space",
+      "body": "Not enough free disk space to complete this operation."
+    },
+    "E_COMPONENT_MISSING": {
+      "title": "Component missing",
+      "body": "Required component files are missing or damaged (antivirus software may have quarantined them). Click Repair to re-download."
+    },
+    "E_MODEL_DOWNLOAD_FAILED": {
+      "title": "Model download failed",
+      "body": "Failed to download or verify the speech model file. Please try again."
+    },
+    "E_VERIFY_FAILED": {
+      "title": "Verification failed",
+      "body": "Component or output failed integrity or capability verification checks."
+    },
     "E_MANIFEST_INVALID": {
       "title": "Manifest verification failed",
       "body": "Component manifest signature or schema verification failed. Update may be tampered with or corrupted."
@@ -44,5 +68,8 @@
       "title": "An error occurred",
       "body": "An unexpected error occurred. Please try again."
     }
+  },
+  "warning": {
+    "custom_ffmpeg": "Warning: Custom FFmpeg override is active. SHA-256 integrity checks are bypassed for FFmpeg only."
   }
 }
