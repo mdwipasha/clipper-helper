@@ -1,115 +1,266 @@
-import { t } from '@clipper-helper/i18n';
-import { useEffect, useState } from 'react';
+import { SupportedLocale, t } from '@clipper-helper/i18n';
+import { useCallback, useEffect, useState } from 'react';
+import { ComponentsView } from './components/ComponentsView';
 import { DevPanel } from './components/DevPanel';
-import { AppInfo, commands, WorkspaceStatus } from './ipc/bindings';
+import { DiagnosticsView } from './components/DiagnosticsView';
+import { ErrorBanner } from './components/ErrorBanner';
+import { HomeView, NavTab } from './components/HomeView';
+import { SettingsView } from './components/SettingsView';
+import {
+  installGlobalWebViewErrorHandlers,
+  WebViewErrorBoundary,
+} from './components/WebViewErrorBoundary';
+import {
+  AppInfo,
+  commands,
+  ComponentsOverview,
+  CrashRecoveryStatus,
+  SettingsOverview,
+  WorkspaceStatus,
+} from './ipc/bindings';
+import { copyTextToClipboard, formatVersionBadge } from './utils/format';
 
 export function App() {
+  const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [wsStatus, setWsStatus] = useState<WorkspaceStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [overview, setOverview] = useState<ComponentsOverview | null>(null);
+  const [settings, setSettings] = useState<SettingsOverview | null>(null);
+  const [crashStatus, setCrashStatus] = useState<CrashRecoveryStatus | null>(null);
+  const [ipcError, setIpcError] = useState<string | null>(null);
 
-  useEffect(() => {
-    commands
-      .getAppInfo()
-      .then((info) => setAppInfo(info))
-      .catch((err: unknown) => {
-        console.error('Failed to get app info:', err);
-        setError(String(err));
-      });
+  const locale: SupportedLocale = settings?.language === 'en' ? 'en' : 'id';
 
-    commands
-      .getWorkspaceStatus()
-      .then((status) => setWsStatus(status))
-      .catch((err: unknown) => {
-        console.error('Failed to get workspace status:', err);
-      });
+  const refreshOverview = useCallback(async (overrideUrl?: string | null) => {
+    const res = await commands.getComponentsOverview(overrideUrl ?? null);
+    if (res.status === 'ok') {
+      setOverview(res.data);
+    }
   }, []);
 
+  const loadInitialState = useCallback(async () => {
+    try {
+      const [info, ws, crash] = await Promise.all([
+        commands.getAppInfo(),
+        commands.getWorkspaceStatus(),
+        commands.getCrashRecoveryStatus(),
+      ]);
+      setAppInfo(info);
+      setWsStatus(ws);
+      setCrashStatus(crash);
+
+      if (ws.is_initialized) {
+        const [ovRes, setRes] = await Promise.all([
+          commands.getComponentsOverview(null),
+          commands.getSettingsOverview(),
+        ]);
+        if (ovRes.status === 'ok') setOverview(ovRes.data);
+        if (setRes.status === 'ok') setSettings(setRes.data);
+        // Best-effort non-blocking manifest check on startup (falls back cleanly to neutral offline state)
+        const manifestRes = await commands.fetchComponentsManifest(null);
+        if (manifestRes.status === 'ok') {
+          const refreshed = await commands.getComponentsOverview(null);
+          if (refreshed.status === 'ok') setOverview(refreshed.data);
+        }
+      }
+    } catch (err: unknown) {
+      setIpcError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    const cleanup = installGlobalWebViewErrorHandlers();
+    void loadInitialState();
+    return cleanup;
+  }, [loadInitialState]);
+
+  const handleDismissCrash = async () => {
+    const res = await commands.dismissCrashRecovery();
+    if (res.status === 'ok') {
+      setCrashStatus((prev) =>
+        prev ? { ...prev, unclean_shutdown_detected: false, banner_dismissed: true } : prev
+      );
+    }
+  };
+
+  const handleQuickCopyCrashReport = async () => {
+    const rep = await commands.generateDiagnosticsReport('', true);
+    if (rep.status === 'ok') {
+      await copyTextToClipboard(rep.data.preview_text).catch(() => undefined);
+    }
+  };
+
+  const navItems: { id: NavTab; label: string }[] = [
+    { id: 'home', label: t('nav.home', undefined, locale) },
+    { id: 'components', label: t('nav.components', undefined, locale) },
+    { id: 'diagnostics', label: t('nav.diagnostics', undefined, locale) },
+    { id: 'settings', label: t('nav.settings', undefined, locale) },
+  ];
+
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-8">
-      <div
-        className={`${
-          import.meta.env.DEV ? 'max-w-3xl' : 'max-w-md'
-        } w-full bg-slate-800/80 border border-slate-700/60 rounded-xl p-6 shadow-2xl backdrop-blur-sm`}
-      >
-        <div className="flex items-center space-x-3 mb-4">
-          <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-lg shadow-inner">
-            CH
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">{t('app.name')}</h1>
-            <p className="text-xs text-slate-400">{t('app.welcome')}</p>
-          </div>
-        </div>
-
-        <p className="text-sm text-slate-300 mb-6 leading-relaxed">{t('app.tagline')}</p>
-
-        {/* Actionable Error Banner if Workspace Initialization Failed */}
-        {wsStatus && !wsStatus.is_initialized && (
-          <div
-            data-testid="workspace-error-banner"
-            className="mb-4 bg-rose-950/60 border border-rose-800/80 rounded-lg p-4 font-mono text-xs space-y-2 text-rose-200"
-          >
-            <div className="font-bold text-rose-400 flex items-center justify-between">
-              <span>Gagal Menginisialisasi Ruang Kerja</span>
-              <span className="text-[10px] bg-rose-900/60 px-1.5 py-0.5 rounded border border-rose-700/60 font-semibold">
-                {wsStatus.error_code ?? 'E_APP_INIT_FAILED'}
-              </span>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      <header className="border-b border-slate-800 bg-slate-900/90 px-6 py-3">
+        <div className="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-sm shadow-inner">
+              CH
             </div>
-            <p className="text-[11px] text-rose-300/90 leading-relaxed">
-              {wsStatus.error_message ??
-                'Ruang kerja lokal (%LOCALAPPDATA%\\ClipperHelper) tidak dapat dibuat atau diakses.'}
-            </p>
-            <p className="text-[10px] text-slate-400">
-              Pastikan disk Anda memiliki ruang kosong yang cukup dan aplikasi memiliki izin tulis
-              ke %LOCALAPPDATA%.
-            </p>
-            <button
-              onClick={() => {
-                commands.getWorkspaceStatus().then(setWsStatus);
-              }}
-              className="mt-1 bg-rose-800 hover:bg-rose-700 text-white font-medium px-3 py-1 rounded text-xs transition cursor-pointer"
-            >
-              Coba Lagi
-            </button>
+            <div>
+              <h1 className="text-base font-bold tracking-tight text-white leading-none">
+                {t('app.name', undefined, locale)}
+              </h1>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {appInfo ? formatVersionBadge(appInfo.version) : '…'} ·{' '}
+                {appInfo?.platform ?? 'windows'}
+              </p>
+            </div>
+          </div>
+
+          <nav aria-label="Main navigation" className="flex flex-wrap gap-1.5">
+            {navItems.map((item) => {
+              const active = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveTab(item.id)}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
+                    active
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </header>
+
+      <main className="flex-1 w-full max-w-5xl mx-auto p-6 space-y-4">
+        {/* Top Crash Recovery Banner */}
+        {crashStatus?.unclean_shutdown_detected && !crashStatus.banner_dismissed && (
+          <div
+            data-testid="crash-recovery-banner"
+            role="alert"
+            className="bg-amber-950/70 border border-amber-700/80 rounded-lg p-3.5 text-xs flex flex-wrap items-center justify-between gap-2 text-amber-100"
+          >
+            <span className="font-medium">{t('crash.bannerText', undefined, locale)}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleQuickCopyCrashReport()}
+                className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold px-3 py-1 rounded transition"
+              >
+                {t('crash.copyReport', undefined, locale)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('diagnostics')}
+                className="underline text-amber-200 px-2 py-1"
+              >
+                {t('crash.openDiagnostics', undefined, locale)}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDismissCrash()}
+                className="border border-amber-700/70 text-amber-200 px-2.5 py-1 rounded transition"
+              >
+                {t('crash.dismiss', undefined, locale)}
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="bg-slate-950/60 rounded-lg p-4 border border-slate-800 font-mono text-xs space-y-2">
-          <div className="text-slate-400 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-800 pb-1">
-            Rust IPC Status (get_app_info)
-          </div>
-          {appInfo ? (
-            <div className="space-y-1">
-              <div className="flex justify-between">
-                <span className="text-slate-500">App Name:</span>
-                <span className="text-emerald-400 font-medium">{appInfo.name}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Version:</span>
-                <span className="text-indigo-400 font-medium">{appInfo.version}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Platform:</span>
-                <span className="text-amber-400 font-medium">{appInfo.platform}</span>
-              </div>
-            </div>
-          ) : error ? (
-            <div className="text-red-400">Error: {error}</div>
-          ) : (
-            <div className="text-slate-500 animate-pulse">Menghubungkan ke core Rust...</div>
+        {/* Shared ErrorBanner for Workspace Init or IPC failure */}
+        {wsStatus && !wsStatus.is_initialized && (
+          <ErrorBanner
+            testId="workspace-error-banner"
+            locale={locale}
+            error={{
+              code: wsStatus.error_code ?? 'E_APP_INIT_FAILED',
+              message: wsStatus.error_message ?? t('err.E_APP_INIT_FAILED.body', undefined, locale),
+              redactedDetail: wsStatus.error_message ?? undefined,
+              actions: [
+                {
+                  label: t('components.retry', undefined, locale),
+                  variant: 'primary',
+                  onClick: () => void loadInitialState(),
+                },
+              ],
+            }}
+            onOpenDiagnostics={() => setActiveTab('diagnostics')}
+          />
+        )}
+
+        {ipcError && (
+          <ErrorBanner
+            locale={locale}
+            error={{
+              code: 'E_UNKNOWN',
+              message: ipcError,
+              redactedDetail: ipcError,
+              actions: [
+                {
+                  label: t('components.retry', undefined, locale),
+                  onClick: () => {
+                    setIpcError(null);
+                    void loadInitialState();
+                  },
+                },
+              ],
+            }}
+            onOpenDiagnostics={() => setActiveTab('diagnostics')}
+          />
+        )}
+
+        <WebViewErrorBoundary locale={locale} onOpenDiagnostics={() => setActiveTab('diagnostics')}>
+          {activeTab === 'home' && (
+            <HomeView
+              locale={locale}
+              overview={overview}
+              settings={settings}
+              onNavigate={setActiveTab}
+            />
           )}
-        </div>
+          {activeTab === 'components' && (
+            <ComponentsView
+              locale={locale}
+              overview={overview}
+              onRefreshOverview={refreshOverview}
+              onOpenDiagnostics={() => setActiveTab('diagnostics')}
+            />
+          )}
+          {activeTab === 'diagnostics' && (
+            <DiagnosticsView
+              locale={locale}
+              crashStatus={crashStatus}
+              onDismissCrashBanner={handleDismissCrash}
+              onNavigateToDiagnostics={() => setActiveTab('diagnostics')}
+            />
+          )}
+          {activeTab === 'settings' && (
+            <SettingsView
+              locale={locale}
+              settings={settings}
+              onUpdated={setSettings}
+              onOpenDiagnostics={() => setActiveTab('diagnostics')}
+            />
+          )}
+        </WebViewErrorBoundary>
 
-        {/* Debug Dev Panel only in development mode */}
-        {import.meta.env.DEV && <DevPanel />}
-
-        <div className="mt-6 text-center text-xs text-slate-500">
-          M1.1a Foundations · Milestone 1
-        </div>
-      </div>
-    </main>
+        {/* Debug Panel stays strictly debug-only behind import.meta.env.DEV */}
+        {import.meta.env.DEV && (
+          <details className="mt-6 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+            <summary className="cursor-pointer text-xs font-mono text-slate-400">
+              Developer Debug Panel (DEV only)
+            </summary>
+            <div className="mt-3">{import.meta.env.DEV && <DevPanel />}</div>
+          </details>
+        )}
+      </main>
+    </div>
   );
 }
-
 export default App;

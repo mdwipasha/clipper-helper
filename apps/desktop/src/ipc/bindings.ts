@@ -504,6 +504,12 @@ export const commands = {
 
 /** user-defined events **/
 
+export const events = __makeEvents__<{
+  componentInstallProgressEvent: ComponentInstallProgressEvent;
+}>({
+  componentInstallProgressEvent: 'component-install-progress-event',
+});
+
 /** user-defined constants **/
 
 /** user-defined types **/
@@ -554,6 +560,22 @@ export type ComponentDiagnosticsSnapshot = {
   custom_ffmpeg: CustomFfmpegStatus;
   components: ComponentStateSummary[];
   pending_deferred_deletes: number;
+};
+export type ComponentInstallProgressEvent = {
+  job_id: string;
+  component: string;
+  stage: string;
+  completed_items: number;
+  total_items: number;
+  item_completed_bytes: number;
+  item_total_bytes: number;
+  item_percent: number;
+  rate_bps: number;
+  item_eta_seconds: number | null;
+  overall_percent: number;
+  overall_eta_seconds: number | null;
+  overall_eta_low_seconds: number | null;
+  overall_eta_high_seconds: number | null;
 };
 export type ComponentMissingAdvice = {
   code: string;

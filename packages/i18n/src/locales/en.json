@@ -5,6 +5,12 @@
     "version": "Version {version}",
     "tagline": "Turn livestream VODs into campaign-ready vertical clips in minutes."
   },
+  "nav": {
+    "home": "Home",
+    "components": "Components",
+    "diagnostics": "Diagnostics",
+    "settings": "Settings"
+  },
   "stage": {
     "probe": "Checking video link…",
     "download": "Downloading video section",
@@ -19,7 +25,87 @@
     "verify": "Verifying output",
     "finalize": "Saving file"
   },
+  "errorBanner": {
+    "copyDetail": "Copy error detail",
+    "copiedDetail": "Copied",
+    "openDiagnostics": "Open Diagnostics"
+  },
+  "crash": {
+    "bannerText": "The app closed unexpectedly last time — Copy report",
+    "copyReport": "Copy report",
+    "openDiagnostics": "Open Diagnostics",
+    "dismiss": "Dismiss"
+  },
+  "home": {
+    "title": "Home",
+    "subtitle": "Beta fast-path shell: install required components and share redacted diagnostics reports when issues occur.",
+    "componentsReady": "Core components are ready.",
+    "componentsMissing": "Some required components are not installed yet.",
+    "goComponents": "Manage Components",
+    "goDiagnostics": "Open Diagnostics",
+    "goSettings": "Model & Encoder Settings"
+  },
+  "components": {
+    "title": "Components Manager",
+    "subtitle": "Download and verify local processing tools (yt-dlp, qjs, FFmpeg, Whisper, and speech models).",
+    "installAll": "Install All",
+    "installing": "Installing…",
+    "retry": "Retry",
+    "repair": "Repair",
+    "retryVerification": "Retry check",
+    "verify": "Verify",
+    "detail": "Details",
+    "hideDetail": "Hide Details",
+    "offlineTitle": "Component server unreachable",
+    "offlineBody": "Could not fetch update manifest (offline or manifest URL unreachable). You can still inspect local components.",
+    "statusInstalled": "Ready",
+    "statusMissing": "Missing",
+    "statusQuarantined": "Quarantined",
+    "statusModelVerified": "Hash verified",
+    "diskInsufficientTitle": "Insufficient free disk space",
+    "diskInsufficientBody": "Required {required} free space (1.5× component size + 1 GB buffer), available {available}.",
+    "chooseAnotherLocation": "Choose another data folder",
+    "restartWarning": "New data location ({path}) saved to bootstrap.json and applies after restart. Existing data is not migrated automatically.",
+    "oneDriveWarning": "Warning: Folder is inside OneDrive. Cloud sync may lock render files."
+  },
+  "diagnostics": {
+    "title": "Diagnostics & Report a Problem",
+    "subtitle": "Redacted locally on this device (no username, email, tokens, or full URLs). Nothing leaves unless you copy or save.",
+    "whatDoingLabel": "What were you doing?",
+    "whatDoingPlaceholder": "Example: Clicked Install All on Components tab and hit this error…",
+    "includeVideoIdLabel": "Include video ID (11-character ID only, never URLs or query strings)",
+    "previewTitle": "Report Preview ({sizeKb} KB / 100 KB clipboard max · ID {reportId})",
+    "truncationNotice": "Report exceeded ~100 KB clipboard limit; oldest details and log lines were trimmed automatically.",
+    "copyReport": "Copy report",
+    "copiedReport": "Report Copied",
+    "saveTxt": "Save as .txt file",
+    "savedTxt": "Saved to {path}",
+    "openLogsFolder": "Open logs folder",
+    "recentErrorsTitle": "Recent Errors",
+    "filterCodeLabel": "Filter code",
+    "filterAll": "All codes",
+    "emptyErrors": "No recorded errors yet.",
+    "copySingleError": "Copy"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Configure display language, speech model, and passive encoder defaults without an up-front benchmark.",
+    "languageLabel": "Display Language",
+    "speechTitle": "Speech Model (Whisper)",
+    "speechAuto": "Automatic (System default: {model})",
+    "speechDowngradeTitle": "Lighter Model Suggested",
+    "speechDowngradeBody": "small-q5_1 exceeded 1.5× real-time twice in a row. Consider switching to base (never switched automatically).",
+    "switchToBase": "Switch to base",
+    "dismiss": "Dismiss",
+    "encoderTitle": "Video Encoder (Lazy Chain)",
+    "encoderUntested": "Not probed yet — tested automatically on first export (NVENC → QSV → AMF → MF).",
+    "dataLocationTitle": "App Data Location"
+  },
   "err": {
+    "E_APP_INIT_FAILED": {
+      "title": "Workspace initialization failed",
+      "body": "Local workspace directory could not be created or accessed. Check write permissions and free disk space."
+    },
     "E_NET_OFFLINE": {
       "title": "No internet connection",
       "body": "Check your internet connection and try again."
@@ -30,7 +116,7 @@
     },
     "E_DISK_LOW": {
       "title": "Low disk space",
-      "body": "Available disk space is running low. Free up space or clean cache."
+      "body": "Available disk space is running low. Free up space or choose another data folder."
     },
     "E_DISK_FULL": {
       "title": "Insufficient disk space",
@@ -56,6 +142,14 @@
       "title": "Manifest sequence rollback rejected",
       "body": "The component manifest sequence is older than the last accepted sequence. Update rejected."
     },
+    "E_ENCODER_UNAVAILABLE": {
+      "title": "Video encoder unavailable",
+      "body": "All tested encoders (NVENC, QSV, AMF, Media Foundation) failed. Update GPU driver or install Media Feature Pack for Windows N/KN."
+    },
+    "E_RENDER_FAILED": {
+      "title": "Render failed",
+      "body": "FFmpeg encountered an error during rendering."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Anti-bot verification detected",
       "body": "YouTube is requesting a bot check. Wait a few minutes or switch networks/VPN."
@@ -66,7 +160,7 @@
     },
     "E_UNKNOWN": {
       "title": "An error occurred",
-      "body": "An unexpected error occurred. Please try again."
+      "body": "An unexpected error occurred. Try again or open Diagnostics to copy a report."
     }
   },
   "warning": {

@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
+use tauri_specta::Event;
 
 use crate::capabilities::CapabilityReportView;
 use crate::crash::{self, CrashRecoveryStatus};
@@ -146,7 +147,7 @@ pub struct ComponentsOverview {
     pub speech_model: SpeechModelState,
 }
 
-#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+#[derive(Serialize, Deserialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct ComponentInstallProgressEvent {
     pub job_id: String,
     pub component: String,
@@ -583,25 +584,23 @@ async fn install_single_entry(
             } else {
                 p.eta_seconds
             };
-            let _ = app_handle.emit(
-                "component-install-progress",
-                ComponentInstallProgressEvent {
-                    job_id: job_owned.clone(),
-                    component: comp_name.clone(),
-                    stage: p.stage,
-                    completed_items: cursor.completed_items,
-                    total_items: cursor.total_items,
-                    item_completed_bytes: p.completed_bytes as f64,
-                    item_total_bytes: p.total_bytes as f64,
-                    item_percent: p.percent,
-                    rate_bps: p.rate_bps,
-                    item_eta_seconds: p.eta_seconds,
-                    overall_percent: overall_pct,
-                    overall_eta_seconds: overall_eta,
-                    overall_eta_low_seconds: overall_eta.map(|e| e * 0.75),
-                    overall_eta_high_seconds: overall_eta.map(|e| e * 1.5),
-                },
-            );
+            let _ = ComponentInstallProgressEvent {
+                job_id: job_owned.clone(),
+                component: comp_name.clone(),
+                stage: p.stage,
+                completed_items: cursor.completed_items,
+                total_items: cursor.total_items,
+                item_completed_bytes: p.completed_bytes as f64,
+                item_total_bytes: p.total_bytes as f64,
+                item_percent: p.percent,
+                rate_bps: p.rate_bps,
+                item_eta_seconds: p.eta_seconds,
+                overall_percent: overall_pct,
+                overall_eta_seconds: overall_eta,
+                overall_eta_low_seconds: overall_eta.map(|e| e * 0.75),
+                overall_eta_high_seconds: overall_eta.map(|e| e * 1.5),
+            }
+            .emit(&app_handle);
         },
         None,
     )
@@ -609,32 +608,30 @@ async fn install_single_entry(
 
     match res {
         Ok(outcome) => {
-            let _ = app.emit(
-                "component-install-progress",
-                ComponentInstallProgressEvent {
-                    job_id: cursor.job_id.to_string(),
-                    component: outcome.component.clone(),
-                    stage: "complete".to_string(),
-                    completed_items: cursor.completed_items.saturating_add(1),
-                    total_items: cursor.total_items,
-                    item_completed_bytes: entry.size_bytes as f64,
-                    item_total_bytes: entry.size_bytes as f64,
-                    item_percent: 100.0,
-                    rate_bps: 0.0,
-                    item_eta_seconds: Some(0.0),
-                    overall_percent: if cursor.batch_total_bytes > 0 {
-                        (((cursor.prior_bytes_done.saturating_add(entry_size)) as f64
-                            / cursor.batch_total_bytes as f64)
-                            * 100.0)
-                            .clamp(0.0, 100.0)
-                    } else {
-                        100.0
-                    },
-                    overall_eta_seconds: Some(0.0),
-                    overall_eta_low_seconds: Some(0.0),
-                    overall_eta_high_seconds: Some(0.0),
+            let _ = ComponentInstallProgressEvent {
+                job_id: cursor.job_id.to_string(),
+                component: outcome.component.clone(),
+                stage: "complete".to_string(),
+                completed_items: cursor.completed_items.saturating_add(1),
+                total_items: cursor.total_items,
+                item_completed_bytes: entry.size_bytes as f64,
+                item_total_bytes: entry.size_bytes as f64,
+                item_percent: 100.0,
+                rate_bps: 0.0,
+                item_eta_seconds: Some(0.0),
+                overall_percent: if cursor.batch_total_bytes > 0 {
+                    (((cursor.prior_bytes_done.saturating_add(entry_size)) as f64
+                        / cursor.batch_total_bytes as f64)
+                        * 100.0)
+                        .clamp(0.0, 100.0)
+                } else {
+                    100.0
                 },
-            );
+                overall_eta_seconds: Some(0.0),
+                overall_eta_low_seconds: Some(0.0),
+                overall_eta_high_seconds: Some(0.0),
+            }
+            .emit(app);
             Ok(ComponentActionOutcome {
                 ok: true,
                 component: outcome.component,
@@ -854,25 +851,23 @@ pub async fn repair_component(
         &entry,
         seq,
         move |p| {
-            let _ = app_progress.emit(
-                "component-install-progress",
-                ComponentInstallProgressEvent {
-                    job_id: format!("repair-{}", comp_name),
-                    component: p.component,
-                    stage: p.stage,
-                    completed_items: 0,
-                    total_items: 1,
-                    item_completed_bytes: p.completed_bytes as f64,
-                    item_total_bytes: p.total_bytes as f64,
-                    item_percent: p.percent,
-                    rate_bps: p.rate_bps,
-                    item_eta_seconds: p.eta_seconds,
-                    overall_percent: p.percent,
-                    overall_eta_seconds: p.eta_seconds,
-                    overall_eta_low_seconds: p.eta_seconds.map(|e| e * 0.75),
-                    overall_eta_high_seconds: p.eta_seconds.map(|e| e * 1.5),
-                },
-            );
+            let _ = ComponentInstallProgressEvent {
+                job_id: format!("repair-{}", comp_name),
+                component: p.component,
+                stage: p.stage,
+                completed_items: 0,
+                total_items: 1,
+                item_completed_bytes: p.completed_bytes as f64,
+                item_total_bytes: p.total_bytes as f64,
+                item_percent: p.percent,
+                rate_bps: p.rate_bps,
+                item_eta_seconds: p.eta_seconds,
+                overall_percent: p.percent,
+                overall_eta_seconds: p.eta_seconds,
+                overall_eta_low_seconds: p.eta_seconds.map(|e| e * 0.75),
+                overall_eta_high_seconds: p.eta_seconds.map(|e| e * 1.5),
+            }
+            .emit(&app_progress);
         },
         None,
     )
