@@ -21,7 +21,7 @@ use crate::installer::{
 };
 use crate::manifest::ComponentManifest;
 use crate::resolver::{ComponentDiagnosticsSnapshot, ComponentResolver, CustomFfmpegStatus};
-use crate::sidecars::{SidecarSpec, SidecarSupervisor};
+use crate::sidecars::SidecarSupervisor;
 use crate::store::LocalStore;
 use crate::WorkspaceState;
 
@@ -264,7 +264,10 @@ pub async fn dev_run_fake_sidecar(mode: String) -> Result<DevSidecarRunResult, S
         .chain(mode.split_whitespace().map(String::from))
         .collect();
 
-    let spec = SidecarSpec::new(&bin, args);
+    let ws_root = crate::security::get_workspace_root()
+        .unwrap_or_else(|_| std::env::temp_dir().join("clipper-dev-fake"));
+    let spec = crate::sidecars::create_component_spec("fake-sidecar", &bin, args, &ws_root)
+        .map_err(|e| e.to_string())?;
     let supervisor = SidecarSupervisor::new();
 
     let start = Instant::now();

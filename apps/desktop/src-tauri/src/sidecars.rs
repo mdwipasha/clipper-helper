@@ -21,6 +21,9 @@ pub enum SidecarError {
     #[error("Binary path must be absolute: {0}")]
     PathNotAbsolute(PathBuf),
 
+    #[error("Sidecar environment missing required TEMP/TMP directories")]
+    MissingTempEnv,
+
     #[error("Failed to spawn process: {0}")]
     SpawnFailed(String),
 
@@ -526,6 +529,20 @@ impl SidecarSupervisor {
             return Err(SidecarError::BinaryNotFound(spec.binary_path.clone()));
         }
 
+        // Enforce that every supervised sidecar launch receives explicit, non-empty TEMP and TMP
+        // inside spec.env (typically via `SidecarEnv::for_component`).
+        let has_temp = spec
+            .env
+            .iter()
+            .any(|(k, v)| k == "TEMP" && !v.trim().is_empty());
+        let has_tmp = spec
+            .env
+            .iter()
+            .any(|(k, v)| k == "TMP" && !v.trim().is_empty());
+        if !has_temp || !has_tmp {
+            return Err(SidecarError::MissingTempEnv);
+        }
+
         let job = JobObject::create().map_err(SidecarError::JobObjectError)?;
 
         let mut cmd = tokio::process::Command::new(&spec.binary_path);
@@ -893,10 +910,16 @@ mod tests {
         }
     }
 
+    fn fake_spec(bin: &Path, args: impl IntoIterator<Item = impl Into<String>>) -> SidecarSpec {
+        let ws_root =
+            std::env::temp_dir().join(format!("clipper-sidecar-test-{}", std::process::id()));
+        create_component_spec("fake-sidecar", bin, args, &ws_root).expect("fake_sidecar SidecarEnv")
+    }
+
     #[tokio::test]
     async fn test_normal_exit() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "normal"]);
+        let spec = fake_spec(&bin, ["--mode", "normal"]);
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)
@@ -913,7 +936,7 @@ mod tests {
     #[tokio::test]
     async fn test_nonzero_exit_code() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "exit-code", "42"]);
+        let spec = fake_spec(&bin, ["--mode", "exit-code", "42"]);
         let supervisor = SidecarSupervisor::new();
         let err = supervisor
             .run_to_completion(&spec, None)
@@ -930,7 +953,7 @@ mod tests {
     #[tokio::test]
     async fn test_progress_streaming_with_carriage_return() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "progress"]);
+        let spec = fake_spec(&bin, ["--mode", "progress"]);
         let supervisor = SidecarSupervisor::new();
 
         let line_count = Arc::new(AtomicUsize::new(0));
@@ -959,8 +982,8 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_kills_process() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "sleep", "10000"])
-            .timeout(Duration::from_millis(300));
+        let spec =
+            fake_spec(&bin, ["--mode", "sleep", "10000"]).timeout(Duration::from_millis(300));
         let supervisor = SidecarSupervisor::new();
 
         let start = std::time::Instant::now();
@@ -986,7 +1009,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancellation_kills_process() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "sleep", "10000"]);
+        let spec = fake_spec(&bin, ["--mode", "sleep", "10000"]);
         let supervisor = SidecarSupervisor::new();
 
         let token = CancellationToken::new();
@@ -1012,7 +1035,7 @@ mod tests {
     async fn test_flood_output_is_capped() {
         let bin = fake_sidecar_path();
         // Set limit to 64 KB for fast test
-        let spec = SidecarSpec::new(&bin, ["--mode", "flood"]).max_total_bytes(64 * 1024);
+        let spec = fake_spec(&bin, ["--mode", "flood"]).max_total_bytes(64 * 1024);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -1031,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_utf8_handled_lossily() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "invalid-utf8"]);
+        let spec = fake_spec(&bin, ["--mode", "invalid-utf8"]);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -1048,7 +1071,7 @@ mod tests {
     #[tokio::test]
     async fn test_grandchild_killed_via_job_object() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "grandchild"]);
+        let spec = fake_spec(&bin, ["--mode", "grandchild"]);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -1202,7 +1225,7 @@ mod tests {
     #[tokio::test]
     async fn test_sidecar_sanitized_environment_and_path() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "env"]).env("CUSTOM_VAR", "TEST_VAL_123");
+        let spec = fake_spec(&bin, ["--mode", "env"]).env("CUSTOM_VAR", "TEST_VAL_123");
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)
@@ -1246,13 +1269,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_supervisor_rejects_missing_temp_and_tmp() {
+        let bin = fake_sidecar_path();
+        let spec = SidecarSpec::new(&bin, ["--mode", "normal"]);
+        let supervisor = SidecarSupervisor::new();
+        let err = supervisor
+            .run_to_completion(&spec, None)
+            .await
+            .expect_err("must reject spec missing TEMP/TMP");
+        assert!(matches!(err, SidecarError::MissingTempEnv));
+    }
+
+    #[tokio::test]
     async fn test_sidecar_working_directory_isolated() {
         let bin = fake_sidecar_path();
         let temp_ws = std::env::temp_dir().join(format!("test_ws_workdir_{}", std::process::id()));
         let custom_workdir = temp_ws.join("cache").join("temp");
         let _ = std::fs::create_dir_all(&custom_workdir);
 
-        let spec = SidecarSpec::new(&bin, ["--mode", "pwd"]).working_dir(&custom_workdir);
+        let spec = fake_spec(&bin, ["--mode", "pwd"]).working_dir(&custom_workdir);
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)

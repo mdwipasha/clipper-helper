@@ -88,27 +88,19 @@ async fn test_real_yt_dlp_missing_temp_fails_and_sidecar_env_passes() {
     let (_tmp, ws, store, in_use) = setup_workspace();
     let supervisor = SidecarSupervisor::new();
 
-    // 1. Reproduce PyInstaller failure via PRODUCTION supervisor when TEMP/TMP are missing from SidecarSpec.
+    // 1. Assert PRODUCTION supervisor deterministically rejects a bare SidecarSpec missing
+    // TEMP/TMP (guarding against PyInstaller `[PYI-*:ERROR] Could not create temporary directory!`
+    // on standard Windows accounts where `C:\Windows` fallback is read-only).
     let no_temp_spec = SidecarSpec::new(&yt_payload, ["--version"]);
     let repro_err = supervisor
         .run_to_completion(&no_temp_spec, None)
         .await
-        .expect_err("yt-dlp.exe onefile MUST fail under env_clear() when TEMP/TMP are missing");
-    match repro_err {
-        SidecarError::ExecutionFailed {
-            exit_code,
-            stderr_tail,
-        } => {
-            assert_eq!(exit_code, Some(-1));
-            assert!(
-                stderr_tail.contains("Could not create temporary directory")
-                    || stderr_tail.contains("PYI-"),
-                "Expected PyInstaller temp dir failure in stderr, got: {}",
-                stderr_tail
-            );
-        }
-        other => panic!("Expected SidecarError::ExecutionFailed, got {:?}", other),
-    }
+        .expect_err("supervisor MUST reject SidecarSpec missing TEMP/TMP");
+    assert!(
+        matches!(repro_err, SidecarError::MissingTempEnv),
+        "Expected SidecarError::MissingTempEnv, got {:?}",
+        repro_err
+    );
 
     // 2. Install through production pipeline (atomic staging -> rename -> Strict supervisor capability check).
     let no_override: Option<DefaultCapCheckHook> = None;
