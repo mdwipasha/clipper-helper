@@ -103,14 +103,20 @@ jobs:
         shell: powershell
         run: |
           $info = pnpm --filter @clipper-helper/desktop tauri info
-          $infoText = $info -join "`n"
+          $cleanInfo = $info | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m', '' }
+          $infoText = $cleanInfo -join "`n"
           Write-Host $infoText
           if ($LASTEXITCODE -ne 0) {
             Write-Error "tauri info exited with code $LASTEXITCODE"
             exit $LASTEXITCODE
           }
-          if ($infoText -match '\(outdated|\(mismatch') {
+          if ($infoText -match '\(mismatch') {
             Write-Error "Tauri package/crate version mismatch detected!"
+            exit 1
+          }
+          $outdatedTauri = $cleanInfo | Where-Object { $_ -match '^\s*-\s+(tauri\b|tauri-|@tauri-apps/)' -and $_ -match '\(outdated' }
+          if ($outdatedTauri) {
+            Write-Error "Outdated direct Tauri package/crate detected:`n$($outdatedTauri -join "`n")"
             exit 1
           }
 
