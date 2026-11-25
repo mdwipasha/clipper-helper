@@ -4,6 +4,7 @@ pub mod commands;
 pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
+pub mod diagnostics;
 pub mod encoder;
 pub mod eta;
 pub mod hardware;
@@ -49,6 +50,23 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
         commands::get_app_info,
         commands::get_workspace_status,
+        commands::get_components_overview,
+        commands::fetch_components_manifest,
+        commands::install_component,
+        commands::install_all_required_components,
+        commands::repair_component,
+        commands::retry_quarantined_component,
+        commands::verify_component,
+        commands::select_custom_data_root,
+        commands::get_settings_overview,
+        commands::update_settings,
+        commands::get_crash_recovery_status,
+        commands::dismiss_crash_recovery,
+        commands::list_error_events,
+        commands::record_webview_error,
+        commands::generate_diagnostics_report,
+        commands::save_diagnostics_report_file,
+        commands::open_logs_folder,
         dev_commands::dev_get_system_info,
         dev_commands::dev_reset_workspace,
         dev_commands::dev_run_fake_sidecar,
@@ -88,6 +106,23 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
         commands::get_app_info,
         commands::get_workspace_status,
+        commands::get_components_overview,
+        commands::fetch_components_manifest,
+        commands::install_component,
+        commands::install_all_required_components,
+        commands::repair_component,
+        commands::retry_quarantined_component,
+        commands::verify_component,
+        commands::select_custom_data_root,
+        commands::get_settings_overview,
+        commands::update_settings,
+        commands::get_crash_recovery_status,
+        commands::dismiss_crash_recovery,
+        commands::list_error_events,
+        commands::record_webview_error,
+        commands::generate_diagnostics_report,
+        commands::save_diagnostics_report_file,
+        commands::open_logs_folder,
     ])
 }
 
@@ -167,6 +202,8 @@ pub fn run() {
 
             let in_use_registry = installer::InUseRegistry::new();
             app.manage(in_use_registry);
+            app.manage(commands::ManifestCacheState::default());
+            app.manage(commands::WebViewErrorRateLimiter::default());
 
             match init_res {
                 Ok((root, store, rec)) => {

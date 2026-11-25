@@ -28,19 +28,19 @@ pub struct ActiveSessionMarker {
     pub pid: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
 pub struct CrashRecord {
-    pub timestamp: u64,
+    pub timestamp: f64,
     pub app_version: String,
     pub location: Option<String>,
     pub message_redacted: String,
     pub backtrace_redacted: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
 pub struct CrashRecoveryStatus {
     pub unclean_shutdown_detected: bool,
-    pub previous_started_at: Option<u64>,
+    pub previous_started_at: Option<f64>,
     pub crash_record: Option<CrashRecord>,
     pub banner_dismissed: bool,
 }
@@ -102,7 +102,7 @@ pub fn begin_session(logs_dir: &Path, app_version: &str) -> CrashRecoveryStatus 
 
     CrashRecoveryStatus {
         unclean_shutdown_detected: unclean,
-        previous_started_at: previous_marker.map(|m| m.started_at),
+        previous_started_at: previous_marker.map(|m| m.started_at as f64),
         crash_record,
         banner_dismissed: false,
     }
@@ -144,8 +144,9 @@ fn write_redacted_crash_files(
     );
     let loc_redacted = location.map(security::redact_sensitive_text);
 
+    let ts_now = unix_now_secs();
     let record = CrashRecord {
-        timestamp: unix_now_secs(),
+        timestamp: ts_now as f64,
         app_version: app_version.to_string(),
         location: loc_redacted.clone(),
         message_redacted: msg_redacted.clone(),
@@ -164,7 +165,7 @@ fn write_redacted_crash_files(
         let _ = writeln!(
             file,
             "[ts={}] PANIC app={} loc={} msg={}",
-            record.timestamp,
+            ts_now,
             record.app_version,
             loc_redacted.as_deref().unwrap_or("unknown"),
             msg_redacted.replace('\n', " ")

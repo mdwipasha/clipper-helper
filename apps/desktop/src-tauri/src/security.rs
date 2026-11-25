@@ -1058,13 +1058,14 @@ fn redact_single_username(text: &str, username: &str) -> String {
 pub fn redact_with_extra_usernames(input: &str, extra_usernames: &[&str]) -> String {
     let mut text = input.to_string();
 
-    // 1. Redact JWT tokens
-    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
-
-    // 2. Redact Bearer authorization headers
+    // 1. Redact Bearer authorization headers BEFORE JWT replacement so `Bearer <jwt>`
+    // strips the `Bearer` prefix cleanly even when followed by `[REDACTED_TOKEN]`
     text = BEARER_REGEX
-        .replace_all(&text, "Bearer [REDACTED_TOKEN]")
+        .replace_all(&text, "Auth [REDACTED_TOKEN]")
         .to_string();
+
+    // 2. Redact standalone JWT tokens
+    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
 
     // 3. Redact URL query strings and URL fragments (#...)
     text = QUERY_STRING_REGEX
@@ -1074,9 +1075,9 @@ pub fn redact_with_extra_usernames(input: &str, extra_usernames: &[&str]) -> Str
         .replace_all(&text, "${1}#[REDACTED_FRAGMENT]")
         .to_string();
 
-    // 4. Redact remaining key-value secrets (outside already-redacted query strings)
+    // 4. Redact remaining key-value secrets (removes literal `token=` / `secret=` markers too)
     text = KEY_VALUE_SECRET_REGEX
-        .replace_all(&text, "${1}${2}[REDACTED_SECRET]")
+        .replace_all(&text, "[REDACTED_SECRET]")
         .to_string();
 
     // 5. Redact emails
@@ -1123,10 +1124,10 @@ pub fn redact_sensitive_text(input: &str) -> String {
 /// 4-segment hardware driver / OS build version strings (used for final report envelope pass).
 pub fn redact_report_envelope(input: &str) -> String {
     let mut text = input.to_string();
-    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
     text = BEARER_REGEX
-        .replace_all(&text, "Bearer [REDACTED_TOKEN]")
+        .replace_all(&text, "Auth [REDACTED_TOKEN]")
         .to_string();
+    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
     text = QUERY_STRING_REGEX
         .replace_all(&text, "?[REDACTED_QUERY]")
         .to_string();
@@ -1134,7 +1135,7 @@ pub fn redact_report_envelope(input: &str) -> String {
         .replace_all(&text, "${1}#[REDACTED_FRAGMENT]")
         .to_string();
     text = KEY_VALUE_SECRET_REGEX
-        .replace_all(&text, "${1}${2}[REDACTED_SECRET]")
+        .replace_all(&text, "[REDACTED_SECRET]")
         .to_string();
     text = EMAIL_REGEX
         .replace_all(&text, "[REDACTED_EMAIL]")
@@ -1375,6 +1376,7 @@ mod tests {
             "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozGzptqJ";
         let redacted = redact_sensitive_text(jwt);
         assert!(!redacted.contains("eyJhbGci"));
+        assert!(!redacted.contains("Bearer"));
         assert!(redacted.contains("[REDACTED_TOKEN]"));
 
         // Query string
