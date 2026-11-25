@@ -4,6 +4,7 @@ pub mod commands;
 pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
+pub mod encoder;
 pub mod eta;
 pub mod hardware;
 pub mod installer;
@@ -16,6 +17,7 @@ pub mod render;
 pub mod resolver;
 pub mod security;
 pub mod sidecars;
+pub mod speech;
 pub mod store;
 pub mod updater;
 
