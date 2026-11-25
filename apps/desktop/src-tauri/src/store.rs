@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version. Bump this when adding new migrations.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+
+pub const ERROR_EVENT_RETENTION_DAYS: u64 = 30;
+pub const ERROR_EVENT_MAX_ROWS: usize = 500;
 
 #[derive(Error, Debug)]
 pub enum StoreError {
@@ -55,6 +58,58 @@ pub struct ComponentRow {
     pub quarantine_reason: Option<String>,
     pub installed_at: u64,
     pub updated_at: u64,
+}
+
+/// Persisted structured core error event row in SQLite `error_events` table.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, specta::Type)]
+pub struct ErrorEventRow {
+    pub id: f64,
+    pub ts: f64,
+    pub code: String,
+    pub stage: String,
+    pub job_id: Option<String>,
+    pub message_key: String,
+    pub detail_redacted: String,
+    pub stderr_tail_redacted: String,
+    pub app_version: String,
+    pub component_versions_json: String,
+}
+
+/// Input payload for recording a new typed error event.
+#[derive(Debug, Clone)]
+pub struct NewErrorEvent {
+    pub code: String,
+    pub stage: String,
+    pub job_id: Option<String>,
+    pub message_key: String,
+    pub detail: String,
+    pub stderr_tail: String,
+    pub app_version: String,
+    pub component_versions_json: String,
+}
+
+/// Non-sensitive summary of a recent job row for local diagnostics reports.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SafeJobSummary {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub stage: Option<String>,
+    pub error_code: Option<String>,
+    pub video_id: Option<String>,
+    pub created_at: u64,
+    pub finished_at: Option<u64>,
+    pub error_detail_redacted: Option<String>,
+}
+
+/// Aggregated median timing for one `(stage, variant)` in `stage_stats`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StageStatMedian {
+    pub device_profile: String,
+    pub stage: String,
+    pub variant: String,
+    pub sample_count: usize,
+    pub median_rate_units_per_sec: f64,
 }
 
 /// Queued directory/file deletion deferred because of a Windows file lock.
@@ -222,6 +277,16 @@ impl LocalStore {
             tracing::info!("Database migrated to schema version 2");
         }
 
+        if version < 3 {
+            conn.execute_batch(MIGRATION_V3)
+                .map_err(|e| StoreError::MigrationFailed {
+                    version: 3,
+                    detail: e.to_string(),
+                })?;
+            conn.pragma_update(None, "user_version", 3)?;
+            tracing::info!("Database migrated to schema version 3");
+        }
+
         let final_version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if final_version != CURRENT_SCHEMA_VERSION {
             return Err(StoreError::MigrationFailed {
@@ -250,6 +315,7 @@ impl LocalStore {
             let conn = self.conn.lock().expect("store mutex poisoned");
             conn.execute_batch(
                 "PRAGMA foreign_keys = OFF;
+                 DROP TABLE IF EXISTS error_events;
                  DROP TABLE IF EXISTS deferred_deletes;
                  DROP TABLE IF EXISTS components;
                  DROP TABLE IF EXISTS account_snapshot;
@@ -874,9 +940,247 @@ impl LocalStore {
         Ok(n > 0)
     }
 
+    // ── Error Events & Diagnostics Helpers (Schema v3) ─────────────────
+
+    fn truncate_text(s: &str, max_bytes: usize) -> String {
+        if s.len() <= max_bytes {
+            return s.to_string();
+        }
+        let mut end = max_bytes;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...[TRUNCATED]", &s[..end])
+    }
+
+    /// Inserts a redacted error event and prunes entries exceeding 30 days or 500 rows.
+    pub fn record_error_event(&self, event: NewErrorEvent) -> Result<i64, StoreError> {
+        self.record_error_event_at(event, unix_now_secs())
+    }
+
+    /// Inserts an error event with explicit timestamp (useful for retention tests) and prunes.
+    pub fn record_error_event_at(
+        &self,
+        event: NewErrorEvent,
+        ts_secs: u64,
+    ) -> Result<i64, StoreError> {
+        let detail_redacted =
+            Self::truncate_text(&crate::security::redact_sensitive_text(&event.detail), 4096);
+        let stderr_tail_redacted = Self::truncate_text(
+            &crate::security::redact_sensitive_text(&event.stderr_tail),
+            8192,
+        );
+        let min_ts = ts_secs.saturating_sub(ERROR_EVENT_RETENTION_DAYS * 86_400) as i64;
+
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO error_events (
+                ts, code, stage, job_id, message_key, detail_redacted,
+                stderr_tail_redacted, app_version, component_versions_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                ts_secs as i64,
+                event.code,
+                event.stage,
+                event.job_id,
+                event.message_key,
+                detail_redacted,
+                stderr_tail_redacted,
+                event.app_version,
+                event.component_versions_json
+            ],
+        )?;
+        let row_id = tx.last_insert_rowid();
+
+        // Enforce 30-day age retention & max 500 newest rows.
+        tx.execute("DELETE FROM error_events WHERE ts < ?1", params![min_ts])?;
+        tx.execute(
+            "DELETE FROM error_events WHERE id NOT IN (
+                SELECT id FROM error_events ORDER BY ts DESC, id DESC LIMIT ?1
+             )",
+            params![ERROR_EVENT_MAX_ROWS as i64],
+        )?;
+        tx.commit()?;
+        Ok(row_id)
+    }
+
+    /// Lists recorded error events newest-first, optionally filtered by exact `code`.
+    pub fn list_error_events(
+        &self,
+        code_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ErrorEventRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let capped = limit.clamp(1, ERROR_EVENT_MAX_ROWS) as i64;
+        let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<ErrorEventRow> {
+            Ok(ErrorEventRow {
+                id: r.get::<_, i64>(0)? as f64,
+                ts: r.get::<_, i64>(1)? as f64,
+                code: r.get(2)?,
+                stage: r.get(3)?,
+                job_id: r.get(4)?,
+                message_key: r.get(5)?,
+                detail_redacted: r.get(6)?,
+                stderr_tail_redacted: r.get(7)?,
+                app_version: r.get(8)?,
+                component_versions_json: r.get(9)?,
+            })
+        };
+
+        let mut out = Vec::new();
+        if let Some(code) = code_filter.map(str::trim).filter(|s| !s.is_empty()) {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, ts, code, stage, job_id, message_key, detail_redacted,
+                        stderr_tail_redacted, app_version, component_versions_json
+                 FROM error_events
+                 WHERE code = ?1
+                 ORDER BY ts DESC, id DESC
+                 LIMIT ?2",
+            )?;
+            for row in stmt.query_map(params![code, capped], map_row)? {
+                out.push(row?);
+            }
+        } else {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, ts, code, stage, job_id, message_key, detail_redacted,
+                        stderr_tail_redacted, app_version, component_versions_json
+                 FROM error_events
+                 ORDER BY ts DESC, id DESC
+                 LIMIT ?1",
+            )?;
+            for row in stmt.query_map(params![capped], map_row)? {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Serializes ONLY explicitly allowlisted non-sensitive settings for diagnostics reports.
+    pub fn export_safe_settings_allowlist(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
+        const ALLOWLIST_KEYS: &[&str] = &[
+            "language",
+            "speech_model",
+            "speech_model_downgrade_suggested",
+            "speech_model_downgrade_dismissed_for",
+            "speech_model_consecutive_slow_runs",
+            "preferred_encoder",
+            "encoder_fingerprint",
+            "encoder_fallback_history",
+            "custom_ffmpeg_warning",
+            "custom_ffmpeg_path",
+            "output_folder",
+            "manifest_last_accepted_sequence",
+        ];
+
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached("SELECT key, value FROM settings")?;
+        let mut out = std::collections::BTreeMap::new();
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (k, v) = row?;
+            if ALLOWLIST_KEYS.contains(&k.as_str()) {
+                let safe_val = crate::security::redact_report_envelope(&v);
+                out.insert(k, safe_val);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Returns up to `limit` most recent jobs with non-sensitive fields and validated 11-char video IDs.
+    pub fn list_recent_job_summaries(
+        &self,
+        limit: usize,
+        include_video_ids: bool,
+    ) -> Result<Vec<SafeJobSummary>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT j.id, j.kind, j.status, j.stage, j.error_code, j.error_detail,
+                    j.created_at, j.finished_at, p.source_video_id
+             FROM jobs j
+             LEFT JOIN projects p ON p.id = j.project_id
+             ORDER BY j.created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.clamp(1, 50) as i64], |r| {
+            let raw_vid: Option<String> = r.get(8)?;
+            let valid_vid = if include_video_ids {
+                raw_vid.and_then(|v| sanitize_youtube_video_id(&v))
+            } else {
+                None
+            };
+            let raw_err: Option<String> = r.get(5)?;
+            Ok(SafeJobSummary {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                status: r.get(2)?,
+                stage: r.get(3)?,
+                error_code: r.get(4)?,
+                video_id: valid_vid,
+                created_at: r.get::<_, i64>(6)? as u64,
+                finished_at: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                error_detail_redacted: raw_err.map(|e| crate::security::redact_sensitive_text(&e)),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Db)
+    }
+
+    /// Lists distinct `(device_profile, stage, variant)` medians from `stage_stats` for diagnostics.
+    pub fn list_stage_stat_medians(&self) -> Result<Vec<StageStatMedian>, StoreError> {
+        let keys: Vec<(String, String, String)> = {
+            let conn = self.lock_conn()?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT DISTINCT device_profile, stage, variant FROM stage_stats
+                 WHERE wall_ms > 0
+                 ORDER BY stage ASC, variant ASC",
+            )?;
+            let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            mapped.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut results = Vec::new();
+        for (dp, stage, variant) in keys {
+            let count: usize = {
+                let conn = self.lock_conn()?;
+                conn.query_row(
+                    "SELECT COUNT(*) FROM stage_stats
+                     WHERE device_profile = ?1 AND stage = ?2 AND variant = ?3 AND wall_ms > 0",
+                    params![dp, stage, variant],
+                    |r| r.get::<_, i64>(0),
+                )? as usize
+            };
+            if let Some(rate_per_ms) = self.get_median_rate(&dp, &stage, &variant, 20)? {
+                results.push(StageStatMedian {
+                    device_profile: dp,
+                    stage,
+                    variant,
+                    sample_count: count,
+                    median_rate_units_per_sec: rate_per_ms * 1000.0,
+                });
+            }
+        }
+        Ok(results)
+    }
+
     /// Return the database file path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+/// Accepts only strict 11-character YouTube video IDs (`[A-Za-z0-9_-]{11}`); never URLs/query strings.
+pub fn sanitize_youtube_video_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() == 11
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
     }
 }
 
@@ -1019,6 +1323,25 @@ CREATE TABLE IF NOT EXISTS deferred_deletes (
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT
 );
+";
+
+/// V3: Local typed error store (`error_events`) with indexed lookup & retention.
+const MIGRATION_V3: &str = "
+CREATE TABLE IF NOT EXISTS error_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    job_id TEXT,
+    message_key TEXT NOT NULL,
+    detail_redacted TEXT NOT NULL,
+    stderr_tail_redacted TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL,
+    component_versions_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_events_ts ON error_events(ts DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_error_events_code ON error_events(code, ts DESC);
 ";
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -1388,9 +1711,9 @@ mod tests {
             .expect("seed v1 setting");
         }
 
-        // Open through LocalStore -> should migrate automatically v1 -> v2
-        let store = LocalStore::open(&path).expect("open & migrate v1->v2");
-        assert_eq!(store.schema_version().expect("version"), 2);
+        // Open through LocalStore -> should migrate automatically v1 -> current (v3)
+        let store = LocalStore::open(&path).expect("open & migrate v1->current");
+        assert_eq!(store.schema_version().expect("version"), CURRENT_SCHEMA_VERSION);
         assert_eq!(
             store.get_setting("install_id").expect("preserved setting"),
             Some("existing-id-123".to_string())
@@ -1571,5 +1894,127 @@ mod tests {
 
         assert!(store.remove_deferred_delete(r"C:\tmp\locked\v1").unwrap());
         assert!(store.list_deferred_deletes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_error_events_redaction_filter_and_retention() {
+        let (_dir, path) = temp_db();
+        let store = LocalStore::open(&path).expect("open");
+        assert_eq!(store.schema_version().unwrap(), 3);
+
+        let now = 1_800_000_000u64;
+        // 1. Expired row (> 30 days old) gets pruned when recording a newer row
+        store
+            .record_error_event_at(
+                NewErrorEvent {
+                    code: "E_NET_OFFLINE".into(),
+                    stage: "manifest".into(),
+                    job_id: None,
+                    message_key: "err.E_NET_OFFLINE.body".into(),
+                    detail: "old error".into(),
+                    stderr_tail: String::new(),
+                    app_version: "0.1.0".into(),
+                    component_versions_json: "{}".into(),
+                },
+                now - (31 * 86_400),
+            )
+            .unwrap();
+
+        // 2. Record dirty row with PII/token -> redacted before insert
+        store
+            .record_error_event_at(
+                NewErrorEvent {
+                    code: "E_YT_EXTRACT_FAILED".into(),
+                    stage: "download".into(),
+                    job_id: Some("job-1".into()),
+                    message_key: "err.E_YT_EXTRACT_FAILED.body".into(),
+                    detail: r"failed reading C:\Users\Budi\x.mp4 token=secret99".into(),
+                    stderr_tail: "stderr email=budi@example.com".into(),
+                    app_version: "0.1.0".into(),
+                    component_versions_json: r#"{"yt-dlp":"2026.10.26"}"#.into(),
+                },
+                now,
+            )
+            .unwrap();
+
+        let rows = store.list_error_events(None, 50).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].code, "E_YT_EXTRACT_FAILED");
+        assert!(!rows[0].detail_redacted.contains("Budi"));
+        assert!(!rows[0].detail_redacted.contains("secret99"));
+        assert!(!rows[0].stderr_tail_redacted.contains('@'));
+
+        // 3. Enforce max 500-row retention cap
+        for i in 0..520u64 {
+            store
+                .record_error_event_at(
+                    NewErrorEvent {
+                        code: if i % 2 == 0 {
+                            "E_VERIFY_FAILED".into()
+                        } else {
+                            "E_RENDER_FAILED".into()
+                        },
+                        stage: "render".into(),
+                        job_id: None,
+                        message_key: "err.E_RENDER_FAILED.body".into(),
+                        detail: format!("err #{}", i),
+                        stderr_tail: String::new(),
+                        app_version: "0.1.0".into(),
+                        component_versions_json: "{}".into(),
+                    },
+                    now + i + 1,
+                )
+                .unwrap();
+        }
+        let all_after = store.list_error_events(None, 600).unwrap();
+        assert_eq!(all_after.len(), ERROR_EVENT_MAX_ROWS);
+
+        let filtered = store
+            .list_error_events(Some("E_VERIFY_FAILED"), 50)
+            .unwrap();
+        assert_eq!(filtered.len(), 50);
+        assert!(filtered.iter().all(|r| r.code == "E_VERIFY_FAILED"));
+
+        // 4. Settings allowlist excludes unknown/sensitive keys
+        store.set_setting("language", "id").unwrap();
+        store.set_setting("speech_model", "small-q5_1").unwrap();
+        store
+            .set_setting("supabase_service_role_key", "SHOULD_NEVER_EXPORT")
+            .unwrap();
+        store.set_setting("random_token", "SECRET_VALUE").unwrap();
+        let safe_settings = store.export_safe_settings_allowlist().unwrap();
+        assert_eq!(
+            safe_settings.get("language").map(String::as_str),
+            Some("id")
+        );
+        assert_eq!(
+            safe_settings.get("speech_model").map(String::as_str),
+            Some("small-q5_1")
+        );
+        assert!(!safe_settings.contains_key("supabase_service_role_key"));
+        assert!(!safe_settings.contains_key("random_token"));
+    }
+
+    #[test]
+    fn test_v2_to_v3_forward_migration_preserves_data() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('preferred_encoder', 'h264_nvenc')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(
+            store.get_setting("preferred_encoder").unwrap().as_deref(),
+            Some("h264_nvenc")
+        );
+        assert!(store.list_error_events(None, 10).unwrap().is_empty());
     }
 }

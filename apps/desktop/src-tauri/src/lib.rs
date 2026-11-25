@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod capabilities;
 pub mod commands;
+pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
 pub mod eta;
@@ -8,6 +9,7 @@ pub mod hardware;
 pub mod installer;
 pub mod jobs;
 pub mod license;
+pub mod logging;
 pub mod manifest;
 pub mod net;
 pub mod render;
@@ -36,6 +38,7 @@ pub fn init_logging() {
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(RedactionLayer)
+        .with(logging::RotatingFileLogLayer)
         .try_init();
 }
 
@@ -113,6 +116,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             use tauri::Manager;
@@ -164,6 +168,36 @@ pub fn run() {
 
             match init_res {
                 Ok((root, store, rec)) => {
+                    let logs_dir = root.join("logs");
+                    if let Err(e) = logging::activate_file_logging(&logs_dir) {
+                        tracing::warn!("Failed to activate rotating file logs: {}", e);
+                    }
+                    let app_ver = env!("CARGO_PKG_VERSION").to_string();
+                    crash::install_panic_hook(logs_dir.clone(), app_ver.clone());
+                    let crash_status = crash::begin_session(&logs_dir, &app_ver);
+                    if crash_status.unclean_shutdown_detected {
+                        tracing::warn!("Previous session ended unexpectedly; crash recovery banner active");
+                        let detail_msg = crash_status
+                            .crash_record
+                            .as_ref()
+                            .map(|c| c.message_redacted.clone())
+                            .unwrap_or_else(|| "Unclean shutdown detected at startup".to_string());
+                        let _ = store.record_error_event(store::NewErrorEvent {
+                            code: "E_UNKNOWN".to_string(),
+                            stage: "app_lifecycle".to_string(),
+                            job_id: None,
+                            message_key: "err.E_UNKNOWN.body".to_string(),
+                            detail: detail_msg,
+                            stderr_tail: crash_status
+                                .crash_record
+                                .as_ref()
+                                .map(|c| c.backtrace_redacted.clone())
+                                .unwrap_or_default(),
+                            app_version: app_ver,
+                            component_versions_json: "{}".to_string(),
+                        });
+                    }
+                    let crash_state = std::sync::Mutex::new(crash_status);
                     tracing::info!(
                         "Workspace initialized at {} (reconciled: rebuilt={}, staging_cleaned={}, deferred_retried={})",
                         root.display(),
@@ -174,6 +208,7 @@ pub fn run() {
                     app.manage(WorkspaceState { root: root.clone() });
                     app.manage(store);
                     app.manage(rec);
+                    app.manage(crash_state);
                     app.manage(commands::WorkspaceStatus {
                         is_initialized: true,
                         root: Some(root.to_string_lossy().to_string()),
@@ -196,6 +231,15 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(ws) = app_handle.try_state::<WorkspaceState>() {
+                    crash::mark_clean_shutdown(&ws.root.join("logs"));
+                }
+                logging::flush_file_logging();
+            }
+        });
 }
