@@ -656,7 +656,7 @@ export async function runFetchPinnedComponents({
 if (
   process.argv[1] &&
   path.resolve(process.argv[1]) ===
-  path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'))
+    path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'))
 ) {
   const args = process.argv.slice(2);
   const skipModels = args.includes('--skip-models');
