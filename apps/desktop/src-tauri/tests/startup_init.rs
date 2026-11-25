@@ -37,7 +37,11 @@ fn test_startup_from_non_existent_root_creates_workspace_and_initializes_db() {
     let version = store
         .schema_version()
         .expect("failed to read schema version");
-    assert_eq!(version, 1, "Schema version must be migrated to version 1");
+    assert_eq!(
+        version,
+        clipper_helper_desktop_lib::store::CURRENT_SCHEMA_VERSION,
+        "Schema version must be migrated to current version"
+    );
 
     // Clean up
     std::env::remove_var("CLIPPER_WORKSPACE_ROOT");
