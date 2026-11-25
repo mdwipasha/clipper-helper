@@ -1713,7 +1713,10 @@ mod tests {
 
         // Open through LocalStore -> should migrate automatically v1 -> current (v3)
         let store = LocalStore::open(&path).expect("open & migrate v1->current");
-        assert_eq!(store.schema_version().expect("version"), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(
             store.get_setting("install_id").expect("preserved setting"),
             Some("existing-id-123".to_string())
