@@ -5,6 +5,7 @@ pub mod commands;
 pub mod dev_commands;
 pub mod eta;
 pub mod hardware;
+pub mod installer;
 pub mod jobs;
 pub mod license;
 pub mod manifest;
@@ -88,24 +89,61 @@ pub fn run() {
             specta_builder.mount_events(app);
 
             // Startup initialization: ensure workspace directory structure and initialize SQLite store
-            let init_res: Result<(PathBuf, store::LocalStore), security::SecurityError> = (|| {
+            let init_res: Result<
+                (
+                    PathBuf,
+                    store::LocalStore,
+                    installer::ReconciliationReport,
+                ),
+                security::SecurityError,
+            > = (|| {
                 let root = security::ensure_workspace()?;
                 let db_path = root.join("clipper.db");
-                let store = store::LocalStore::open(&db_path).map_err(|e| {
+                let store = match store::LocalStore::open(&db_path) {
+                    Ok(s) => s,
+                    Err(store::StoreError::CorruptRecovered(name)) => {
+                        tracing::warn!(
+                            "Recovered corrupt SQLite DB ({}); reopening fresh DB for rebuild",
+                            name
+                        );
+                        store::LocalStore::open(&db_path).map_err(|e| {
+                            security::SecurityError::RootResolutionFailed(format!(
+                                "Failed to reopen recovered store: {}",
+                                e
+                            ))
+                        })?
+                    }
+                    Err(e) => {
+                        return Err(security::SecurityError::RootResolutionFailed(format!(
+                            "Failed to open store: {}",
+                            e
+                        )));
+                    }
+                };
+                let rec = installer::reconcile_startup(&root, &store).map_err(|e| {
                     security::SecurityError::RootResolutionFailed(format!(
-                        "Failed to open store: {}",
+                        "Startup component reconciliation failed: {}",
                         e
                     ))
                 })?;
-                Ok((root, store))
-            })(
-            );
+                Ok((root, store, rec))
+            })();
+
+            let in_use_registry = installer::InUseRegistry::new();
+            app.manage(in_use_registry);
 
             match init_res {
-                Ok((root, store)) => {
-                    tracing::info!("Workspace initialized at {}", root.display());
+                Ok((root, store, rec)) => {
+                    tracing::info!(
+                        "Workspace initialized at {} (reconciled: rebuilt={}, staging_cleaned={}, deferred_retried={})",
+                        root.display(),
+                        rec.rebuilt_from_receipts,
+                        rec.orphan_staging_removed,
+                        rec.deferred_deletes_succeeded
+                    );
                     app.manage(WorkspaceState { root: root.clone() });
                     app.manage(store);
+                    app.manage(rec);
                     app.manage(commands::WorkspaceStatus {
                         is_initialized: true,
                         root: Some(root.to_string_lossy().to_string()),

@@ -160,6 +160,7 @@ fn test_node_discovery_exists_only_under_debug_assertions() {
         ("archive.rs", include_str!("../src/archive.rs")),
         ("capabilities.rs", include_str!("../src/capabilities.rs")),
         ("commands.rs", include_str!("../src/commands.rs")),
+        ("installer.rs", include_str!("../src/installer.rs")),
         ("manifest.rs", include_str!("../src/manifest.rs")),
         ("net.rs", include_str!("../src/net.rs")),
         ("security.rs", include_str!("../src/security.rs")),
