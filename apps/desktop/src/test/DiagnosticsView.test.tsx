@@ -159,5 +159,12 @@ describe('DiagnosticsView', () => {
     expect(writeTextSpy).toHaveBeenCalledWith(
       expect.stringContaining('[E_YT_EXTRACT_FAILED] stage=download')
     );
+
+    // Filter dropdown filters by code and calls listErrorEvents with chosen code
+    const filterSelect = screen.getByRole('combobox');
+    await user.selectOptions(filterSelect, 'E_YT_EXTRACT_FAILED');
+    await waitFor(() =>
+      expect(commands.listErrorEvents).toHaveBeenCalledWith('E_YT_EXTRACT_FAILED', 100)
+    );
   });
 });

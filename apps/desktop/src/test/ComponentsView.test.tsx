@@ -246,4 +246,45 @@ describe('ComponentsView', () => {
     expect(notice).toHaveTextContent('dimulai ulang');
     expect(notice).toHaveTextContent('tidak dipindahkan otomatis');
   });
+
+  it('keeps neutral offline banner (no error banner) when manifest fetch returns E_NET_OFFLINE and recovers on Retry', async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(commands.fetchComponentsManifest)
+      .mockResolvedValueOnce({
+        status: 'error',
+        error: {
+          code: 'E_NET_OFFLINE',
+          message_key: 'err.E_NET_OFFLINE.body',
+          message: 'Connection refused',
+          detail: 'tcp connect error',
+          disk_bounds: null,
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'ok',
+        data: {
+          sequence: 2,
+          channel: 'stable',
+          generated_at: '2026-11-25T00:00:00Z',
+          components: [],
+        },
+      });
+
+    render(
+      <ComponentsView
+        locale="id"
+        overview={buildOverview()}
+        onRefreshOverview={onRefresh}
+        onOpenDiagnostics={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
+    expect(screen.getByTestId('components-offline-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('shared-error-banner')).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+  });
 });
