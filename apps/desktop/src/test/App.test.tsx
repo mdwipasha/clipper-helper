@@ -17,6 +17,12 @@ vi.mock('../ipc/bindings', async () => {
   const actual = await vi.importActual<typeof import('../ipc/bindings')>('../ipc/bindings');
   return {
     ...actual,
+    events: {
+      ...actual.events,
+      probeProgressEvent: {
+        listen: vi.fn().mockResolvedValue(() => undefined),
+      },
+    },
     commands: {
       ...actual.commands,
       getAppInfo: vi.fn(),
@@ -26,6 +32,7 @@ vi.mock('../ipc/bindings', async () => {
       getComponentsOverview: vi.fn(),
       getSettingsOverview: vi.fn(),
       fetchComponentsManifest: vi.fn(),
+      listRecentProjects: vi.fn().mockResolvedValue({ status: 'ok', data: [] }),
     },
   };
 });
