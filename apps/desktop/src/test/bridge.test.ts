@@ -4,7 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const BRIDGE_DIR = path.resolve(__dirname, '../../../bridge');
 
+const REGISTERED_LISTENERS: Array<{
+  type: string;
+  listener: EventListenerOrEventListenerObject;
+}> = [];
+
+function cleanupBridgeListeners(): void {
+  while (REGISTERED_LISTENERS.length > 0) {
+    const entry = REGISTERED_LISTENERS.pop();
+    if (entry) {
+      window.removeEventListener(entry.type, entry.listener);
+    }
+  }
+}
+
 function loadBridgeDom(locationHref = 'https://clipper-bridge.vercel.app/') {
+  cleanupBridgeListeners();
   const html = fs.readFileSync(path.join(BRIDGE_DIR, 'index.html'), 'utf8');
   const scriptSource = fs.readFileSync(path.join(BRIDGE_DIR, 'bridge.js'), 'utf8');
 
@@ -27,9 +42,22 @@ function loadBridgeDom(locationHref = 'https://clipper-bridge.vercel.app/') {
     value: parentMock,
   });
 
-  // Evaluate real bridge.js inside this jsdom window
-  const fn = new Function(scriptSource);
-  fn();
+  const origAddEventListener = window.addEventListener.bind(window);
+  const spy = vi.spyOn(window, 'addEventListener').mockImplementation(((
+    type: string,
+    listener: EventListenerOrEventListenerObject
+  ) => {
+    REGISTERED_LISTENERS.push({ type, listener });
+    origAddEventListener(type, listener);
+  }) as typeof window.addEventListener);
+
+  try {
+    // Evaluate real bridge.js inside this jsdom window
+    const fn = new Function(scriptSource);
+    fn();
+  } finally {
+    spy.mockRestore();
+  }
 
   return { posted, parentMock };
 }
@@ -73,6 +101,7 @@ describe('Hardened Bridge (apps/bridge) Protocol v1 & CSP', () => {
   });
 
   afterEach(() => {
+    cleanupBridgeListeners();
     vi.useRealTimers();
     delete (window as unknown as Record<string, unknown>).__CLIPPER_SKIP_YT_SCRIPT__;
     delete (window as unknown as Record<string, unknown>).YT;
@@ -132,6 +161,19 @@ describe('Hardened Bridge (apps/bridge) Protocol v1 & CSP', () => {
     // Bridge source code itself never contains postMessage(..., '*')
     const bridgeJs = fs.readFileSync(path.join(BRIDGE_DIR, 'bridge.js'), 'utf8');
     expect(bridgeJs).not.toMatch(/postMessage\([^)]*['"]\*['"]/);
+  });
+
+  it('allows localhost parent origin only on separate dev or local bridge hosts', () => {
+    for (const devUrl of ['https://clipper-bridge-dev.vercel.app/', 'http://localhost:3000/']) {
+      const devBridge = loadBridgeDom(devUrl);
+      dispatchHostMessage('http://localhost:1420', devBridge.parentMock, {
+        type: 'hello',
+        v: 1,
+        nonce: 'dev_nonce_1',
+      });
+      expect(devBridge.posted).toHaveLength(1);
+      expect(devBridge.posted[0]?.targetOrigin).toBe('http://localhost:1420');
+    }
   });
 
   it('supports all three production Tauri origins and strict schema / size / rate checks', () => {

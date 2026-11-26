@@ -50,15 +50,18 @@
   const errorMessage = document.getElementById('error-message');
   const errorCodeEl = document.getElementById('error-code');
 
-  function isLocalDevHost() {
+  const PROD_HOSTS = ['clipper-bridge.vercel.app'];
+
+  function isDevDeploymentHost() {
     const host = (window.location && window.location.hostname) || '';
-    return host === 'localhost' || host === '127.0.0.1';
+    if (host === 'localhost' || host === '127.0.0.1') return true;
+    return host.endsWith('.vercel.app') && !PROD_HOSTS.includes(host);
   }
 
   function isAllowedOrigin(origin) {
     if (typeof origin !== 'string' || !origin) return false;
     if (PROD_ALLOWED_ORIGINS.includes(origin)) return true;
-    if (isLocalDevHost()) {
+    if (isDevDeploymentHost()) {
       return /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(origin);
     }
     return false;
