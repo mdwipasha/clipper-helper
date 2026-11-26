@@ -165,6 +165,46 @@ describe('Security Baseline Guard', () => {
     const appContent = fs.readFileSync(appTsxPath, 'utf8');
     expect(appContent).toContain('import.meta.env.DEV');
     expect(appContent).toMatch(/import\.meta\.env\.DEV\s*&&\s*<DevPanel\s*\/>/);
+
+    // Check ComponentsView gates Debug Manifest URL behind import.meta.env.DEV
+    const componentsTsxPath = path.resolve(
+      __dirname,
+      '../apps/desktop/src/components/ComponentsView.tsx'
+    );
+    const componentsContent = fs.readFileSync(componentsTsxPath, 'utf8');
+    expect(componentsContent).toMatch(
+      /import\.meta\.env\.DEV\s*&&\s*overview\?\.manifest_url_config\.can_override_in_ui/
+    );
+
+    // Inspect exact Rust release command list for zero debug-only commands
+    const releaseBlockMatch = libContent.match(
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?\.commands\(tauri_specta::collect_commands!\[([\s\S]*?)\]\)/
+    );
+    expect(releaseBlockMatch, 'Release collect_commands block must exist').toBeTruthy();
+    const releaseCmds = releaseBlockMatch![1]!
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(releaseCmds.length).toBeGreaterThan(10);
+    for (const cmd of releaseCmds) {
+      expect(cmd.startsWith('commands::')).toBe(true);
+      expect(cmd).not.toMatch(/dev_|debug_/i);
+    }
+
+    // Check built production frontend bundle (apps/desktop/dist/assets) excludes debug controls
+    const distAssetsDir = path.resolve(__dirname, '../apps/desktop/dist/assets');
+    if (fs.existsSync(distAssetsDir)) {
+      const jsFiles = fs.readdirSync(distAssetsDir).filter((f) => f.endsWith('.js'));
+      expect(jsFiles.length).toBeGreaterThan(0);
+      for (const jsFile of jsFiles) {
+        const bundle = fs.readFileSync(path.join(distAssetsDir, jsFile), 'utf8');
+        expect(bundle).not.toContain('Debug Manifest URL');
+        expect(bundle).not.toContain('debug-manifest-url');
+        expect(bundle).not.toContain('Force timecode-only');
+        expect(bundle).not.toContain('dev_run_fake_sidecar');
+        expect(bundle).not.toContain('[DEV] Debug Panel');
+      }
+    }
   });
 
   it('asserts dev commands are absent from release binary if built', () => {

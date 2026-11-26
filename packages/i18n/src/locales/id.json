@@ -92,7 +92,13 @@
     "diskInsufficientBody": "Dibutuhkan {required} ruang kosong (1.5× ukuran komponen + 1 GB buffer), tersisa {available}.",
     "chooseAnotherLocation": "Pilih lokasi data lain",
     "restartWarning": "Lokasi data baru ({path}) tersimpan di bootstrap.json dan berlaku setelah aplikasi dimulai ulang. Data lama tidak dipindahkan otomatis.",
-    "oneDriveWarning": "Peringatan: Folder berada di dalam OneDrive. Sinkronisasi cloud dapat mengunci file render."
+    "oneDriveWarning": "Peringatan: Folder berada di dalam OneDrive. Sinkronisasi cloud dapat mengunci file render.",
+    "verifySuccessComponent": "{component}: Semua berkas lolos pemeriksaan integritas SHA-256 dan kemampuan komponen.",
+    "verifySuccessModel": "{component}: Model lolos pemeriksaan integritas SHA-256.",
+    "repairSuccessComponent": "{component}: Komponen berhasil diperbaiki dan diverifikasi ulang.",
+    "repairSuccessModel": "{component}: Model berhasil diunduh ulang dan hash diverifikasi.",
+    "retryQuarantineSuccess": "{component}: Versi komponen lolos pemeriksaan dan kembali aktif.",
+    "installAllSummary": "Selesai: {installed} komponen dipasang, {skipped} sudah mutakhir."
   },
   "diagnostics": {
     "title": "Diagnostik & Laporkan Masalah",

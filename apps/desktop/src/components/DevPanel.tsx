@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import {
+import type {
   CapabilityReportView,
-  commands,
   ComponentDiagnosticsSnapshot,
   CustomFfmpegStatus,
-  DevFixtureServerStatus,
-  DevInstallOutcome,
-  DevManifestError,
-  DevManifestInfo,
-  DevSidecarRunResult,
-  DevSystemInfo,
 } from '../ipc/bindings';
+import {
+  commands,
+  type DevFixtureServerStatus,
+  type DevInstallOutcome,
+  type DevManifestError,
+  type DevManifestInfo,
+  type DevSidecarRunResult,
+  type DevSystemInfo,
+} from '../ipc/bindings.dev';
 
 export type DevDownloadProgressEvent = {
   component: string;

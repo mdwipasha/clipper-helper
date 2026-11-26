@@ -13,6 +13,7 @@ export default tseslint.config(
       '**/spikes/**',
       'apps/bridge/**',
       'apps/desktop/src/ipc/bindings.ts',
+      'apps/desktop/src/ipc/bindings.dev.ts',
     ],
   },
   {

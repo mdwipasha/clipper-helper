@@ -92,7 +92,13 @@
     "diskInsufficientBody": "Required {required} free space (1.5× component size + 1 GB buffer), available {available}.",
     "chooseAnotherLocation": "Choose another data folder",
     "restartWarning": "New data location ({path}) saved to bootstrap.json and applies after restart. Existing data is not migrated automatically.",
-    "oneDriveWarning": "Warning: Folder is inside OneDrive. Cloud sync may lock render files."
+    "oneDriveWarning": "Warning: Folder is inside OneDrive. Cloud sync may lock render files.",
+    "verifySuccessComponent": "{component}: All files passed full SHA-256 and capability verification.",
+    "verifySuccessModel": "{component}: Model passed full SHA-256 verification.",
+    "repairSuccessComponent": "{component}: Component repaired and verified.",
+    "repairSuccessModel": "{component}: Model re-downloaded and hash verified.",
+    "retryQuarantineSuccess": "{component}: Component version passed verification and is now active.",
+    "installAllSummary": "Done: {installed} component(s) installed, {skipped} already up to date."
   },
   "diagnostics": {
     "title": "Diagnostics & Report a Problem",
