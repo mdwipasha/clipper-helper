@@ -135,9 +135,19 @@ pub struct ProjectRecord {
     pub live_status: Option<String>,
     pub preview_mode: String,
     pub suggested_start_seconds: Option<u32>,
+    pub range_start_ms: Option<f64>,
+    pub range_end_ms: Option<f64>,
     pub status: String,
     pub created_at: f64,
     pub updated_at: f64,
+}
+
+/// Non-sensitive aggregate preview telemetry counters stored locally in SQLite `settings`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, specta::Type)]
+pub struct PreviewCountersSnapshot {
+    pub embed_disabled_count: u32,
+    pub fallback_count: u32,
+    pub config_error_count: u32,
 }
 
 fn unix_now_secs() -> u64 {
@@ -1111,6 +1121,13 @@ impl LocalStore {
             "custom_ffmpeg_path",
             "output_folder",
             "manifest_last_accepted_sequence",
+            "embed_disabled_count",
+            "fallback_count",
+            "config_error_count",
+            "preview_last_mode",
+            "preview_last_bridge_ready_ms",
+            "preview_last_fallback_reason",
+            "preview_last_yt_error_code",
         ];
 
         let conn = self.lock_conn()?;
@@ -1240,8 +1257,10 @@ impl<'a> ProjectRepo<'a> {
     fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRecord> {
         let dur: i64 = row.get(6)?;
         let suggested: Option<i64> = row.get(9)?;
-        let created: i64 = row.get(11)?;
-        let updated: i64 = row.get(12)?;
+        let range_start: Option<i64> = row.get(10)?;
+        let range_end: Option<i64> = row.get(11)?;
+        let created: i64 = row.get(13)?;
+        let updated: i64 = row.get(14)?;
         Ok(ProjectRecord {
             id: row.get(0)?,
             title: row
@@ -1261,8 +1280,10 @@ impl<'a> ProjectRepo<'a> {
                 .get::<_, Option<String>>(8)?
                 .unwrap_or_else(|| "timecode_only".to_string()),
             suggested_start_seconds: suggested.map(|s| s.max(0).min(u32::MAX as i64) as u32),
+            range_start_ms: range_start.map(|v| v.max(0) as f64),
+            range_end_ms: range_end.map(|v| v.max(0) as f64),
             status: row
-                .get::<_, Option<String>>(10)?
+                .get::<_, Option<String>>(12)?
                 .unwrap_or_else(|| "probed".to_string()),
             created_at: created.max(0) as f64,
             updated_at: updated.max(0) as f64,
@@ -1327,7 +1348,7 @@ impl<'a> ProjectRepo<'a> {
         let mut stmt = conn.prepare(
             "SELECT id, title, channel, source_provider, source_video_id, source_url,
                     duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    status, created_at, updated_at
+                    range_start_ms, range_end_ms, status, created_at, updated_at
              FROM projects
              WHERE source_provider = 'youtube' AND source_video_id = ?1",
         )?;
@@ -1348,7 +1369,7 @@ impl<'a> ProjectRepo<'a> {
         let mut stmt = conn.prepare(
             "SELECT id, title, channel, source_provider, source_video_id, source_url,
                     duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    status, created_at, updated_at
+                    range_start_ms, range_end_ms, status, created_at, updated_at
              FROM projects
              ORDER BY updated_at DESC, created_at DESC, rowid DESC
              LIMIT ?1",
@@ -1365,7 +1386,7 @@ impl<'a> ProjectRepo<'a> {
         let mut stmt = conn.prepare(
             "SELECT id, title, channel, source_provider, source_video_id, source_url,
                     duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    status, created_at, updated_at
+                    range_start_ms, range_end_ms, status, created_at, updated_at
              FROM projects
              WHERE id = ?1",
         )?;
@@ -1374,6 +1395,54 @@ impl<'a> ProjectRepo<'a> {
             Some(Ok(rec)) => Ok(Some(rec)),
             Some(Err(e)) => Err(StoreError::from(e)),
             None => Ok(None),
+        }
+    }
+
+    /// Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and marks
+    /// the project status as `'ranged'`.
+    pub fn update_range(
+        &self,
+        project_id: &str,
+        range_start_ms: u32,
+        range_end_ms: u32,
+    ) -> Result<ProjectRecord, StoreError> {
+        Self::validate_project_id(project_id)?;
+        if range_end_ms <= range_start_ms || (range_end_ms - range_start_ms) < 1000 {
+            return Err(StoreError::Internal(
+                "Invalid range: end must exceed start by at least 1000 ms".to_string(),
+            ));
+        }
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        let changed = conn.execute(
+            "UPDATE projects
+             SET range_start_ms = ?1, range_end_ms = ?2, status = 'ranged', updated_at = ?3
+             WHERE id = ?4",
+            params![
+                range_start_ms as i64,
+                range_end_ms as i64,
+                now as i64,
+                project_id
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Internal(format!(
+                "Project '{}' not found",
+                project_id
+            )));
+        }
+        let mut stmt = conn.prepare(
+            "SELECT id, title, channel, source_provider, source_video_id, source_url,
+                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
+                    range_start_ms, range_end_ms, status, created_at, updated_at
+             FROM projects
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(rec),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Err(StoreError::Internal("Updated project missing".to_string())),
         }
     }
 
@@ -1392,6 +1461,62 @@ impl<'a> ProjectRepo<'a> {
         let conn = self.store.lock_conn()?;
         let changed = conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
         Ok(changed > 0)
+    }
+}
+
+impl LocalStore {
+    /// Atomically records preview diagnostics fields & increments aggregate preview counters
+    /// in SQLite `settings` (all allowlisted, non-PII).
+    pub fn record_preview_telemetry(
+        &self,
+        mode: &str,
+        bridge_ready_ms: Option<u32>,
+        fallback_reason: Option<&str>,
+        yt_error_code: Option<i32>,
+        counter_kind: Option<&str>,
+    ) -> Result<PreviewCountersSnapshot, StoreError> {
+        self.set_setting("preview_last_mode", mode)?;
+        if let Some(ms) = bridge_ready_ms {
+            self.set_setting("preview_last_bridge_ready_ms", &ms.to_string())?;
+        }
+        if let Some(reason) = fallback_reason {
+            self.set_setting(
+                "preview_last_fallback_reason",
+                &crate::security::redact_report_envelope(reason),
+            )?;
+        }
+        if let Some(code) = yt_error_code {
+            self.set_setting("preview_last_yt_error_code", &code.to_string())?;
+        }
+
+        let increment_key = match counter_kind {
+            Some("embed_disabled") => Some("embed_disabled_count"),
+            Some("fallback") => Some("fallback_count"),
+            Some("config_error") => Some("config_error_count"),
+            _ => None,
+        };
+        if let Some(key) = increment_key {
+            let current: u32 = self
+                .get_setting(key)?
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(0);
+            self.set_setting(key, &current.saturating_add(1).to_string())?;
+        }
+
+        Ok(PreviewCountersSnapshot {
+            embed_disabled_count: self
+                .get_setting("embed_disabled_count")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            fallback_count: self
+                .get_setting("fallback_count")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            config_error_count: self
+                .get_setting("config_error_count")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+        })
     }
 }
 
@@ -2432,5 +2557,78 @@ mod tests {
         );
         assert!(repo.get(target_id).unwrap().is_none());
         assert!(!repo.delete(ws_root, target_id).unwrap());
+    }
+
+    #[test]
+    fn test_project_repo_update_range_and_preview_telemetry() {
+        let (_dir, path) = temp_db();
+        let store = LocalStore::open(&path).unwrap();
+        let repo = ProjectRepo::new(&store);
+
+        let parsed =
+            crate::url_intake::parse_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=15").unwrap();
+        let info = crate::probe::ProbeInfo {
+            id: "dQw4w9WgXcQ".to_string(),
+            title: "Range Test VOD".to_string(),
+            channel: "Creator".to_string(),
+            duration_seconds: 600,
+            live_status: Some("not_live".to_string()),
+            availability: Some("public".to_string()),
+            playable_in_embed: true,
+            was_live: false,
+            is_live: false,
+            estimated_bytes_per_second: Some(150_000.0),
+            has_avc1_1080p: true,
+            preview_mode: crate::probe::PreviewMode::Embed,
+        };
+        let created = repo.create_from_probe(&parsed, &info).unwrap();
+        assert_eq!(created.status, "probed");
+        assert_eq!(created.range_start_ms, None);
+        assert_eq!(created.range_end_ms, None);
+
+        // Reject invalid < 1000 ms range
+        assert!(repo.update_range(&created.id, 10_000, 10_500).is_err());
+
+        // Persist valid range
+        let updated = repo.update_range(&created.id, 15_000, 75_000).unwrap();
+        assert_eq!(updated.status, "ranged");
+        assert_eq!(updated.range_start_ms, Some(15_000.0));
+        assert_eq!(updated.range_end_ms, Some(75_000.0));
+
+        // Preview telemetry increments allowlisted counters
+        let c1 = store
+            .record_preview_telemetry(
+                "timecode_only",
+                Some(850),
+                Some("embed_disabled"),
+                Some(150),
+                Some("embed_disabled"),
+            )
+            .unwrap();
+        assert_eq!(c1.embed_disabled_count, 1);
+        assert_eq!(c1.fallback_count, 0);
+
+        let c2 = store
+            .record_preview_telemetry(
+                "timecode_only",
+                None,
+                Some("bridge_timeout"),
+                None,
+                Some("fallback"),
+            )
+            .unwrap();
+        assert_eq!(c2.embed_disabled_count, 1);
+        assert_eq!(c2.fallback_count, 1);
+
+        let safe = store.export_safe_settings_allowlist().unwrap();
+        assert_eq!(
+            safe.get("embed_disabled_count").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(safe.get("fallback_count").map(String::as_str), Some("1"));
+        assert_eq!(
+            safe.get("preview_last_fallback_reason").map(String::as_str),
+            Some("bridge_timeout")
+        );
     }
 }

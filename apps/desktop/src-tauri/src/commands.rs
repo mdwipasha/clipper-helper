@@ -33,7 +33,9 @@ use crate::probe::{self, ProbeError, ProbeInfo};
 use crate::resolver::{ComponentDiagnosticsSnapshot, ComponentResolver};
 use crate::security::{self, DataRoot};
 use crate::speech::{self, SpeechModel, SpeechModelState};
-use crate::store::{ErrorEventRow, LocalStore, NewErrorEvent, ProjectRecord, ProjectRepo};
+use crate::store::{
+    ErrorEventRow, LocalStore, NewErrorEvent, PreviewCountersSnapshot, ProjectRecord, ProjectRepo,
+};
 use crate::WorkspaceState;
 
 pub const DEFAULT_PRODUCTION_MANIFEST_URL: &str =
@@ -68,6 +70,30 @@ pub struct ProbeProjectResponse {
     pub probe_info: ProbeInfo,
     pub project: ProjectRecord,
     pub suggested_start_seconds: Option<u32>,
+}
+
+/// Preview bridge configuration and range limits exposed to the frontend.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct PreviewConfigResponse {
+    pub bridge_url: String,
+    pub bridge_protocol_version: u32,
+    pub control_video_id: String,
+    pub ready_timeout_ms: u32,
+    pub max_range_seconds: u32,
+    pub download_prior_rt_factor: f64,
+    pub download_prior_startup_seconds: f64,
+    pub can_force_timecode_only: bool,
+}
+
+/// Structured preview diagnostics & counter increment payload recorded cleanly without PII/URLs.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct PreviewEventInput {
+    pub mode: String,
+    pub bridge_ready_ms: Option<u32>,
+    pub fallback_reason: Option<String>,
+    pub yt_error_code: Option<i32>,
+    pub counter_kind: Option<String>,
+    pub record_error_code: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
@@ -1510,6 +1536,104 @@ pub fn delete_project(app: tauri::AppHandle, project_id: String) -> Result<bool,
             let msg = security::redact_sensitive_text(&e.to_string());
             AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
         })
+}
+
+/// Fetches a single project record by ID (used when reopening from "Proyek terakhir").
+#[tauri::command]
+#[specta::specta]
+pub fn get_project(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Option<ProjectRecord>, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    ProjectRepo::new(&store).get(&project_id).map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+    })
+}
+
+/// Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and sets
+/// `status = 'ranged'` for the project.
+#[tauri::command]
+#[specta::specta]
+pub fn update_project_range(
+    app: tauri::AppHandle,
+    project_id: String,
+    range_start_ms: u32,
+    range_end_ms: u32,
+) -> Result<ProjectRecord, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    ProjectRepo::new(&store)
+        .update_range(&project_id, range_start_ms, range_end_ms)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_RANGE_INVALID", msg.clone(), msg)
+        })
+}
+
+/// Returns preview bridge URL/protocol/control video/timeout/range limits configuration.
+/// In release builds, `bridge_url` is fixed to `https://clipper-bridge.vercel.app` and
+/// `can_force_timecode_only` is strictly `false`.
+#[tauri::command]
+#[specta::specta]
+pub fn get_preview_config() -> PreviewConfigResponse {
+    #[cfg(debug_assertions)]
+    let bridge_url = std::env::var("CLIPPER_BRIDGE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://clipper-bridge.vercel.app".to_string());
+
+    #[cfg(not(debug_assertions))]
+    let bridge_url = "https://clipper-bridge.vercel.app".to_string();
+
+    PreviewConfigResponse {
+        bridge_url,
+        bridge_protocol_version: 1,
+        control_video_id: "WufkeDaJisQ".to_string(),
+        ready_timeout_ms: 6000,
+        max_range_seconds: 300,
+        download_prior_rt_factor: 1.66,
+        download_prior_startup_seconds: 10.0,
+        can_force_timecode_only: cfg!(debug_assertions),
+    }
+}
+
+/// Records non-PII preview diagnostics (`mode`, `bridge_ready_ms`, `fallback_reason`,
+/// `yt_error_code`), updates allowlisted aggregate counters in `settings`, and logs
+/// typed preview errors (`E_PREVIEW_CONFIG`, `E_YT_UNAVAILABLE`) to `error_events`.
+#[tauri::command]
+#[specta::specta]
+pub fn record_preview_event(
+    app: tauri::AppHandle,
+    input: PreviewEventInput,
+) -> Result<PreviewCountersSnapshot, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    let counters = store
+        .record_preview_telemetry(
+            &input.mode,
+            input.bridge_ready_ms,
+            input.fallback_reason.as_deref(),
+            input.yt_error_code,
+            input.counter_kind.as_deref(),
+        )
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?;
+
+    if let Some(ref code) = input.record_error_code {
+        let detail = format!(
+            "mode={} ready_ms={:?} fallback_reason={} yt_code={:?}",
+            input.mode,
+            input.bridge_ready_ms,
+            input.fallback_reason.as_deref().unwrap_or("-"),
+            input.yt_error_code
+        );
+        record_error(&store, code, "preview", &detail, "");
+    }
+
+    Ok(counters)
 }
 
 #[cfg(test)]

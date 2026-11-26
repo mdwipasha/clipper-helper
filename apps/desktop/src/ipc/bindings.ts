@@ -295,6 +295,59 @@ export const commands = {
     }
   },
   /**
+   * Fetches a single project record by ID (used when reopening from "Proyek terakhir").
+   */
+  async getProject(projectId: string): Promise<Result<ProjectRecord | null, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_project', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and sets
+   * `status = 'ranged'` for the project.
+   */
+  async updateProjectRange(
+    projectId: string,
+    rangeStartMs: number,
+    rangeEndMs: number
+  ): Promise<Result<ProjectRecord, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('update_project_range', { projectId, rangeStartMs, rangeEndMs }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns preview bridge URL/protocol/control video/timeout/range limits configuration.
+   * In release builds, `bridge_url` is fixed to `https://clipper-bridge.vercel.app` and
+   * `can_force_timecode_only` is strictly `false`.
+   */
+  async getPreviewConfig(): Promise<PreviewConfigResponse> {
+    return await TAURI_INVOKE('get_preview_config');
+  },
+  /**
+   * Records non-PII preview diagnostics (`mode`, `bridge_ready_ms`, `fallback_reason`,
+   * `yt_error_code`), updates allowlisted aggregate counters in `settings`, and logs
+   * typed preview errors (`E_PREVIEW_CONFIG`, `E_YT_UNAVAILABLE`) to `error_events`.
+   */
+  async recordPreviewEvent(
+    input: PreviewEventInput
+  ): Promise<Result<PreviewCountersSnapshot, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('record_preview_event', { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
    */
   async deleteProject(projectId: string): Promise<Result<boolean, AppCommandError>> {
@@ -571,6 +624,38 @@ export type ManifestOverview = {
   components: ManifestComponentItem[];
 };
 export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean };
+/**
+ * Preview bridge configuration and range limits exposed to the frontend.
+ */
+export type PreviewConfigResponse = {
+  bridge_url: string;
+  bridge_protocol_version: number;
+  control_video_id: string;
+  ready_timeout_ms: number;
+  max_range_seconds: number;
+  download_prior_rt_factor: number;
+  download_prior_startup_seconds: number;
+  can_force_timecode_only: boolean;
+};
+/**
+ * Non-sensitive aggregate preview telemetry counters stored locally in SQLite `settings`.
+ */
+export type PreviewCountersSnapshot = {
+  embed_disabled_count: number;
+  fallback_count: number;
+  config_error_count: number;
+};
+/**
+ * Structured preview diagnostics & counter increment payload recorded cleanly without PII/URLs.
+ */
+export type PreviewEventInput = {
+  mode: string;
+  bridge_ready_ms: number | null;
+  fallback_reason: string | null;
+  yt_error_code: number | null;
+  counter_kind: string | null;
+  record_error_code: string | null;
+};
 export type PreviewMode = 'embed' | 'timecode_only';
 /**
  * Typed video metadata extracted from `yt-dlp -J`. Never includes format URLs.
@@ -622,6 +707,8 @@ export type ProjectRecord = {
   live_status: string | null;
   preview_mode: string;
   suggested_start_seconds: number | null;
+  range_start_ms: number | null;
+  range_end_ms: number | null;
   status: string;
   created_at: number;
   updated_at: number;

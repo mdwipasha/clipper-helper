@@ -92,6 +92,10 @@ describe('Security Baseline Guard', () => {
           { path: '$LOCALDATA/ClipperHelper-Dev/logs' },
         ],
       },
+      {
+        identifier: 'opener:allow-open-url',
+        allow: [{ url: 'https://www.youtube.com/watch?v=*' }],
+      },
       'dialog:allow-open',
       'dialog:allow-save',
     ]);
@@ -102,8 +106,12 @@ describe('Security Baseline Guard', () => {
       expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
       expect(permName).not.toBe('dialog:default');
       expect(permName).not.toBe('opener:default');
-      expect(permName).not.toMatch(/opener:allow-(open-url|default-urls|reveal-item-in-dir)/);
+      expect(permName).not.toMatch(/opener:allow-(default-urls|reveal-item-in-dir)/);
       expect(permName).not.toMatch(/dev_/);
+      if (permName === 'opener:allow-open-url') {
+        expect(typeof perm).toBe('object');
+        expect(perm.allow).toEqual([{ url: 'https://www.youtube.com/watch?v=*' }]);
+      }
     }
 
     // Defense-in-depth: verify frontend dialog plugin calls are strictly directory-open and .txt-save only.
