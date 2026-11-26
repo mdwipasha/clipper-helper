@@ -1,0 +1,7 @@
+[STATUS: VERIFIED]
+[CAPTURE_DATE: 2026-11-20]
+[SOURCE_URL: https://www.youtube.com/watch?v=QSPPyA1736U]
+[SIGNAL: probe_json.live_status == 'is_live' OR yt-dlp live stream timeout]
+[COMMAND: yt-dlp --no-playlist --no-warnings --ignore-config -J https://www.youtube.com/watch?v=QSPPyA1736U]
+[EXIT_CODE: 0 with live_status='is_live' OR timeout on range download]
+WARNING: [youtube] QSPPyA1736U: Live stream has not ended. Range downloads are not supported on active streams.

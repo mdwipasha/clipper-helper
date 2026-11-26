@@ -1,0 +1,6 @@
+[STATUS: VERIFIED]
+[CAPTURE_DATE: 2026-11-19]
+[SOURCE_URL: https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf]
+[COMMAND: yt-dlp -J --no-playlist --no-warnings --ignore-config https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf]
+[EXIT_CODE: 0 with _type='playlist']
+ERROR: URL is a playlist, not a single video.

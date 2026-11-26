@@ -14,6 +14,7 @@ pub mod license;
 pub mod logging;
 pub mod manifest;
 pub mod net;
+pub mod probe;
 pub mod render;
 pub mod resolver;
 pub mod security;
@@ -206,6 +207,13 @@ pub fn initialize_workspace_into_app(
         });
     }
     let crash_state = std::sync::Mutex::new(crash_status);
+    let stale_probes_removed = probe::cleanup_stale_probe_files(&root, probe::PROBE_STALE_TTL);
+    if stale_probes_removed > 0 {
+        tracing::info!(
+            "Removed {} stale cached probe JSON file(s) at startup",
+            stale_probes_removed
+        );
+    }
     tracing::info!(
         "Workspace initialized at {} (reconciled: rebuilt={}, staging_cleaned={}, deferred_retried={})",
         root.display(),

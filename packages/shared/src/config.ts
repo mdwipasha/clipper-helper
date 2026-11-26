@@ -16,6 +16,8 @@ export const LimitsConfigSchema = z.object({
   free_device_daily_cap: z.number().int().positive(),
   max_segments: z.number().int().positive(),
   device_swap_cooldown_days: z.number().int().nonnegative(),
+  download_prior_rt_factor: z.number().positive(),
+  download_prior_startup_seconds: z.number().nonnegative(),
 });
 
 export type LimitsConfig = z.infer<typeof LimitsConfigSchema>;
@@ -62,6 +64,8 @@ export const SEED_APP_CONFIG: AppConfig = {
     free_device_daily_cap: 5,
     max_segments: 20,
     device_swap_cooldown_days: 7,
+    download_prior_rt_factor: 1.66,
+    download_prior_startup_seconds: 10,
   },
   ticket: {
     ttl_seconds: 900,
