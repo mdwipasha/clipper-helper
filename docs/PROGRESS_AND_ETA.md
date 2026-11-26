@@ -198,8 +198,9 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 3. **Fallback:**
    - Any unrecognized extractor error → `E_YT_EXTRACT_FAILED`, saving raw output strictly to redacted local logs (never in user-facing UI or network telemetry).
 
-### 8.2 Core Error Store & Diagnostics Capture
+### 8.2 Core Error Store, Preview Counters & Diagnostics Capture
 - Every typed core error (`E_*`) and rate-limited WebView JS error is recorded locally in SQLite table `error_events` (30-day retention, max 500 newest rows), scrubbed by the shared redaction layer before storage.
+- Preview instrumentation records last preview `mode`, `bridge_ready_ms`, `fallback_reason`, `yt_error_code`, and aggregate allowlisted counters (`embed_disabled_count`, `fallback_count`, `config_error_count`) in SQLite `settings` plus a dedicated `### Preview` section in local diagnostics reports.
 - Users inspect recent errors, filter by `E_*` code, copy single error details from any shared error banner (`Salin detail error`), or generate a copy-pasteable local diagnostics report in **Diagnostik** (zero automatic network uploads).
 
 ## 9. Testing the progress system
