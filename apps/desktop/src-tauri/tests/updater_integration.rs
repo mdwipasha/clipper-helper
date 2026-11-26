@@ -428,7 +428,7 @@ async fn test_disk_space_preflight_check() {
         component: "huge-comp".into(),
         version: "1.0.0".into(),
         platform: "windows-x86_64".into(),
-        url: "http://127.0.0.1:8080/huge.bin".into(),
+        url: "https://cdn.clipperhelper.com/huge.bin".into(),
         size_bytes: huge_bytes,
         sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
         archive: "none".into(),

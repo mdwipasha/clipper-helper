@@ -432,6 +432,11 @@ pub fn dev_stop_fixture_server() -> Result<DevFixtureServerStatus, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
+    start_fixture_server_on_port(8080)
+}
+
+/// Starts or reuses the local dev-server bound to `requested_port` (`0` for ephemeral OS port).
+pub fn start_fixture_server_on_port(requested_port: u16) -> Result<DevFixtureServerStatus, String> {
     let mut state = FIXTURE_SERVER.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut child) = state.process {
         if let Ok(None) = child.try_wait() {
@@ -467,13 +472,12 @@ pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
         }
     }
 
-    let port: u16 = 8080;
     let mut child = Command::new(&node_bin)
         .arg(&script_path)
         .arg("--root")
         .arg(&root_dir)
         .arg("--port")
-        .arg(port.to_string())
+        .arg(requested_port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -493,7 +497,10 @@ pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
     if !line.starts_with(prefix) {
         let _ = child.kill();
         let err = if line.trim().is_empty() {
-            "Failed to start fixture server: process exited before emitting ready signal (port 8080 may already be in use)".to_string()
+            format!(
+                "Failed to start fixture server: process exited before emitting ready signal (port {} may already be in use)",
+                requested_port
+            )
         } else {
             format!("Unexpected dev-server output: {}", line)
         };
@@ -501,15 +508,20 @@ pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
         return Err(err);
     }
     let url = line[prefix.len()..].trim().to_string();
+    let actual_port = url
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| format!("Failed to parse bound port from SERVER_READY url: {}", url))?;
 
     state.process = Some(child);
-    state.port = Some(port);
+    state.port = Some(actual_port);
     state.url = Some(url.clone());
     state.last_error = None;
 
     Ok(DevFixtureServerStatus {
         state: "running".to_string(),
-        port: Some(port),
+        port: Some(actual_port),
         url: Some(url),
         error: None,
     })
@@ -1039,8 +1051,8 @@ mod tests {
         let status = dev_get_fixture_server_status();
         assert_eq!(status.state, "stopped");
 
-        // Start server
-        let start_res = dev_start_fixture_server();
+        // Start server on ephemeral port (0) and read back actual bound port
+        let start_res = start_fixture_server_on_port(0);
         assert!(
             start_res.is_ok(),
             "Failed to start dev fixture server: {:?}",
@@ -1048,15 +1060,19 @@ mod tests {
         );
         let started = start_res.unwrap();
         assert_eq!(started.state, "running");
-        assert_eq!(started.port, Some(8080));
-        assert!(started.url.is_some());
+        let bound_port = started.port.expect("ephemeral bound port must be set");
+        assert!(bound_port > 0, "ephemeral bound port must be non-zero");
+        assert_eq!(
+            started.url.as_deref(),
+            Some(format!("http://127.0.0.1:{}", bound_port).as_str())
+        );
 
         // Verify status reflects running state & start is idempotent
         let status_running = dev_get_fixture_server_status();
         assert_eq!(status_running.state, "running");
-        let idempotent_start = dev_start_fixture_server().expect("idempotent start");
+        let idempotent_start = start_fixture_server_on_port(0).expect("idempotent start");
         assert_eq!(idempotent_start.state, "running");
-        assert_eq!(idempotent_start.port, Some(8080));
+        assert_eq!(idempotent_start.port, Some(bound_port));
 
         // Stop server
         let stop_res = dev_stop_fixture_server();
