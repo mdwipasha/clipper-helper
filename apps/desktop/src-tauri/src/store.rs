@@ -12,10 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version. Bump this when adding new migrations.
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Error, Debug)]
 pub enum StoreError {
@@ -33,6 +34,44 @@ pub enum StoreError {
 
     #[error("Migration failed at version {version}: {detail}")]
     MigrationFailed { version: u32, detail: String },
+
+    #[error("Internal store state error: {0}")]
+    Internal(String),
+}
+
+/// Persisted versioned component/model state row in SQLite `components` table.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComponentRow {
+    pub component: String,
+    pub version: String,
+    pub kind: String,
+    pub install_rel_path: String,
+    pub status: String,
+    pub is_current: bool,
+    pub is_previous: bool,
+    pub manifest_sequence: u64,
+    pub files_json: String,
+    pub capability_report_json: Option<String>,
+    pub quarantine_reason: Option<String>,
+    pub installed_at: u64,
+    pub updated_at: u64,
+}
+
+/// Queued directory/file deletion deferred because of a Windows file lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeferredDeleteRow {
+    pub id: i64,
+    pub path: String,
+    pub created_at: u64,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Thread-safe local SQLite store.
@@ -142,6 +181,7 @@ impl LocalStore {
         };
         store.apply_pragmas()?;
         store.migrate()?;
+        let _ = store.set_setting("needs_component_rebuild", "1");
 
         Err(StoreError::CorruptRecovered(corrupt_name))
     }
@@ -172,8 +212,15 @@ impl LocalStore {
             tracing::info!("Database migrated to schema version 1");
         }
 
-        // Future migrations go here:
-        // if version < 2 { ... }
+        if version < 2 {
+            conn.execute_batch(MIGRATION_V2)
+                .map_err(|e| StoreError::MigrationFailed {
+                    version: 2,
+                    detail: e.to_string(),
+                })?;
+            conn.pragma_update(None, "user_version", 2)?;
+            tracing::info!("Database migrated to schema version 2");
+        }
 
         let final_version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if final_version != CURRENT_SCHEMA_VERSION {
@@ -203,6 +250,8 @@ impl LocalStore {
             let conn = self.conn.lock().expect("store mutex poisoned");
             conn.execute_batch(
                 "PRAGMA foreign_keys = OFF;
+                 DROP TABLE IF EXISTS deferred_deletes;
+                 DROP TABLE IF EXISTS components;
                  DROP TABLE IF EXISTS account_snapshot;
                  DROP TABLE IF EXISTS outbox;
                  DROP TABLE IF EXISTS settings;
@@ -355,6 +404,476 @@ impl LocalStore {
         Ok(Some(median))
     }
 
+    // ── Components & Deferred Deletes DAO (Schema v2) ─────────────────
+
+    fn map_component_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ComponentRow> {
+        Ok(ComponentRow {
+            component: r.get(0)?,
+            version: r.get(1)?,
+            kind: r.get(2)?,
+            install_rel_path: r.get(3)?,
+            status: r.get(4)?,
+            is_current: r.get::<_, i64>(5)? != 0,
+            is_previous: r.get::<_, i64>(6)? != 0,
+            manifest_sequence: r.get::<_, i64>(7)? as u64,
+            files_json: r.get(8)?,
+            capability_report_json: r.get(9)?,
+            quarantine_reason: r.get(10)?,
+            installed_at: r.get::<_, i64>(11)? as u64,
+            updated_at: r.get::<_, i64>(12)? as u64,
+        })
+    }
+
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreError> {
+        self.conn
+            .lock()
+            .map_err(|_| StoreError::Internal("store mutex poisoned".to_string()))
+    }
+
+    /// Reads one specific `(component, version)` record.
+    pub fn get_component_version(
+        &self,
+        component: &str,
+        version: &str,
+    ) -> Result<Option<ComponentRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+             FROM components
+             WHERE component = ?1 AND version = ?2",
+        )?;
+        match stmt.query_row(params![component, version], Self::map_component_row) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Db(e)),
+        }
+    }
+
+    /// Reads the active (`is_current = 1 AND status = 'installed'`) version for a component.
+    pub fn get_current_component(
+        &self,
+        component: &str,
+    ) -> Result<Option<ComponentRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+             FROM components
+             WHERE component = ?1 AND is_current = 1 AND status = 'installed'",
+        )?;
+        match stmt.query_row(params![component], Self::map_component_row) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Db(e)),
+        }
+    }
+
+    /// Reads the rollback target (`is_previous = 1 AND status = 'installed'`) for a component.
+    pub fn get_previous_component(
+        &self,
+        component: &str,
+    ) -> Result<Option<ComponentRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+             FROM components
+             WHERE component = ?1 AND is_previous = 1 AND status = 'installed'",
+        )?;
+        match stmt.query_row(params![component], Self::map_component_row) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Db(e)),
+        }
+    }
+
+    /// Lists all tracked versions (installed + quarantined) for a component, newest first.
+    pub fn list_component_versions(
+        &self,
+        component: &str,
+    ) -> Result<Vec<ComponentRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+             FROM components
+             WHERE component = ?1
+             ORDER BY is_current DESC, is_previous DESC, installed_at DESC, manifest_sequence DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![component], Self::map_component_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Lists all rows in the `components` table across every component/model.
+    pub fn list_all_components(&self) -> Result<Vec<ComponentRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+             FROM components
+             ORDER BY component ASC, is_current DESC, is_previous DESC, installed_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], Self::map_component_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Atomically promotes `(component, version)` to `is_current = 1` in a single transaction,
+    /// demoting any distinct previously current `installed` version to `is_previous = 1`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_component_installed_current(
+        &self,
+        component: &str,
+        version: &str,
+        kind: &str,
+        install_rel_path: &str,
+        manifest_sequence: u64,
+        files_json: &str,
+        capability_report_json: Option<&str>,
+        installed_at: u64,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs() as i64;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+
+        let existing_current: Option<String> = match tx.query_row(
+            "SELECT version FROM components
+             WHERE component = ?1 AND is_current = 1 AND status = 'installed'",
+            params![component],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StoreError::Db(e)),
+        };
+
+        if existing_current.as_deref() != Some(version) {
+            tx.execute(
+                "UPDATE components SET is_previous = 0, updated_at = ?2 WHERE component = ?1 AND is_previous = 1",
+                params![component, now],
+            )?;
+            tx.execute(
+                "UPDATE components SET is_current = 0, is_previous = 1, updated_at = ?2
+                 WHERE component = ?1 AND is_current = 1 AND status = 'installed'",
+                params![component, now],
+            )?;
+            // Also clear any stray is_current=1 (e.g. from unexpected state) so partial index holds
+            tx.execute(
+                "UPDATE components SET is_current = 0, updated_at = ?2
+                 WHERE component = ?1 AND is_current = 1",
+                params![component, now],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE components SET is_previous = 0, updated_at = ?3
+                 WHERE component = ?1 AND version = ?2 AND is_previous = 1",
+                params![component, version, now],
+            )?;
+        }
+
+        tx.execute(
+            "INSERT INTO components (
+                component, version, kind, install_rel_path, status, is_current, is_previous,
+                manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                installed_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, 'installed', 1, 0, ?5, ?6, ?7, NULL, ?8, ?9)
+             ON CONFLICT(component, version) DO UPDATE SET
+                kind = excluded.kind,
+                install_rel_path = excluded.install_rel_path,
+                status = 'installed',
+                is_current = 1,
+                is_previous = 0,
+                manifest_sequence = excluded.manifest_sequence,
+                files_json = excluded.files_json,
+                capability_report_json = COALESCE(excluded.capability_report_json, components.capability_report_json),
+                quarantine_reason = NULL,
+                updated_at = excluded.updated_at",
+            params![
+                component,
+                version,
+                kind,
+                install_rel_path,
+                manifest_sequence as i64,
+                files_json,
+                capability_report_json,
+                installed_at as i64,
+                now
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Marks `bad_version` as `quarantined` with a reason and capability report in one transaction,
+    /// rolling `is_current` back to the prior `installed` version if one exists.
+    #[allow(clippy::too_many_arguments)]
+    pub fn quarantine_and_rollback_component(
+        &self,
+        component: &str,
+        bad_version: &str,
+        kind: &str,
+        install_rel_path: &str,
+        manifest_sequence: u64,
+        files_json: &str,
+        installed_at: u64,
+        reason: &str,
+        capability_report_json: Option<&str>,
+    ) -> Result<Option<String>, StoreError> {
+        let now = unix_now_secs() as i64;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+
+        // Quarantine the bad version and clear its active pointers first.
+        tx.execute(
+            "INSERT INTO components (
+                component, version, kind, install_rel_path, status, is_current, is_previous,
+                manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                installed_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, 'quarantined', 0, 0, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(component, version) DO UPDATE SET
+                status = 'quarantined',
+                is_current = 0,
+                is_previous = 0,
+                capability_report_json = COALESCE(excluded.capability_report_json, components.capability_report_json),
+                quarantine_reason = excluded.quarantine_reason,
+                updated_at = excluded.updated_at",
+            params![
+                component,
+                bad_version,
+                kind,
+                install_rel_path,
+                manifest_sequence as i64,
+                files_json,
+                capability_report_json,
+                reason,
+                installed_at as i64,
+                now
+            ],
+        )?;
+
+        // Check if another version is already current (excluding bad_version)
+        let current_other: Option<String> = match tx.query_row(
+            "SELECT version FROM components
+             WHERE component = ?1 AND version != ?2 AND is_current = 1 AND status = 'installed'",
+            params![component, bad_version],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StoreError::Db(e)),
+        };
+
+        let restored = if let Some(curr) = current_other {
+            Some(curr)
+        } else {
+            // Find best candidate to restore (is_previous first, else newest installed)
+            let candidate: Option<String> = match tx.query_row(
+                "SELECT version FROM components
+                 WHERE component = ?1 AND version != ?2 AND status = 'installed'
+                 ORDER BY is_previous DESC, installed_at DESC, manifest_sequence DESC
+                 LIMIT 1",
+                params![component, bad_version],
+                |r| r.get(0),
+            ) {
+                Ok(v) => Some(v),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(StoreError::Db(e)),
+            };
+
+            if let Some(ref prev_ver) = candidate {
+                tx.execute(
+                    "UPDATE components SET is_current = 1, is_previous = 0, updated_at = ?3
+                     WHERE component = ?1 AND version = ?2",
+                    params![component, prev_ver, now],
+                )?;
+            }
+            candidate
+        };
+
+        tx.commit()?;
+        Ok(restored)
+    }
+
+    /// Switches active `is_current` pointer to another already-installed, non-quarantined version.
+    /// Used both for rollback (`current -> previous`) and roll-forward between two installed versions.
+    pub fn switch_active_component_version(
+        &self,
+        component: &str,
+        target_version: &str,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs() as i64;
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+
+        let target_status: String = tx.query_row(
+            "SELECT status FROM components WHERE component = ?1 AND version = ?2",
+            params![component, target_version],
+            |r| r.get(0),
+        )?;
+        if target_status != "installed" {
+            return Err(StoreError::Internal(format!(
+                "Cannot activate {} v{}: version is {}",
+                component, target_version, target_status
+            )));
+        }
+
+        let current_ver: Option<String> = match tx.query_row(
+            "SELECT version FROM components WHERE component = ?1 AND is_current = 1",
+            params![component],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StoreError::Db(e)),
+        };
+
+        if current_ver.as_deref() == Some(target_version) {
+            tx.commit()?;
+            return Ok(());
+        }
+
+        tx.execute(
+            "UPDATE components SET is_previous = 0, updated_at = ?2 WHERE component = ?1 AND is_previous = 1",
+            params![component, now],
+        )?;
+        tx.execute(
+            "UPDATE components SET is_current = 0, is_previous = 1, updated_at = ?2
+             WHERE component = ?1 AND is_current = 1 AND status = 'installed'",
+            params![component, now],
+        )?;
+        tx.execute(
+            "UPDATE components SET is_current = 0, updated_at = ?2 WHERE component = ?1 AND is_current = 1",
+            params![component, now],
+        )?;
+        tx.execute(
+            "UPDATE components SET is_current = 1, is_previous = 0, updated_at = ?3
+             WHERE component = ?1 AND version = ?2",
+            params![component, target_version, now],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Stores a serialized `CapabilityReport` JSON string on an existing component row.
+    pub fn update_component_capability_report(
+        &self,
+        component: &str,
+        version: &str,
+        capability_report_json: &str,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs() as i64;
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE components SET capability_report_json = ?3, updated_at = ?4
+             WHERE component = ?1 AND version = ?2",
+            params![component, version, capability_report_json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Removes a specific component version row (used during GC or cleanup of broken versions).
+    pub fn delete_component_version_row(
+        &self,
+        component: &str,
+        version: &str,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock_conn()?;
+        let n = conn.execute(
+            "DELETE FROM components WHERE component = ?1 AND version = ?2",
+            params![component, version],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Replaces the entire `components` table atomically (used after DB corruption rebuild from `install.json`).
+    pub fn replace_rebuilt_components(&self, rows: &[ComponentRow]) -> Result<(), StoreError> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM components", [])?;
+        for r in rows {
+            tx.execute(
+                "INSERT INTO components (
+                    component, version, kind, install_rel_path, status, is_current, is_previous,
+                    manifest_sequence, files_json, capability_report_json, quarantine_reason,
+                    installed_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    r.component,
+                    r.version,
+                    r.kind,
+                    r.install_rel_path,
+                    r.status,
+                    if r.is_current { 1i64 } else { 0i64 },
+                    if r.is_previous { 1i64 } else { 0i64 },
+                    r.manifest_sequence as i64,
+                    r.files_json,
+                    r.capability_report_json,
+                    r.quarantine_reason,
+                    r.installed_at as i64,
+                    r.updated_at as i64,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Records a path whose deletion was blocked by an OS file lock so startup retries it.
+    pub fn add_deferred_delete(&self, path: &str, error_msg: &str) -> Result<(), StoreError> {
+        let now = unix_now_secs() as i64;
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO deferred_deletes (path, created_at, attempts, last_error)
+             VALUES (?1, ?2, 1, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+                attempts = deferred_deletes.attempts + 1,
+                last_error = excluded.last_error",
+            params![path, now, error_msg],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all pending deferred deletion records.
+    pub fn list_deferred_deletes(&self) -> Result<Vec<DeferredDeleteRow>, StoreError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, path, created_at, attempts, last_error FROM deferred_deletes ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DeferredDeleteRow {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    created_at: r.get::<_, i64>(2)? as u64,
+                    attempts: r.get::<_, i64>(3)? as u32,
+                    last_error: r.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Removes a deferred deletion record once the filesystem cleanup succeeds.
+    pub fn remove_deferred_delete(&self, path: &str) -> Result<bool, StoreError> {
+        let conn = self.lock_conn()?;
+        let n = conn.execute(
+            "DELETE FROM deferred_deletes WHERE path = ?1",
+            params![path],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Return the database file path.
     pub fn path(&self) -> &Path {
         &self.path
@@ -465,6 +984,41 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_cache_key ON artifacts(cache_key);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts(last_used_at) WHERE pinned = 0;
 CREATE INDEX IF NOT EXISTS idx_stage_stats_lookup ON stage_stats(device_profile, stage, variant, created_at);
 CREATE INDEX IF NOT EXISTS idx_outbox_retry ON outbox(next_retry_at) WHERE attempts < 10;
+";
+
+/// V2: Versioned components, quarantine, capability reports, and deferred lock-retry deletes.
+const MIGRATION_V2: &str = "
+CREATE TABLE IF NOT EXISTS components (
+    component TEXT NOT NULL,
+    version TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('bin', 'model')),
+    install_rel_path TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('installed', 'quarantined')),
+    is_current INTEGER NOT NULL DEFAULT 0 CHECK (is_current IN (0, 1)),
+    is_previous INTEGER NOT NULL DEFAULT 0 CHECK (is_previous IN (0, 1)),
+    manifest_sequence INTEGER NOT NULL DEFAULT 0,
+    files_json TEXT NOT NULL,
+    capability_report_json TEXT,
+    quarantine_reason TEXT,
+    installed_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (component, version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_components_unique_current
+    ON components(component) WHERE is_current = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_components_unique_previous
+    ON components(component) WHERE is_previous = 1;
+CREATE INDEX IF NOT EXISTS idx_components_lookup
+    ON components(component, status, installed_at DESC);
+
+CREATE TABLE IF NOT EXISTS deferred_deletes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
 ";
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -679,6 +1233,8 @@ mod tests {
         let expected = [
             "account_snapshot",
             "artifacts",
+            "components",
+            "deferred_deletes",
             "jobs",
             "outbox",
             "projects",
@@ -813,5 +1369,207 @@ mod tests {
             )
             .expect("read back");
         assert_eq!(plan, "pass_30");
+    }
+
+    #[test]
+    fn test_v1_to_v2_forward_migration_preserves_data() {
+        let (_dir, path) = temp_db();
+
+        // Create an explicit v1 database first
+        {
+            let conn = Connection::open(&path).expect("open v1 conn");
+            conn.execute_batch(MIGRATION_V1).expect("apply v1");
+            conn.pragma_update(None, "user_version", 1)
+                .expect("set v1 user_version");
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('install_id', 'existing-id-123')",
+                [],
+            )
+            .expect("seed v1 setting");
+        }
+
+        // Open through LocalStore -> should migrate automatically v1 -> v2
+        let store = LocalStore::open(&path).expect("open & migrate v1->v2");
+        assert_eq!(store.schema_version().expect("version"), 2);
+        assert_eq!(
+            store.get_setting("install_id").expect("preserved setting"),
+            Some("existing-id-123".to_string())
+        );
+
+        // Verify v2 tables work
+        store
+            .set_component_installed_current(
+                "ffmpeg",
+                "n9.0.2",
+                "bin",
+                "bin/ffmpeg/n9.0.2",
+                1,
+                "[]",
+                Some("{\"status\":\"pass\"}"),
+                1000,
+            )
+            .expect("insert component v2");
+        let cur = store
+            .get_current_component("ffmpeg")
+            .expect("query current")
+            .expect("must exist");
+        assert_eq!(cur.version, "n9.0.2");
+        assert!(cur.is_current);
+    }
+
+    #[test]
+    fn test_components_promotion_rollback_and_quarantine() {
+        let (_dir, path) = temp_db();
+        let store = LocalStore::open(&path).expect("open v2");
+
+        // Install v1 -> current
+        store
+            .set_component_installed_current(
+                "ffmpeg",
+                "1.0.0",
+                "bin",
+                "bin/ffmpeg/1.0.0",
+                1,
+                "[]",
+                None,
+                100,
+            )
+            .unwrap();
+        // Install v2 -> current, v1 -> previous
+        store
+            .set_component_installed_current(
+                "ffmpeg",
+                "2.0.0",
+                "bin",
+                "bin/ffmpeg/2.0.0",
+                2,
+                "[]",
+                None,
+                200,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get_current_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "2.0.0"
+        );
+        assert_eq!(
+            store
+                .get_previous_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
+
+        // Install bad v3, then quarantine & roll back to 2.0.0
+        store
+            .set_component_installed_current(
+                "ffmpeg",
+                "3.0.0",
+                "bin",
+                "bin/ffmpeg/3.0.0",
+                3,
+                "[]",
+                None,
+                300,
+            )
+            .unwrap();
+        let restored = store
+            .quarantine_and_rollback_component(
+                "ffmpeg",
+                "3.0.0",
+                "bin",
+                "bin/ffmpeg/3.0.0",
+                3,
+                "[]",
+                300,
+                "--enable-gpl detected",
+                Some("{\"status\":\"fail\"}"),
+            )
+            .unwrap();
+        assert_eq!(restored, Some("2.0.0".to_string()));
+        assert_eq!(
+            store
+                .get_current_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "2.0.0"
+        );
+        let q = store
+            .get_component_version("ffmpeg", "3.0.0")
+            .unwrap()
+            .unwrap();
+        assert_eq!(q.status, "quarantined");
+        assert!(!q.is_current);
+        assert_eq!(
+            q.quarantine_reason.as_deref(),
+            Some("--enable-gpl detected")
+        );
+
+        // Switch active version manually backward (to 1.0.0) and forward (to 2.0.0)
+        store
+            .switch_active_component_version("ffmpeg", "1.0.0")
+            .unwrap();
+        assert_eq!(
+            store
+                .get_current_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
+        assert_eq!(
+            store
+                .get_previous_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "2.0.0"
+        );
+
+        // Quarantined version must refuse activation
+        assert!(store
+            .switch_active_component_version("ffmpeg", "3.0.0")
+            .is_err());
+
+        // Roll forward to 2.0.0
+        store
+            .switch_active_component_version("ffmpeg", "2.0.0")
+            .unwrap();
+        assert_eq!(
+            store
+                .get_current_component("ffmpeg")
+                .unwrap()
+                .unwrap()
+                .version,
+            "2.0.0"
+        );
+    }
+
+    #[test]
+    fn test_deferred_deletes_lifecycle() {
+        let (_dir, path) = temp_db();
+        let store = LocalStore::open(&path).expect("open");
+
+        store
+            .add_deferred_delete(r"C:\tmp\locked\v1", "sharing violation")
+            .unwrap();
+        store
+            .add_deferred_delete(r"C:\tmp\locked\v1", "still locked")
+            .unwrap();
+
+        let list = store.list_deferred_deletes().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].attempts, 2);
+        assert_eq!(list[0].last_error.as_deref(), Some("still locked"));
+
+        assert!(store.remove_deferred_delete(r"C:\tmp\locked\v1").unwrap());
+        assert!(store.list_deferred_deletes().unwrap().is_empty());
     }
 }

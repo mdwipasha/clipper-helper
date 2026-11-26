@@ -33,10 +33,31 @@ impl ManifestError {
     }
 }
 
-/// Build-time floor for manifest sequence number.
+const fn parse_u64_const(s: &str) -> u64 {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must not be empty");
+    }
+    let mut res: u64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < b'0' || b > b'9' {
+            panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must be a positive integer");
+        }
+        res = res * 10 + (b - b'0') as u64;
+        i += 1;
+    }
+    if res < 1 {
+        panic!("CLIPPER_MIN_MANIFEST_SEQUENCE must be >= 1");
+    }
+    res
+}
+
+/// Build-time floor for manifest sequence number (injected from CLIPPER_MIN_MANIFEST_SEQUENCE).
 /// Prevents replay and rollback attacks even if the local database is reset, recreated,
 /// or recovered from corruption (ARCHITECTURE §9, §13).
-pub const MIN_MANIFEST_SEQUENCE: u64 = 1;
+pub const MIN_MANIFEST_SEQUENCE: u64 = parse_u64_const(env!("CLIPPER_MIN_MANIFEST_SEQUENCE"));
 
 /// Embedded public key entry with kid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -540,5 +561,212 @@ mod tests {
                 last_accepted: 1
             }
         ));
+    }
+
+    #[test]
+    fn test_wrong_key_and_unknown_kid_distinct_cases() {
+        use ed25519_dalek::Signer;
+
+        let trusted_key = SigningKey::from_bytes(&[11u8; 32]);
+        let wrong_key = SigningKey::from_bytes(&[22u8; 32]);
+        let pub_hex = hex::encode(trusted_key.verifying_key().as_bytes());
+
+        let extra_keys = [ManifestPublicKey {
+            kid: "trusted-kid-1",
+            public_key_hex: Box::leak(pub_hex.into_boxed_str()),
+        }];
+
+        let raw_manifest = br#"{"schema": 1, "sequence": 2, "generated_at": "2026-11-24T12:00:00Z", "channel": "stable", "components": []}"#;
+
+        // Case A: Wrong key (valid kid known to verifier, but signed by a different private key)
+        let wrong_sig = wrong_key.sign(raw_manifest);
+        let wrong_sig_json = format!(
+            r#"{{"kid": "trusted-kid-1", "signature": "{}"}}"#,
+            hex::encode(wrong_sig.to_bytes())
+        );
+        let err_wrong_key = verify_manifest(
+            raw_manifest,
+            wrong_sig_json.as_bytes(),
+            "0.1.0",
+            "install-1",
+            1,
+            Some(&extra_keys),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err_wrong_key, ManifestError::BadSignature(_)),
+            "expected BadSignature for wrong key with valid kid, got {:?}",
+            err_wrong_key
+        );
+        assert_eq!(err_wrong_key.error_code(), "E_MANIFEST_INVALID");
+
+        // Case B: Unknown kid (signed cleanly, but kid is not in embedded/extra keyrings)
+        let valid_sig = trusted_key.sign(raw_manifest);
+        let unknown_kid_json = format!(
+            r#"{{"kid": "unrecognized-kid-99", "signature": "{}"}}"#,
+            hex::encode(valid_sig.to_bytes())
+        );
+        let err_unknown_kid = verify_manifest(
+            raw_manifest,
+            unknown_kid_json.as_bytes(),
+            "0.1.0",
+            "install-1",
+            1,
+            Some(&extra_keys),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err_unknown_kid, ManifestError::UnknownKeyId(ref k) if k == "unrecognized-kid-99"),
+            "expected UnknownKeyId for unknown kid, got {:?}",
+            err_unknown_kid
+        );
+        assert_eq!(err_unknown_kid.error_code(), "E_MANIFEST_INVALID");
+    }
+
+    #[test]
+    fn test_schema_and_malformed_json_map_to_manifest_invalid() {
+        use ed25519_dalek::Signer;
+
+        let signing_key = SigningKey::from_bytes(&[12u8; 32]);
+        let pub_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let extra_keys = [ManifestPublicKey {
+            kid: "schema-test-kid",
+            public_key_hex: Box::leak(pub_hex.into_boxed_str()),
+        }];
+
+        // Unsupported schema (v99 signed properly -> UnsupportedSchema -> E_MANIFEST_INVALID)
+        let bad_schema = br#"{"schema": 99, "sequence": 5, "generated_at": "2026-11-24T12:00:00Z", "channel": "stable", "components": []}"#;
+        let sig_schema = signing_key.sign(bad_schema);
+        let sig_schema_json = format!(
+            r#"{{"kid": "schema-test-kid", "signature": "{}"}}"#,
+            hex::encode(sig_schema.to_bytes())
+        );
+        let err_schema = verify_manifest(
+            bad_schema,
+            sig_schema_json.as_bytes(),
+            "0.1.0",
+            "install-1",
+            1,
+            Some(&extra_keys),
+        )
+        .unwrap_err();
+        assert!(matches!(err_schema, ManifestError::UnsupportedSchema(99)));
+        assert_eq!(err_schema.error_code(), "E_MANIFEST_INVALID");
+
+        // Malformed manifest JSON (signed properly -> MalformedManifest -> E_MANIFEST_INVALID)
+        let bad_json = b"{not valid json";
+        let sig_json = signing_key.sign(bad_json);
+        let sig_json_str = format!(
+            r#"{{"kid": "schema-test-kid", "signature": "{}"}}"#,
+            hex::encode(sig_json.to_bytes())
+        );
+        let err_malformed = verify_manifest(
+            bad_json,
+            sig_json_str.as_bytes(),
+            "0.1.0",
+            "install-1",
+            1,
+            Some(&extra_keys),
+        )
+        .unwrap_err();
+        assert!(matches!(err_malformed, ManifestError::MalformedManifest(_)));
+        assert_eq!(err_malformed.error_code(), "E_MANIFEST_INVALID");
+
+        // Sequence rollback error code maps to E_MANIFEST_STALE
+        let err_stale = ManifestError::SequenceRollback {
+            received: 2,
+            last_accepted: 5,
+        };
+        assert_eq!(err_stale.error_code(), "E_MANIFEST_STALE");
+    }
+
+    #[test]
+    fn test_app_version_and_rollout_mismatch_skip_entries_without_error() {
+        use ed25519_dalek::Signer;
+
+        let signing_key = SigningKey::from_bytes(&[13u8; 32]);
+        let pub_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let extra_keys = [ManifestPublicKey {
+            kid: "gating-test-kid",
+            public_key_hex: Box::leak(pub_hex.into_boxed_str()),
+        }];
+
+        let manifest_bytes = br#"{
+            "schema": 1,
+            "sequence": 5,
+            "generated_at": "2026-11-24T12:00:00Z",
+            "channel": "stable",
+            "components": [
+                {
+                    "component": "yt-dlp",
+                    "version": "2026.10.26",
+                    "platform": "windows-x86_64",
+                    "url": "https://cdn.clipperhelper.com/yt-dlp.exe",
+                    "size_bytes": 1000,
+                    "sha256": "f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d",
+                    "archive": "none",
+                    "files": [],
+                    "min_app_version": "0.2.0",
+                    "max_app_version": "0.5.0",
+                    "rollout_percent": 100
+                },
+                {
+                    "component": "qjs",
+                    "version": "0.18.0",
+                    "platform": "windows-x86_64",
+                    "url": "https://cdn.clipperhelper.com/qjs.exe",
+                    "size_bytes": 500,
+                    "sha256": "ff03398d74ea6e6bd3a8e58058f7003225abcac229d7d57775b7aaae812a49c7",
+                    "archive": "none",
+                    "files": [],
+                    "min_app_version": "0.1.0",
+                    "max_app_version": null,
+                    "rollout_percent": 0
+                }
+            ]
+        }"#;
+
+        let sig = signing_key.sign(manifest_bytes);
+        let sig_json = format!(
+            r#"{{"kid": "gating-test-kid", "signature": "{}"}}"#,
+            hex::encode(sig.to_bytes())
+        );
+
+        // App 0.1.0: yt-dlp skipped (< min 0.2.0), qjs skipped (rollout_percent == 0) -> Ok with 0 components
+        let res_too_old = verify_manifest(
+            manifest_bytes,
+            sig_json.as_bytes(),
+            "0.1.0",
+            "install-abc",
+            1,
+            Some(&extra_keys),
+        )
+        .expect("app-version / rollout mismatch must not return an error");
+        assert_eq!(res_too_old.components.len(), 0);
+
+        // App 0.6.0: yt-dlp skipped (> max 0.5.0), qjs skipped (rollout_percent == 0) -> Ok with 0 components
+        let res_too_new = verify_manifest(
+            manifest_bytes,
+            sig_json.as_bytes(),
+            "0.6.0",
+            "install-abc",
+            1,
+            Some(&extra_keys),
+        )
+        .expect("max_app_version mismatch must not return an error");
+        assert_eq!(res_too_new.components.len(), 0);
+
+        // App 0.3.0: yt-dlp included, qjs still skipped (0% rollout)
+        let res_in_range = verify_manifest(
+            manifest_bytes,
+            sig_json.as_bytes(),
+            "0.3.0",
+            "install-abc",
+            1,
+            Some(&extra_keys),
+        )
+        .expect("in-range version must succeed");
+        assert_eq!(res_in_range.components.len(), 1);
+        assert_eq!(res_in_range.components[0].component, "yt-dlp");
     }
 }

@@ -27,7 +27,11 @@ export function App() {
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-8">
-      <div className="max-w-md w-full bg-slate-800/80 border border-slate-700/60 rounded-xl p-6 shadow-2xl backdrop-blur-sm">
+      <div
+        className={`${
+          import.meta.env.DEV ? 'max-w-3xl' : 'max-w-md'
+        } w-full bg-slate-800/80 border border-slate-700/60 rounded-xl p-6 shadow-2xl backdrop-blur-sm`}
+      >
         <div className="flex items-center space-x-3 mb-4">
           <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-lg shadow-inner">
             CH

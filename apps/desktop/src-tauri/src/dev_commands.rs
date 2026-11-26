@@ -14,10 +14,36 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{Emitter, Manager};
 
+use crate::capabilities::{CapabilityReportView, CapabilityStatus};
 use crate::commands::WorkspaceStatus;
-use crate::sidecars::{SidecarSpec, SidecarSupervisor};
+use crate::installer::{
+    self, GcOutcome, InUseRegistry, VerifyRepairOutcome, DEFAULT_KEEP_PREVIOUS_VERSIONS,
+};
+use crate::manifest::ComponentManifest;
+use crate::resolver::{ComponentDiagnosticsSnapshot, ComponentResolver, CustomFfmpegStatus};
+use crate::sidecars::SidecarSupervisor;
 use crate::store::LocalStore;
 use crate::WorkspaceState;
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct DevCommandError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct DevInstallOutcome {
+    pub ok: bool,
+    pub component: String,
+    pub version: String,
+    pub kind: String,
+    pub already_installed: bool,
+    pub quarantined: bool,
+    pub rolled_back_to: Option<String>,
+    pub error_code: Option<String>,
+    pub message: String,
+    pub capability_report: Option<CapabilityReportView>,
+}
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct DevFixtureServerStatus {
@@ -47,11 +73,32 @@ static FIXTURE_SERVER: Mutex<FixtureServerState> = Mutex::new(FixtureServerState
     last_error: None,
 });
 
+static LAST_VERIFIED_MANIFEST: Mutex<Option<ComponentManifest>> = Mutex::new(None);
+
 pub const DEV_EXTRA_KEYS: &[crate::manifest::ManifestPublicKey] =
     &[crate::manifest::ManifestPublicKey {
         kid: "clipper-manifest-dev",
         public_key_hex: "aaaf48f0cbd01c1f79573f139a5b0401b488ac44e0b103d64dea533b075c997b",
     }];
+
+/// Resolves embedded dev key plus optional runtime `.dev-keys/clipper-manifest-dev.pub.hex`
+/// (debug-only helper so freshly generated dev keys work cleanly without editing source).
+fn load_dev_keys() -> Vec<crate::manifest::ManifestPublicKey> {
+    let mut keys = DEV_EXTRA_KEYS.to_vec();
+    let pub_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../.dev-keys/clipper-manifest-dev.pub.hex");
+    if let Ok(raw_hex) = std::fs::read_to_string(pub_path) {
+        let trimmed = raw_hex.trim().to_string();
+        if trimmed.len() == 64 && !keys.iter().any(|k| k.public_key_hex == trimmed) {
+            let leaked: &'static str = Box::leak(trimmed.into_boxed_str());
+            keys.push(crate::manifest::ManifestPublicKey {
+                kid: "clipper-manifest-dev",
+                public_key_hex: leaked,
+            });
+        }
+    }
+    keys
+}
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct DevManifestComponent {
@@ -62,6 +109,7 @@ pub struct DevManifestComponent {
     pub size_bytes: f64,
     pub sha256: String,
     pub archive: String,
+    pub files_count: u32,
     pub is_downloaded: bool,
 }
 
@@ -188,7 +236,7 @@ pub fn dev_reset_workspace(app: tauri::AppHandle) -> Result<(), String> {
 
     crate::security::assert_can_reset_dev_workspace(&ws.root).map_err(|e| e.to_string())?;
 
-    for sub in &["cache", "projects", "logs"] {
+    for sub in &["bin", "models", "cache", "projects", "logs"] {
         let dir = ws.root.join(sub);
         if dir.exists() {
             let _ = std::fs::remove_dir_all(&dir);
@@ -199,6 +247,9 @@ pub fn dev_reset_workspace(app: tauri::AppHandle) -> Result<(), String> {
 
     if let Some(store) = app.try_state::<LocalStore>() {
         store.reset_database().map_err(|e| e.to_string())?;
+    }
+    if let Ok(mut guard) = LAST_VERIFIED_MANIFEST.lock() {
+        *guard = None;
     }
 
     Ok(())
@@ -213,7 +264,10 @@ pub async fn dev_run_fake_sidecar(mode: String) -> Result<DevSidecarRunResult, S
         .chain(mode.split_whitespace().map(String::from))
         .collect();
 
-    let spec = SidecarSpec::new(&bin, args);
+    let ws_root = crate::security::get_workspace_root()
+        .unwrap_or_else(|_| std::env::temp_dir().join("clipper-dev-fake"));
+    let spec = crate::sidecars::create_component_spec("fake-sidecar", &bin, args, &ws_root)
+        .map_err(|e| e.to_string())?;
     let supervisor = SidecarSupervisor::new();
 
     let start = Instant::now();
@@ -270,6 +324,23 @@ pub fn find_node_executable() -> Result<PathBuf, String> {
         let fnm2 = PathBuf::from(&localappdata).join(r"fnm\current\node.exe");
         if fnm2.exists() {
             return Ok(fnm2);
+        }
+    }
+
+    if let Ok(nvm_symlink) = std::env::var("NVM_SYMLINK") {
+        let p = PathBuf::from(&nvm_symlink).join("node.exe");
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    if let Ok(nvm_home) = std::env::var("NVM_HOME") {
+        if let Ok(entries) = std::fs::read_dir(&nvm_home) {
+            for entry in entries.flatten() {
+                let p = entry.path().join("node.exe");
+                if p.exists() {
+                    return Ok(p);
+                }
+            }
         }
     }
 
@@ -470,12 +541,13 @@ pub async fn dev_fetch_manifest(
         manifest_url,
         sig_url
     );
+    let dev_keys = load_dev_keys();
     let manifest = match crate::updater::fetch_and_verify_manifest(
         &manifest_url,
         &sig_url,
         "0.1.0",
         &store,
-        Some(DEV_EXTRA_KEYS),
+        Some(&dev_keys),
     )
     .await
     {
@@ -496,24 +568,18 @@ pub async fn dev_fetch_manifest(
         }
     };
 
+    if let Ok(mut guard) = LAST_VERIFIED_MANIFEST.lock() {
+        *guard = Some(manifest.clone());
+    }
+
     let mut dev_components = Vec::new();
     for c in manifest.components {
-        let is_downloaded =
-            if c.component.ends_with(".bin") || crate::security::is_allowed_model(&c.component) {
-                crate::security::resolve_model_path_with_root(&ws.root, &c.component)
-                    .map(|p| p.exists())
-                    .unwrap_or(false)
-            } else {
-                let exe = format!("{}.exe", c.component);
-                crate::security::resolve_component_path_with_root(
-                    &ws.root,
-                    &c.component,
-                    &c.version,
-                    &exe,
-                )
-                .map(|p| p.exists())
-                .unwrap_or(false)
-            };
+        let is_downloaded = store
+            .get_component_version(&c.component, &c.version)
+            .ok()
+            .flatten()
+            .filter(|r| r.status == "installed" && r.is_current)
+            .is_some_and(|r| installer::quick_verify_row(&ws.root, &r).is_ok());
 
         dev_components.push(DevManifestComponent {
             component: c.component,
@@ -523,6 +589,7 @@ pub async fn dev_fetch_manifest(
             size_bytes: c.size_bytes as f64,
             sha256: c.sha256,
             archive: c.archive,
+            files_count: c.files.len() as u32,
             is_downloaded,
         });
     }
@@ -536,7 +603,58 @@ pub async fn dev_fetch_manifest(
     })
 }
 
-/// Debug-only: downloads and verifies a component from the manifest with live progress.
+fn find_manifest_entry(
+    component: &str,
+    version: Option<&str>,
+) -> Result<(u64, crate::manifest::ComponentManifestEntry), DevCommandError> {
+    let guard = LAST_VERIFIED_MANIFEST.lock().map_err(|_| DevCommandError {
+        code: "E_UNKNOWN".to_string(),
+        message: "Manifest cache lock poisoned".to_string(),
+    })?;
+    let manifest = guard.as_ref().ok_or_else(|| DevCommandError {
+        code: "E_COMPONENT_MISSING".to_string(),
+        message: "No verified manifest loaded yet. Click 'Fetch Manifest' first.".to_string(),
+    })?;
+
+    let entry = manifest
+        .components
+        .iter()
+        .find(|c| c.component == component && version.map(|v| v == c.version).unwrap_or(true))
+        .cloned()
+        .ok_or_else(|| DevCommandError {
+            code: "E_COMPONENT_MISSING".to_string(),
+            message: format!(
+                "Component '{}' (version {:?}) was not found in the active loaded manifest",
+                component, version
+            ),
+        })?;
+
+    Ok((manifest.sequence, entry))
+}
+
+fn get_app_deps(
+    app: &tauri::AppHandle,
+) -> Result<(PathBuf, LocalStore, InUseRegistry), DevCommandError> {
+    let ws = app
+        .try_state::<WorkspaceState>()
+        .ok_or_else(|| DevCommandError {
+            code: "E_APP_INIT_FAILED".to_string(),
+            message: "Workspace state not available".to_string(),
+        })?;
+    let store = app
+        .try_state::<LocalStore>()
+        .ok_or_else(|| DevCommandError {
+            code: "E_APP_INIT_FAILED".to_string(),
+            message: "LocalStore not available".to_string(),
+        })?;
+    let in_use = app
+        .try_state::<InUseRegistry>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+    Ok((ws.root.clone(), (*store).clone(), in_use))
+}
+
+/// Debug-only: downloads and verifies a raw component payload from the manifest with live progress.
 #[tauri::command]
 #[specta::specta]
 pub async fn dev_download_component(
@@ -553,19 +671,10 @@ pub async fn dev_download_component(
         component,
         url
     );
-    let ws = app
-        .try_state::<WorkspaceState>()
-        .ok_or_else(|| "Workspace state not available".to_string())?;
+    let (ws_root, _, _) = get_app_deps(&app).map_err(|e| e.message)?;
 
-    let dest_path = if component.ends_with(".bin") || crate::security::is_allowed_model(&component)
-    {
-        crate::security::resolve_model_path_with_root(&ws.root, &component)
-            .map_err(|e| e.to_string())?
-    } else {
-        let exe = format!("{}.exe", component);
-        crate::security::resolve_component_path_with_root(&ws.root, &component, &version, &exe)
-            .map_err(|e| e.to_string())?
-    };
+    let dl_dir = ws_root.join("cache").join("downloads");
+    let dest_path = dl_dir.join(format!("{}-{}.pkg", component, version));
 
     let entry = crate::manifest::ComponentManifestEntry {
         component: component.clone(),
@@ -609,6 +718,300 @@ pub async fn dev_download_component(
     Ok(())
 }
 
+/// Debug-only: runs the complete M1.1c atomic install pipeline (download -> verify -> safe extract ->
+/// atomic rename -> promote -> supervised capability check -> quarantine+rollback on failure -> GC).
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_install_component(
+    app: tauri::AppHandle,
+    component: String,
+    version: String,
+) -> Result<DevInstallOutcome, DevCommandError> {
+    let (ws_root, store, in_use) = get_app_deps(&app)?;
+    let (manifest_sequence, entry) = find_manifest_entry(&component, Some(&version))?;
+    let total_bytes = entry.size_bytes as f64;
+
+    let app_progress = app.clone();
+    let res = installer::download_and_install_component(
+        &ws_root,
+        &store,
+        &in_use,
+        &entry,
+        manifest_sequence,
+        move |progress| {
+            let _ = app_progress.emit(
+                "download-progress",
+                DevDownloadProgressEvent {
+                    component: progress.component,
+                    stage: progress.stage,
+                    unit: progress.unit,
+                    completed_bytes: progress.completed_bytes as f64,
+                    total_bytes: progress.total_bytes as f64,
+                    percent: progress.percent,
+                    rate_bps: progress.rate_bps,
+                    eta_seconds: progress.eta_seconds,
+                },
+            );
+        },
+        None,
+    )
+    .await;
+
+    let _ = app.emit(
+        "download-progress",
+        DevDownloadProgressEvent {
+            component: component.clone(),
+            stage: "complete".to_string(),
+            unit: "bytes".to_string(),
+            completed_bytes: total_bytes,
+            total_bytes,
+            percent: 100.0,
+            rate_bps: 0.0,
+            eta_seconds: Some(0.0),
+        },
+    );
+
+    match res {
+        Ok(outcome) => {
+            let is_model = outcome.kind == "model";
+            Ok(DevInstallOutcome {
+                ok: true,
+                component: outcome.component,
+                version: outcome.version,
+                kind: outcome.kind,
+                already_installed: outcome.already_installed,
+                quarantined: false,
+                rolled_back_to: None,
+                error_code: None,
+                message: if is_model {
+                    if outcome.already_installed {
+                        "Model already installed & hash verified".to_string()
+                    } else {
+                        "Model hash verified (SHA-256 intact)".to_string()
+                    }
+                } else if outcome.already_installed {
+                    "Already installed & verified".to_string()
+                } else {
+                    "Installed and passed capability verification".to_string()
+                },
+                capability_report: outcome
+                    .capability_report
+                    .as_ref()
+                    .map(CapabilityReportView::from),
+            })
+        }
+        Err(installer::InstallError::CapabilityFailed {
+            component,
+            version,
+            reason,
+            rolled_back_to,
+            report,
+        }) => Ok(DevInstallOutcome {
+            ok: false,
+            component,
+            version,
+            kind: "bin".to_string(),
+            already_installed: false,
+            quarantined: true,
+            rolled_back_to,
+            error_code: Some("E_VERIFY_FAILED".to_string()),
+            message: format!(
+                "REFUSED & QUARANTINED: Failed capability check ({})",
+                reason
+            ),
+            capability_report: report.as_deref().map(CapabilityReportView::from),
+        }),
+        Err(installer::InstallError::Quarantined {
+            component,
+            version,
+            reason,
+        }) => Ok(DevInstallOutcome {
+            ok: false,
+            component,
+            version,
+            kind: "bin".to_string(),
+            already_installed: false,
+            quarantined: true,
+            rolled_back_to: None,
+            error_code: Some("E_VERIFY_FAILED".to_string()),
+            message: format!("Quarantined build refused: {}", reason),
+            capability_report: None,
+        }),
+        Err(err) => Err(DevCommandError {
+            code: err.error_code().to_string(),
+            message: err.to_string(),
+        }),
+    }
+}
+
+/// Debug-only: returns complete per-component versions, capabilities, and custom FFmpeg state.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_get_component_diagnostics(
+    app: tauri::AppHandle,
+) -> Result<ComponentDiagnosticsSnapshot, DevCommandError> {
+    let (ws_root, store, in_use) = get_app_deps(&app)?;
+    let resolver = ComponentResolver::new(ws_root, store, in_use);
+    resolver
+        .diagnostics_snapshot()
+        .map_err(|e| DevCommandError {
+            code: e.error_code().to_string(),
+            message: e.to_string(),
+        })
+}
+
+/// Debug-only: switches a component back to `previous` or rolls forward/backward to `target_version`.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_rollback_component(
+    app: tauri::AppHandle,
+    component: String,
+    target_version: Option<String>,
+) -> Result<String, String> {
+    let (ws_root, store, _) = get_app_deps(&app).map_err(|e| e.message)?;
+    installer::rollback_component(&ws_root, &store, &component, target_version.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Debug-only: runs version garbage collection (`keep_previous = 2`) skipping in-use versions.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_gc_component(app: tauri::AppHandle, component: String) -> Result<GcOutcome, String> {
+    let (ws_root, store, in_use) = get_app_deps(&app).map_err(|e| e.message)?;
+    installer::gc_component_versions(
+        &ws_root,
+        &store,
+        &component,
+        DEFAULT_KEEP_PREVIOUS_VERSIONS,
+        &in_use,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Debug-only: executes full SHA-256 verification and live capability probe on the active version.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_verify_component(
+    app: tauri::AppHandle,
+    component: String,
+) -> Result<VerifyRepairOutcome, String> {
+    let (ws_root, store, _) = get_app_deps(&app).map_err(|e| e.message)?;
+    Ok(installer::verify_active_component_full(&ws_root, &store, &component).await)
+}
+
+/// Debug-only: retries strict capability verification on an already-extracted quarantined version.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_retry_quarantined_component(
+    app: tauri::AppHandle,
+    component: String,
+    version: String,
+) -> Result<VerifyRepairOutcome, DevCommandError> {
+    let (ws_root, store, _) = get_app_deps(&app)?;
+    installer::retry_quarantined_component_verification(&ws_root, &store, &component, &version)
+        .await
+        .map_err(|e| DevCommandError {
+            code: e.error_code().to_string(),
+            message: e.to_string(),
+        })
+}
+
+/// Debug-only: resets the persisted manifest sequence floor so seq 1 -> 2 -> 3 presets can replay
+/// without wiping the workspace. Never compiled into release builds.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_reset_manifest_sequence_floor(app: tauri::AppHandle) -> Result<f64, String> {
+    let (_, store, _) = get_app_deps(&app).map_err(|e| e.message)?;
+    store.set_manifest_sequence(0).map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = LAST_VERIFIED_MANIFEST.lock() {
+        *guard = None;
+    }
+    Ok(crate::manifest::MIN_MANIFEST_SEQUENCE as f64)
+}
+
+/// Debug-only: re-downloads and verifies a missing or damaged component from the active manifest.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_repair_component(
+    app: tauri::AppHandle,
+    component: String,
+    version: Option<String>,
+) -> Result<VerifyRepairOutcome, DevCommandError> {
+    let (ws_root, store, in_use) = get_app_deps(&app)?;
+    let ver_to_find = match version {
+        Some(v) => Some(v),
+        None => store
+            .get_current_component(&component)
+            .ok()
+            .flatten()
+            .map(|r| r.version),
+    };
+    let (manifest_sequence, entry) = find_manifest_entry(&component, ver_to_find.as_deref())
+        .or_else(|_| find_manifest_entry(&component, None))?;
+
+    let app_progress = app.clone();
+    installer::repair_component_from_manifest(
+        &ws_root,
+        &store,
+        &in_use,
+        &entry,
+        manifest_sequence,
+        move |progress| {
+            let _ = app_progress.emit(
+                "download-progress",
+                DevDownloadProgressEvent {
+                    component: progress.component,
+                    stage: progress.stage,
+                    unit: progress.unit,
+                    completed_bytes: progress.completed_bytes as f64,
+                    total_bytes: progress.total_bytes as f64,
+                    percent: progress.percent,
+                    rate_bps: progress.rate_bps,
+                    eta_seconds: progress.eta_seconds,
+                },
+            );
+        },
+        None,
+    )
+    .await
+    .map_err(|e| DevCommandError {
+        code: e.error_code().to_string(),
+        message: e.to_string(),
+    })
+}
+
+/// Debug-only: validates custom `ffmpeg.exe` + `ffprobe.exe` on a local fixed drive and verifies
+/// capabilities in WARN mode (sets persistent warning flag).
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_set_custom_ffmpeg(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<CustomFfmpegStatus, DevCommandError> {
+    let (ws_root, store, in_use) = get_app_deps(&app)?;
+    let resolver = ComponentResolver::new(ws_root, store, in_use);
+    resolver
+        .set_custom_ffmpeg_path(&path)
+        .await
+        .map_err(|e| DevCommandError {
+            code: e.error_code().to_string(),
+            message: e.to_string(),
+        })
+}
+
+/// Debug-only: clears the custom FFmpeg path override and restores managed FFmpeg resolution.
+#[tauri::command]
+#[specta::specta]
+pub fn dev_clear_custom_ffmpeg(app: tauri::AppHandle) -> Result<CustomFfmpegStatus, String> {
+    let (ws_root, store, in_use) = get_app_deps(&app).map_err(|e| e.message)?;
+    let resolver = ComponentResolver::new(ws_root, store, in_use);
+    let status = resolver
+        .clear_custom_ffmpeg_path()
+        .map_err(|e| e.to_string())?;
+    let _ = CapabilityStatus::Pass;
+    Ok(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,15 +1051,22 @@ mod tests {
         assert_eq!(started.port, Some(8080));
         assert!(started.url.is_some());
 
-        // Verify status reflects running state
+        // Verify status reflects running state & start is idempotent
         let status_running = dev_get_fixture_server_status();
         assert_eq!(status_running.state, "running");
+        let idempotent_start = dev_start_fixture_server().expect("idempotent start");
+        assert_eq!(idempotent_start.state, "running");
+        assert_eq!(idempotent_start.port, Some(8080));
 
         // Stop server
         let stop_res = dev_stop_fixture_server();
         assert!(stop_res.is_ok());
         let stopped = stop_res.unwrap();
         assert_eq!(stopped.state, "stopped");
+
+        // Idempotent stop
+        let stop_again = dev_stop_fixture_server().expect("idempotent stop");
+        assert_eq!(stop_again.state, "stopped");
 
         let status_stopped = dev_get_fixture_server_status();
         assert_eq!(status_stopped.state, "stopped");

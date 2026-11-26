@@ -96,7 +96,7 @@ export const commands = {
     }
   },
   /**
-   * Debug-only: downloads and verifies a component from the manifest with live progress.
+   * Debug-only: downloads and verifies a raw component payload from the manifest with live progress.
    */
   async devDownloadComponent(
     component: string,
@@ -123,6 +123,145 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Debug-only: runs the complete M1.1c atomic install pipeline (download -> verify -> safe extract ->
+   * atomic rename -> promote -> supervised capability check -> quarantine+rollback on failure -> GC).
+   */
+  async devInstallComponent(
+    component: string,
+    version: string
+  ): Promise<Result<DevInstallOutcome, DevCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_install_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: returns complete per-component versions, capabilities, and custom FFmpeg state.
+   */
+  async devGetComponentDiagnostics(): Promise<
+    Result<ComponentDiagnosticsSnapshot, DevCommandError>
+  > {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_get_component_diagnostics') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: switches a component back to `previous` or rolls forward/backward to `target_version`.
+   */
+  async devRollbackComponent(
+    component: string,
+    targetVersion: string | null
+  ): Promise<Result<string, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_rollback_component', { component, targetVersion }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: runs version garbage collection (`keep_previous = 2`) skipping in-use versions.
+   */
+  async devGcComponent(component: string): Promise<Result<GcOutcome, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_gc_component', { component }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: executes full SHA-256 verification and live capability probe on the active version.
+   */
+  async devVerifyComponent(component: string): Promise<Result<VerifyRepairOutcome, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_verify_component', { component }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: retries strict capability verification on an already-extracted quarantined version.
+   */
+  async devRetryQuarantinedComponent(
+    component: string,
+    version: string
+  ): Promise<Result<VerifyRepairOutcome, DevCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_retry_quarantined_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: re-downloads and verifies a missing or damaged component from the active manifest.
+   */
+  async devRepairComponent(
+    component: string,
+    version: string | null
+  ): Promise<Result<VerifyRepairOutcome, DevCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_repair_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: resets the persisted manifest sequence floor so seq 1 -> 2 -> 3 presets can replay
+   * without wiping the workspace. Never compiled into release builds.
+   */
+  async devResetManifestSequenceFloor(): Promise<Result<number, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_reset_manifest_sequence_floor') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: validates custom `ffmpeg.exe` + `ffprobe.exe` on a local fixed drive and verifies
+   * capabilities in WARN mode (sets persistent warning flag).
+   */
+  async devSetCustomFfmpeg(path: string): Promise<Result<CustomFfmpegStatus, DevCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_set_custom_ffmpeg', { path }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: clears the custom FFmpeg path override and restores managed FFmpeg resolution.
+   */
+  async devClearCustomFfmpeg(): Promise<Result<CustomFfmpegStatus, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_clear_custom_ffmpeg') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -135,11 +274,84 @@ export const commands = {
  * Application metadata returned to the frontend.
  */
 export type AppInfo = { name: string; version: string; platform: string };
+/**
+ * UI/IPC-safe capability report projection avoiding raw `u64` BigInt in TypeScript bindings.
+ */
+export type CapabilityReportView = {
+  component: string;
+  version: string;
+  mode: string;
+  status: CapabilityStatus;
+  checked_at: number;
+  reported_version: string | null;
+  reasons: string[];
+  warnings: string[];
+  ffmpeg: FfmpegCapabilities | null;
+};
+export type CapabilityStatus = 'pass' | 'warn' | 'fail';
+export type ComponentDiagnosticsSnapshot = {
+  custom_ffmpeg: CustomFfmpegStatus;
+  components: ComponentStateSummary[];
+  pending_deferred_deletes: number;
+};
+export type ComponentMissingAdvice = {
+  code: string;
+  component: string;
+  version: string | null;
+  message: string;
+  mentions_antivirus: boolean;
+  repair_action: boolean;
+};
+export type ComponentStateSummary = {
+  component: string;
+  kind: string;
+  current_version: string | null;
+  previous_version: string | null;
+  active_source: string;
+  active_path: string | null;
+  versions: ComponentVersionView[];
+  missing_advice: ComponentMissingAdvice | null;
+};
+export type ComponentVersionView = {
+  version: string;
+  kind: string;
+  status: string;
+  is_current: boolean;
+  is_previous: boolean;
+  manifest_sequence: number;
+  installed_at: number;
+  quarantine_reason: string | null;
+  capability_report: CapabilityReportView | null;
+};
+export type CustomFfmpegStatus = {
+  enabled: boolean;
+  configured_path: string | null;
+  redacted_path: string | null;
+  warning_flag: boolean;
+  warning_message: string | null;
+  warnings: string[];
+  file_present: boolean;
+  fallback_active: boolean;
+  capability_report: CapabilityReportView | null;
+};
+export type DevCommandError = { code: string; message: string };
 export type DevFixtureServerStatus = {
   state: string;
   port: number | null;
   url: string | null;
   error: string | null;
+};
+export type DevInstallOutcome = {
+  ok: boolean;
+  component: string;
+  version: string;
+  kind: string;
+  already_installed: boolean;
+  quarantined: boolean;
+  rolled_back_to: string | null;
+  error_code: string | null;
+  message: string;
+  capability_report: CapabilityReportView | null;
 };
 export type DevManifestComponent = {
   component: string;
@@ -149,6 +361,7 @@ export type DevManifestComponent = {
   size_bytes: number;
   sha256: string;
   archive: string;
+  files_count: number;
   is_downloaded: boolean;
 };
 export type DevManifestError = { code: string; message: string };
@@ -173,6 +386,40 @@ export type DevSystemInfo = {
   free_disk_space_bytes: number;
   platform: string;
   arch: string;
+};
+export type FfmpegCapabilities = {
+  ffmpeg_version: string;
+  ffprobe_version: string;
+  has_gpl: boolean;
+  has_nonfree: boolean;
+  has_version3: boolean;
+  effective_license: string;
+  forbidden_libs_present: string[];
+  forbidden_encoders_present: string[];
+  gpl_filters_present: string[];
+  hardware_encoders_available: string[];
+  required_encoders_present: string[];
+  missing_encoders: string[];
+  missing_decoders: string[];
+  missing_filters: string[];
+  missing_protocols: string[];
+  missing_formats: string[];
+};
+export type GcOutcome = {
+  component: string;
+  removed_versions: string[];
+  deferred_versions: string[];
+  skipped_in_use: string[];
+  kept_versions: string[];
+};
+export type VerifyRepairOutcome = {
+  component: string;
+  version: string | null;
+  intact: boolean;
+  repaired: boolean;
+  error_code: string | null;
+  message: string;
+  capability_report: CapabilityReportView | null;
 };
 /**
  * Workspace initialization status returned to the frontend.

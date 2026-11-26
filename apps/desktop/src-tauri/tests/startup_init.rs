@@ -3,6 +3,7 @@ use std::fs;
 use clipper_helper_desktop_lib::security::{self, ensure_workspace_with_root, SecurityError};
 use clipper_helper_desktop_lib::store::LocalStore;
 
+#[cfg(debug_assertions)]
 #[test]
 fn test_startup_from_non_existent_root_creates_workspace_and_initializes_db() {
     let unique_id = format!("test_ws_startup_{}", std::process::id());
@@ -36,7 +37,11 @@ fn test_startup_from_non_existent_root_creates_workspace_and_initializes_db() {
     let version = store
         .schema_version()
         .expect("failed to read schema version");
-    assert_eq!(version, 1, "Schema version must be migrated to version 1");
+    assert_eq!(
+        version,
+        clipper_helper_desktop_lib::store::CURRENT_SCHEMA_VERSION,
+        "Schema version must be migrated to current version"
+    );
 
     // Clean up
     std::env::remove_var("CLIPPER_WORKSPACE_ROOT");
@@ -117,4 +122,69 @@ fn test_junction_escape_outside_workspace_refused() {
     }
 
     let _ = fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn test_startup_explicit_root_creates_workspace_and_initializes_db() {
+    let dir = tempfile::TempDir::new().expect("create temp dir");
+    let test_dir = dir.path().join("workspace");
+
+    let ensured_root = ensure_workspace_with_root(&test_dir).expect("ensure_workspace_with_root");
+    assert!(ensured_root.exists());
+    for sub in &["bin", "models", "cache", "projects", "logs"] {
+        assert!(ensured_root.join(sub).is_dir());
+    }
+
+    let db_path = ensured_root.join("clipper.db");
+    let store = LocalStore::open(&db_path).expect("failed to open LocalStore");
+    assert!(db_path.exists());
+    assert!(store.schema_version().expect("schema version") >= 1);
+}
+
+#[test]
+fn test_node_discovery_exists_only_under_debug_assertions() {
+    let lib_src = include_str!("../src/lib.rs");
+    assert!(
+        lib_src.contains("#[cfg(debug_assertions)]\r\npub mod dev_commands;")
+            || lib_src.contains("#[cfg(debug_assertions)]\npub mod dev_commands;"),
+        "dev_commands module must be strictly gated under #[cfg(debug_assertions)]"
+    );
+
+    let dev_src = include_str!("../src/dev_commands.rs");
+    assert!(
+        dev_src.contains("#![cfg(debug_assertions)]"),
+        "dev_commands.rs must enforce #![cfg(debug_assertions)] at crate module level"
+    );
+
+    let prod_modules: &[(&str, &str)] = &[
+        ("archive.rs", include_str!("../src/archive.rs")),
+        ("capabilities.rs", include_str!("../src/capabilities.rs")),
+        ("commands.rs", include_str!("../src/commands.rs")),
+        ("installer.rs", include_str!("../src/installer.rs")),
+        ("manifest.rs", include_str!("../src/manifest.rs")),
+        ("net.rs", include_str!("../src/net.rs")),
+        ("resolver.rs", include_str!("../src/resolver.rs")),
+        ("security.rs", include_str!("../src/security.rs")),
+        ("sidecars.rs", include_str!("../src/sidecars.rs")),
+        ("store.rs", include_str!("../src/store.rs")),
+        ("updater.rs", include_str!("../src/updater.rs")),
+    ];
+
+    for (name, src) in prod_modules {
+        for forbidden in [
+            "find_node_executable",
+            "CLIPPER_DEV_NODE_PATH",
+            "fnm_multishells",
+            "NVM_HOME",
+            "NVM_SYMLINK",
+            "where.exe",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "Production module {} must not contain Node discovery reference '{}'",
+                name,
+                forbidden
+            );
+        }
+    }
 }

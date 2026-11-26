@@ -517,6 +517,23 @@ create table stage_stats (                                      -- ETA calibrati
 );
 create table templates_local (id text primary key, remote_id text, name text, schema_version integer, body_json text, body_hash text, updated_at integer, dirty integer default 0);
 create table settings (key text primary key, value text);
+create table components (
+  component text not null,
+  version text not null,
+  kind text not null,                                           -- bin|model
+  install_rel_path text not null,                               -- bin/<component>/<version> | models/<file>
+  status text not null,                                         -- installed|quarantined
+  is_current integer not null default 0,
+  is_previous integer not null default 0,
+  manifest_sequence integer not null default 0,
+  files_json text not null,
+  capability_report_json text,
+  quarantine_reason text,
+  installed_at integer not null,
+  updated_at integer not null,
+  primary key (component, version)
+);
+create table deferred_deletes (id integer primary key autoincrement, path text unique not null, created_at integer not null, attempts integer default 0, last_error text);
 create table outbox (id integer primary key autoincrement, kind text, payload text, created_at integer, attempts integer default 0, next_retry_at integer);
 create table account_snapshot (id integer primary key check (id = 1), plan_code text, daily_credits integer, used_today integer, resets_at integer, pass_ends_at integer, fetched_at integer); -- DISPLAY ONLY
 ```

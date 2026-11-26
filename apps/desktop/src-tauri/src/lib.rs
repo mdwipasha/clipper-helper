@@ -1,13 +1,17 @@
+pub mod archive;
+pub mod capabilities;
 pub mod commands;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
 pub mod eta;
 pub mod hardware;
+pub mod installer;
 pub mod jobs;
 pub mod license;
 pub mod manifest;
 pub mod net;
 pub mod render;
+pub mod resolver;
 pub mod security;
 pub mod sidecars;
 pub mod store;
@@ -48,7 +52,30 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         dev_commands::dev_stop_fixture_server,
         dev_commands::dev_fetch_manifest,
         dev_commands::dev_download_component,
+        dev_commands::dev_install_component,
+        dev_commands::dev_get_component_diagnostics,
+        dev_commands::dev_rollback_component,
+        dev_commands::dev_gc_component,
+        dev_commands::dev_verify_component,
+        dev_commands::dev_retry_quarantined_component,
+        dev_commands::dev_repair_component,
+        dev_commands::dev_reset_manifest_sequence_floor,
+        dev_commands::dev_set_custom_ffmpeg,
+        dev_commands::dev_clear_custom_ffmpeg,
     ])
+}
+
+#[cfg(debug_assertions)]
+pub fn export_typescript_bindings() -> Result<(), String> {
+    let specta_builder = create_specta_builder();
+    let bindings_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default().header("// @ts-nocheck\n"),
+            bindings_path,
+        )
+        .map_err(|e| format!("Failed to export TypeScript bindings: {}", e))
 }
 
 #[cfg(not(debug_assertions))]
@@ -61,6 +88,12 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
+    if std::env::args().any(|arg| arg == "--export-bindings") {
+        export_typescript_bindings().expect("Failed to export TypeScript bindings");
+        return;
+    }
+
     init_logging();
     tracing::info!("Starting ClipperHelper Core");
 
@@ -86,24 +119,61 @@ pub fn run() {
             specta_builder.mount_events(app);
 
             // Startup initialization: ensure workspace directory structure and initialize SQLite store
-            let init_res: Result<(PathBuf, store::LocalStore), security::SecurityError> = (|| {
+            let init_res: Result<
+                (
+                    PathBuf,
+                    store::LocalStore,
+                    installer::ReconciliationReport,
+                ),
+                security::SecurityError,
+            > = (|| {
                 let root = security::ensure_workspace()?;
                 let db_path = root.join("clipper.db");
-                let store = store::LocalStore::open(&db_path).map_err(|e| {
+                let store = match store::LocalStore::open(&db_path) {
+                    Ok(s) => s,
+                    Err(store::StoreError::CorruptRecovered(name)) => {
+                        tracing::warn!(
+                            "Recovered corrupt SQLite DB ({}); reopening fresh DB for rebuild",
+                            name
+                        );
+                        store::LocalStore::open(&db_path).map_err(|e| {
+                            security::SecurityError::RootResolutionFailed(format!(
+                                "Failed to reopen recovered store: {}",
+                                e
+                            ))
+                        })?
+                    }
+                    Err(e) => {
+                        return Err(security::SecurityError::RootResolutionFailed(format!(
+                            "Failed to open store: {}",
+                            e
+                        )));
+                    }
+                };
+                let rec = installer::reconcile_startup(&root, &store).map_err(|e| {
                     security::SecurityError::RootResolutionFailed(format!(
-                        "Failed to open store: {}",
+                        "Startup component reconciliation failed: {}",
                         e
                     ))
                 })?;
-                Ok((root, store))
-            })(
-            );
+                Ok((root, store, rec))
+            })();
+
+            let in_use_registry = installer::InUseRegistry::new();
+            app.manage(in_use_registry);
 
             match init_res {
-                Ok((root, store)) => {
-                    tracing::info!("Workspace initialized at {}", root.display());
+                Ok((root, store, rec)) => {
+                    tracing::info!(
+                        "Workspace initialized at {} (reconciled: rebuilt={}, staging_cleaned={}, deferred_retried={})",
+                        root.display(),
+                        rec.rebuilt_from_receipts,
+                        rec.orphan_staging_removed,
+                        rec.deferred_deletes_succeeded
+                    );
                     app.manage(WorkspaceState { root: root.clone() });
                     app.manage(store);
+                    app.manage(rec);
                     app.manage(commands::WorkspaceStatus {
                         is_initialized: true,
                         root: Some(root.to_string_lossy().to_string()),

@@ -24,6 +24,30 @@
       "title": "Koneksi terputus",
       "body": "Periksa koneksi internet kamu dan coba lagi."
     },
+    "E_NET_TIMEOUT": {
+      "title": "Waktu koneksi habis",
+      "body": "Permintaan atau unduhan melebihi batas waktu. Silakan coba lagi."
+    },
+    "E_DISK_LOW": {
+      "title": "Ruang penyimpanan hampir penuh",
+      "body": "Ruang disk tersisa menipis. Kosongkan ruang atau bersihkan cache."
+    },
+    "E_DISK_FULL": {
+      "title": "Ruang disk tidak mencukupi",
+      "body": "Ruang penyimpanan tidak cukup untuk menyelesaikan operasi ini."
+    },
+    "E_COMPONENT_MISSING": {
+      "title": "Komponen tidak ditemukan",
+      "body": "File komponen hilang atau rusak (kemungkinan dihapus/dikarantina oleh antivirus). Klik Perbaiki untuk mengunduh ulang."
+    },
+    "E_MODEL_DOWNLOAD_FAILED": {
+      "title": "Unduhan model gagal",
+      "body": "Gagal mengunduh atau memverifikasi file model suara. Silakan coba lagi."
+    },
+    "E_VERIFY_FAILED": {
+      "title": "Verifikasi gagal",
+      "body": "Komponen atau hasil tidak lolos pemeriksaan integritas atau kapabilitas."
+    },
     "E_MANIFEST_INVALID": {
       "title": "Verifikasi manifest gagal",
       "body": "Verifikasi tanda tangan digital atau skema manifest komponen gagal. Pembaruan mungkin telah diubah atau rusak."
@@ -44,5 +68,8 @@
       "title": "Terjadi kesalahan",
       "body": "Terjadi kendala tak terduga. Silakan coba lagi."
     }
+  },
+  "warning": {
+    "custom_ffmpeg": "Peringatan: FFmpeg kustom sedang aktif. Validasi integritas SHA-256 dinonaktifkan khusus untuk FFmpeg."
   }
 }

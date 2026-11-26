@@ -29,6 +29,9 @@ build/
 *.priv.hex
 *.priv.pem
 
+# Downloaded pinned real component binaries & generated real DEV manifests
+tools/dev-fixtures/real/
+
 # Logs
 logs/
 *.log

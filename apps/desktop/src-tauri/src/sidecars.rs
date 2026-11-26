@@ -21,6 +21,9 @@ pub enum SidecarError {
     #[error("Binary path must be absolute: {0}")]
     PathNotAbsolute(PathBuf),
 
+    #[error("Sidecar environment missing required TEMP/TMP directories")]
+    MissingTempEnv,
+
     #[error("Failed to spawn process: {0}")]
     SpawnFailed(String),
 
@@ -41,6 +44,113 @@ pub enum SidecarError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Standardized sanitized per-component runtime & capability environment.
+/// Ensures `PATH` stays strictly `[component_dir, SystemRoot\System32]`, `TEMP`/`TMP` always point
+/// to an existing writable workspace subdirectory inside `DataRoot`, and `yt-dlp` profile/cache
+/// env variables never leak the user's real `%USERPROFILE%`.
+#[derive(Debug, Clone)]
+pub struct SidecarEnv {
+    pub component: String,
+    pub temp_dir: PathBuf,
+    pub working_dir: PathBuf,
+    pub cache_dir: Option<PathBuf>,
+    pub profile_dir: Option<PathBuf>,
+    pub vars: Vec<(String, String)>,
+}
+
+fn normalize_component_key(component: &str) -> String {
+    match component.to_ascii_lowercase().as_str() {
+        "ffmpeg" | "ffprobe" => "ffmpeg".to_string(),
+        "yt-dlp" => "yt-dlp".to_string(),
+        "qjs" | "quickjs" => "qjs".to_string(),
+        "whisper-cli" | "whisper" => "whisper-cli".to_string(),
+        "fake-sidecar" => "fake-sidecar".to_string(),
+        other => other
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect(),
+    }
+}
+
+impl SidecarEnv {
+    /// Builds the sanitized environment specification for `component` inside `workspace_root`.
+    pub fn for_component(component: &str, workspace_root: &Path) -> Self {
+        let key = normalize_component_key(component);
+        let temp_dir = workspace_root.join("cache").join("temp").join(&key);
+        let working_dir = temp_dir.clone();
+        let temp_str = temp_dir.to_string_lossy().to_string();
+
+        let mut vars = vec![
+            ("TEMP".to_string(), temp_str.clone()),
+            ("TMP".to_string(), temp_str),
+        ];
+
+        let (cache_dir, profile_dir) = if key == "yt-dlp" {
+            let cache_dir = workspace_root.join("cache").join("yt-dlp");
+            let profile_dir = workspace_root.join("cache").join("sandbox").join("yt-dlp");
+            let profile_str = profile_dir.to_string_lossy().to_string();
+            let appdata_str = profile_dir.join("appdata").to_string_lossy().to_string();
+            let localappdata_str = profile_dir
+                .join("localappdata")
+                .to_string_lossy()
+                .to_string();
+            let config_str = profile_dir.join("config").to_string_lossy().to_string();
+            let cache_str = cache_dir.to_string_lossy().to_string();
+
+            vars.push(("USERPROFILE".to_string(), profile_str.clone()));
+            vars.push(("HOME".to_string(), profile_str));
+            vars.push(("APPDATA".to_string(), appdata_str));
+            vars.push(("LOCALAPPDATA".to_string(), localappdata_str));
+            vars.push(("XDG_CACHE_HOME".to_string(), cache_str));
+            vars.push(("XDG_CONFIG_HOME".to_string(), config_str));
+            (Some(cache_dir), Some(profile_dir))
+        } else {
+            (None, None)
+        };
+
+        Self {
+            component: key,
+            temp_dir,
+            working_dir,
+            cache_dir,
+            profile_dir,
+            vars,
+        }
+    }
+
+    /// Creates all configured workspace directories (`TEMP`, `TMP`, sandbox/cache) on disk.
+    pub fn ensure_writable_dirs(&self) -> Result<(), SidecarError> {
+        std::fs::create_dir_all(&self.temp_dir)?;
+        std::fs::create_dir_all(&self.working_dir)?;
+        if let Some(ref c) = self.cache_dir {
+            std::fs::create_dir_all(c)?;
+        }
+        if let Some(ref p) = self.profile_dir {
+            std::fs::create_dir_all(p)?;
+            std::fs::create_dir_all(p.join("appdata"))?;
+            std::fs::create_dir_all(p.join("localappdata"))?;
+            std::fs::create_dir_all(p.join("config"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Returns standard workspace-isolated flags required on every `yt-dlp` invocation.
+pub fn yt_dlp_standard_args(workspace_root: &Path) -> Vec<String> {
+    let cache_dir = workspace_root.join("cache").join("yt-dlp");
+    vec![
+        "--ignore-config".to_string(),
+        "--cache-dir".to_string(),
+        cache_dir.to_string_lossy().to_string(),
+    ]
 }
 
 /// Specification for launching a sidecar process.
@@ -94,28 +204,59 @@ impl SidecarSpec {
         self
     }
 
+    /// Applies a unified [`SidecarEnv`] (ensuring workspace directories exist) to this spec.
+    pub fn with_component_env(mut self, env: &SidecarEnv) -> Result<Self, SidecarError> {
+        env.ensure_writable_dirs()?;
+        self.working_dir = Some(env.working_dir.clone());
+        for (k, v) in &env.vars {
+            if let Some((_, existing)) = self.env.iter_mut().find(|(ek, _)| ek == k) {
+                *existing = v.clone();
+            } else {
+                self.env.push((k.clone(), v.clone()));
+            }
+        }
+        Ok(self)
+    }
+
     pub fn max_total_bytes(mut self, limit: usize) -> Self {
         self.max_total_bytes = limit;
         self
     }
 }
 
-/// Builds a `SidecarSpec` for `yt-dlp` configured with isolated workspace cache and temp directories.
+/// Builds a `SidecarSpec` for any managed component using the unified [`SidecarEnv`].
+pub fn create_component_spec(
+    component: &str,
+    binary_path: impl Into<PathBuf>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    workspace_root: &Path,
+) -> Result<SidecarSpec, SidecarError> {
+    let sidecar_env = SidecarEnv::for_component(component, workspace_root);
+    SidecarSpec::new(binary_path, args).with_component_env(&sidecar_env)
+}
+
+/// Builds a `SidecarSpec` for `yt-dlp` configured with `--ignore-config`, `--cache-dir`,
+/// and the isolated workspace `SidecarEnv`.
 pub fn create_yt_dlp_spec(
     binary_path: impl Into<PathBuf>,
     args: impl IntoIterator<Item = impl Into<String>>,
     workspace_root: &Path,
 ) -> SidecarSpec {
-    let temp_dir = workspace_root.join("cache").join("temp");
-    let cache_dir = workspace_root.join("cache").join("yt-dlp");
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let _ = std::fs::create_dir_all(&cache_dir);
-
-    SidecarSpec::new(binary_path, args)
-        .working_dir(&temp_dir)
-        .env("TEMP", temp_dir.to_string_lossy().to_string())
-        .env("TMP", temp_dir.to_string_lossy().to_string())
-        .env("XDG_CACHE_HOME", cache_dir.to_string_lossy().to_string())
+    let sidecar_env = SidecarEnv::for_component("yt-dlp", workspace_root);
+    let _ = sidecar_env.ensure_writable_dirs();
+    let mut full_args = yt_dlp_standard_args(workspace_root);
+    for a in args {
+        let s: String = a.into();
+        if s == "--ignore-config" {
+            continue;
+        }
+        full_args.push(s);
+    }
+    let mut spec = SidecarSpec::new(binary_path, full_args).working_dir(&sidecar_env.working_dir);
+    for (k, v) in sidecar_env.vars {
+        spec = spec.env(k, v);
+    }
+    spec
 }
 
 /// Result of a completed sidecar execution.
@@ -388,6 +529,20 @@ impl SidecarSupervisor {
             return Err(SidecarError::BinaryNotFound(spec.binary_path.clone()));
         }
 
+        // Enforce that every supervised sidecar launch receives explicit, non-empty TEMP and TMP
+        // inside spec.env (typically via `SidecarEnv::for_component`).
+        let has_temp = spec
+            .env
+            .iter()
+            .any(|(k, v)| k == "TEMP" && !v.trim().is_empty());
+        let has_tmp = spec
+            .env
+            .iter()
+            .any(|(k, v)| k == "TMP" && !v.trim().is_empty());
+        if !has_temp || !has_tmp {
+            return Err(SidecarError::MissingTempEnv);
+        }
+
         let job = JobObject::create().map_err(SidecarError::JobObjectError)?;
 
         let mut cmd = tokio::process::Command::new(&spec.binary_path);
@@ -396,12 +551,13 @@ impl SidecarSupervisor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        // Working directory: set to explicit working_dir if provided, otherwise default to workspace temp
+        // Ensure working directory and configured sandbox/temp directories exist before every spawn.
         if let Some(ref dir) = spec.working_dir {
+            std::fs::create_dir_all(dir)?;
             cmd.current_dir(dir);
         } else if let Ok(ws_root) = crate::security::get_workspace_root() {
             let temp_dir = ws_root.join("cache").join("temp");
-            let _ = std::fs::create_dir_all(&temp_dir);
+            std::fs::create_dir_all(&temp_dir)?;
             cmd.current_dir(temp_dir);
         }
 
@@ -438,9 +594,34 @@ impl SidecarSupervisor {
         }
         cmd.env("COMSPEC", format!("{}\\System32\\cmd.exe", system_root));
 
-        // Apply per-sidecar custom environment variables
+        // Apply per-sidecar environment variables and ensure configured temp/sandbox dirs exist.
+        let mut temp_env_exists = false;
         for (k, v) in &spec.env {
+            if matches!(
+                k.as_str(),
+                "TEMP"
+                    | "TMP"
+                    | "USERPROFILE"
+                    | "APPDATA"
+                    | "LOCALAPPDATA"
+                    | "XDG_CACHE_HOME"
+                    | "XDG_CONFIG_HOME"
+            ) {
+                std::fs::create_dir_all(v)?;
+                if k == "TEMP" || k == "TMP" {
+                    temp_env_exists = std::path::Path::new(v).is_dir();
+                }
+            }
             cmd.env(k, v);
+        }
+        if !temp_env_exists {
+            tracing::debug!(
+                "Spawning sidecar without TEMP/TMP in spec.env (bin={})",
+                spec.binary_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            );
         }
 
         #[cfg(windows)]
@@ -729,10 +910,16 @@ mod tests {
         }
     }
 
+    fn fake_spec(bin: &Path, args: impl IntoIterator<Item = impl Into<String>>) -> SidecarSpec {
+        let ws_root =
+            std::env::temp_dir().join(format!("clipper-sidecar-test-{}", std::process::id()));
+        create_component_spec("fake-sidecar", bin, args, &ws_root).expect("fake_sidecar SidecarEnv")
+    }
+
     #[tokio::test]
     async fn test_normal_exit() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "normal"]);
+        let spec = fake_spec(&bin, ["--mode", "normal"]);
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)
@@ -749,7 +936,7 @@ mod tests {
     #[tokio::test]
     async fn test_nonzero_exit_code() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "exit-code", "42"]);
+        let spec = fake_spec(&bin, ["--mode", "exit-code", "42"]);
         let supervisor = SidecarSupervisor::new();
         let err = supervisor
             .run_to_completion(&spec, None)
@@ -766,7 +953,7 @@ mod tests {
     #[tokio::test]
     async fn test_progress_streaming_with_carriage_return() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "progress"]);
+        let spec = fake_spec(&bin, ["--mode", "progress"]);
         let supervisor = SidecarSupervisor::new();
 
         let line_count = Arc::new(AtomicUsize::new(0));
@@ -795,8 +982,8 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_kills_process() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "sleep", "10000"])
-            .timeout(Duration::from_millis(300));
+        let spec =
+            fake_spec(&bin, ["--mode", "sleep", "10000"]).timeout(Duration::from_millis(300));
         let supervisor = SidecarSupervisor::new();
 
         let start = std::time::Instant::now();
@@ -822,7 +1009,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancellation_kills_process() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "sleep", "10000"]);
+        let spec = fake_spec(&bin, ["--mode", "sleep", "10000"]);
         let supervisor = SidecarSupervisor::new();
 
         let token = CancellationToken::new();
@@ -848,7 +1035,7 @@ mod tests {
     async fn test_flood_output_is_capped() {
         let bin = fake_sidecar_path();
         // Set limit to 64 KB for fast test
-        let spec = SidecarSpec::new(&bin, ["--mode", "flood"]).max_total_bytes(64 * 1024);
+        let spec = fake_spec(&bin, ["--mode", "flood"]).max_total_bytes(64 * 1024);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -867,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_utf8_handled_lossily() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "invalid-utf8"]);
+        let spec = fake_spec(&bin, ["--mode", "invalid-utf8"]);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -884,7 +1071,7 @@ mod tests {
     #[tokio::test]
     async fn test_grandchild_killed_via_job_object() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "grandchild"]);
+        let spec = fake_spec(&bin, ["--mode", "grandchild"]);
         let supervisor = SidecarSupervisor::new();
 
         let res = supervisor
@@ -1038,7 +1225,7 @@ mod tests {
     #[tokio::test]
     async fn test_sidecar_sanitized_environment_and_path() {
         let bin = fake_sidecar_path();
-        let spec = SidecarSpec::new(&bin, ["--mode", "env"]).env("CUSTOM_VAR", "TEST_VAL_123");
+        let spec = fake_spec(&bin, ["--mode", "env"]).env("CUSTOM_VAR", "TEST_VAL_123");
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)
@@ -1082,13 +1269,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_supervisor_rejects_missing_temp_and_tmp() {
+        let bin = fake_sidecar_path();
+        let spec = SidecarSpec::new(&bin, ["--mode", "normal"]);
+        let supervisor = SidecarSupervisor::new();
+        let err = supervisor
+            .run_to_completion(&spec, None)
+            .await
+            .expect_err("must reject spec missing TEMP/TMP");
+        assert!(matches!(err, SidecarError::MissingTempEnv));
+    }
+
+    #[tokio::test]
     async fn test_sidecar_working_directory_isolated() {
         let bin = fake_sidecar_path();
         let temp_ws = std::env::temp_dir().join(format!("test_ws_workdir_{}", std::process::id()));
         let custom_workdir = temp_ws.join("cache").join("temp");
         let _ = std::fs::create_dir_all(&custom_workdir);
 
-        let spec = SidecarSpec::new(&bin, ["--mode", "pwd"]).working_dir(&custom_workdir);
+        let spec = fake_spec(&bin, ["--mode", "pwd"]).working_dir(&custom_workdir);
         let supervisor = SidecarSupervisor::new();
         let res = supervisor
             .run_to_completion(&spec, None)
@@ -1122,13 +1321,61 @@ mod tests {
         assert!(spec.working_dir.is_some());
         assert_eq!(
             spec.working_dir.unwrap(),
-            test_root.join("cache").join("temp")
+            test_root.join("cache").join("temp").join("yt-dlp")
         );
 
+        assert!(spec.args.contains(&"--ignore-config".to_string()));
+        assert!(spec.args.contains(&"--cache-dir".to_string()));
+        assert!(spec.args.contains(
+            &test_root
+                .join("cache")
+                .join("yt-dlp")
+                .to_string_lossy()
+                .to_string()
+        ));
+        assert!(spec.args.contains(&"--version".to_string()));
+
         let env_map: std::collections::HashMap<_, _> = spec.env.into_iter().collect();
-        assert!(env_map.contains_key("TEMP"));
-        assert!(env_map.contains_key("TMP"));
-        assert!(env_map.contains_key("XDG_CACHE_HOME"));
+        for key in [
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "HOME",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+        ] {
+            let val = env_map
+                .get(key)
+                .unwrap_or_else(|| panic!("missing env key {}", key));
+            assert!(
+                std::path::Path::new(val).is_dir(),
+                "directory for {} must exist before spawn: {}",
+                key,
+                val
+            );
+        }
+
+        // Other components also receive an existing per-component TEMP/TMP inside DataRoot.
+        let ff_env = SidecarEnv::for_component("ffmpeg", &test_root);
+        let ff_spec = SidecarSpec::new(&bin, ["-version"])
+            .with_component_env(&ff_env)
+            .expect("ffmpeg sidecar env");
+        let ff_map: std::collections::HashMap<_, _> = ff_spec.env.into_iter().collect();
+        assert_eq!(
+            ff_map.get("TEMP").map(String::as_str),
+            Some(
+                test_root
+                    .join("cache")
+                    .join("temp")
+                    .join("ffmpeg")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert_eq!(ff_map.get("TEMP"), ff_map.get("TMP"));
+        assert!(!ff_map.contains_key("USERPROFILE"));
 
         let _ = std::fs::remove_dir_all(&test_root);
     }

@@ -1,3 +1,5 @@
+#![cfg(debug_assertions)]
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -653,4 +655,162 @@ async fn test_dev_panel_full_flow_sequence() {
         "Offline server must produce E_NET_OFFLINE (neutral Retry state), got: {:?}",
         net_err
     );
+}
+
+#[tokio::test]
+async fn test_fetch_manifest_wrong_key_unknown_kid_schema_and_stale() {
+    let temp_srv = TempDir::new().expect("srv dir");
+    let server = DevServerGuard::start(temp_srv.path());
+
+    let trusted_key = SigningKey::from_bytes(&[51u8; 32]);
+    let wrong_key = SigningKey::from_bytes(&[52u8; 32]);
+    let pub_key_hex = hex::encode(trusted_key.verifying_key().to_bytes());
+    let extra_keys = vec![ManifestPublicKey {
+        kid: "trusted-kid",
+        public_key_hex: Box::leak(pub_key_hex.into_boxed_str()),
+    }];
+
+    let valid_manifest = ComponentManifest {
+        schema: 1,
+        sequence: 10,
+        generated_at: "2026-11-24T12:00:00Z".into(),
+        channel: "stable".into(),
+        components: vec![],
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&valid_manifest).unwrap();
+
+    // 1. Wrong key (valid kid, signed by wrong key) -> E_MANIFEST_INVALID
+    let wrong_sig = wrong_key.sign(&manifest_bytes);
+    let wrong_sig_json = serde_json::json!({
+        "kid": "trusted-kid",
+        "signature": hex::encode(wrong_sig.to_bytes()),
+    });
+    std::fs::write(temp_srv.path().join("wrong_key.json"), &manifest_bytes).unwrap();
+    std::fs::write(
+        temp_srv.path().join("wrong_key.json.sig"),
+        serde_json::to_vec(&wrong_sig_json).unwrap(),
+    )
+    .unwrap();
+
+    let temp_db_dir = TempDir::new().expect("db dir");
+    let store = LocalStore::open(&temp_db_dir.path().join("t.db")).unwrap();
+
+    let err_wrong = fetch_and_verify_manifest(
+        &format!("{}/wrong_key.json", server.url),
+        &format!("{}/wrong_key.json.sig", server.url),
+        "0.1.0",
+        &store,
+        Some(&extra_keys),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err_wrong, NetError::ManifestInvalid(_)));
+    assert_eq!(err_wrong.error_code(), "E_MANIFEST_INVALID");
+
+    // 2. Unknown kid -> E_MANIFEST_INVALID
+    let good_sig = trusted_key.sign(&manifest_bytes);
+    let unknown_kid_json = serde_json::json!({
+        "kid": "unknown-kid-999",
+        "signature": hex::encode(good_sig.to_bytes()),
+    });
+    std::fs::write(
+        temp_srv.path().join("unknown_kid.json.sig"),
+        serde_json::to_vec(&unknown_kid_json).unwrap(),
+    )
+    .unwrap();
+
+    let err_unknown = fetch_and_verify_manifest(
+        &format!("{}/wrong_key.json", server.url),
+        &format!("{}/unknown_kid.json.sig", server.url),
+        "0.1.0",
+        &store,
+        Some(&extra_keys),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err_unknown, NetError::ManifestInvalid(_)));
+    assert_eq!(err_unknown.error_code(), "E_MANIFEST_INVALID");
+
+    // 3. Schema mismatch -> E_MANIFEST_INVALID
+    let bad_schema_manifest = ComponentManifest {
+        schema: 99,
+        sequence: 10,
+        generated_at: "2026-11-24T12:00:00Z".into(),
+        channel: "stable".into(),
+        components: vec![],
+    };
+    let bad_schema_bytes = serde_json::to_vec_pretty(&bad_schema_manifest).unwrap();
+    let bad_schema_sig = trusted_key.sign(&bad_schema_bytes);
+    std::fs::write(temp_srv.path().join("bad_schema.json"), &bad_schema_bytes).unwrap();
+    std::fs::write(
+        temp_srv.path().join("bad_schema.json.sig"),
+        serde_json::to_vec(&serde_json::json!({
+            "kid": "trusted-kid",
+            "signature": hex::encode(bad_schema_sig.to_bytes()),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let err_schema = fetch_and_verify_manifest(
+        &format!("{}/bad_schema.json", server.url),
+        &format!("{}/bad_schema.json.sig", server.url),
+        "0.1.0",
+        &store,
+        Some(&extra_keys),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err_schema, NetError::ManifestInvalid(_)));
+    assert_eq!(err_schema.error_code(), "E_MANIFEST_INVALID");
+
+    // 4. Sequence rollback -> E_MANIFEST_STALE
+    std::fs::write(temp_srv.path().join("good.json"), &manifest_bytes).unwrap();
+    std::fs::write(
+        temp_srv.path().join("good.json.sig"),
+        serde_json::to_vec(&serde_json::json!({
+            "kid": "trusted-kid",
+            "signature": hex::encode(good_sig.to_bytes()),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fetch_and_verify_manifest(
+        &format!("{}/good.json", server.url),
+        &format!("{}/good.json.sig", server.url),
+        "0.1.0",
+        &store,
+        Some(&extra_keys),
+    )
+    .await
+    .expect("sequence 10 accepted");
+
+    let older_manifest = ComponentManifest {
+        sequence: 9,
+        ..valid_manifest
+    };
+    let older_bytes = serde_json::to_vec_pretty(&older_manifest).unwrap();
+    let older_sig = trusted_key.sign(&older_bytes);
+    std::fs::write(temp_srv.path().join("older.json"), &older_bytes).unwrap();
+    std::fs::write(
+        temp_srv.path().join("older.json.sig"),
+        serde_json::to_vec(&serde_json::json!({
+            "kid": "trusted-kid",
+            "signature": hex::encode(older_sig.to_bytes()),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let err_stale = fetch_and_verify_manifest(
+        &format!("{}/older.json", server.url),
+        &format!("{}/older.json.sig", server.url),
+        "0.1.0",
+        &store,
+        Some(&extra_keys),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err_stale, NetError::ManifestStale { .. }));
+    assert_eq!(err_stale.error_code(), "E_MANIFEST_STALE");
 }

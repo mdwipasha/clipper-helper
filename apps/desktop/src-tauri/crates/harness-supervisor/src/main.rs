@@ -1,7 +1,7 @@
 //! Test harness executing production supervisor code (`spawn_streaming`)
 //! for the abrupt termination / orphan-process verification test.
 
-use clipper_helper_desktop::sidecars::{SidecarSpec, SidecarSupervisor};
+use clipper_helper_desktop::sidecars::{create_component_spec, SidecarSupervisor};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -13,9 +13,21 @@ async fn main() {
         std::process::exit(1);
     }
     let fake_sidecar = PathBuf::from(&args[1]);
+    let ws_root = std::env::temp_dir().join(format!("clipper-harness-{}", std::process::id()));
 
     let supervisor = SidecarSupervisor::new();
-    let spec = SidecarSpec::new(&fake_sidecar, ["--mode", "tree-child"]);
+    let spec = match create_component_spec(
+        "fake-sidecar",
+        &fake_sidecar,
+        ["--mode", "tree-child"],
+        &ws_root,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to prepare SidecarEnv: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Stream lines and forward them to our own stdout so test can read child and grandchild PIDs
     let res = supervisor
