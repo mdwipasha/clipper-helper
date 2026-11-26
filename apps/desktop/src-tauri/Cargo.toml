@@ -42,6 +42,7 @@ reqwest = { version = "=0.12.12", default-features = false, features = ["rustls-
 futures-util = "=0.3.31"
 zip = { version = "=9.8.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 uuid = { version = "=1.18.1", features = ["v4"] }
+url = "=2.5.9"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.59.0", features = [

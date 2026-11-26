@@ -21,6 +21,7 @@ pub mod sidecars;
 pub mod speech;
 pub mod store;
 pub mod updater;
+pub mod url_intake;
 
 use security::RedactionLayer;
 use std::path::PathBuf;
