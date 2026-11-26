@@ -16,6 +16,8 @@ export const ErrorCodeSchema = z.enum([
   'E_RANGE_TOO_LONG',
   'E_DISK_LOW',
   'E_DISK_FULL',
+  'E_MANIFEST_INVALID',
+  'E_MANIFEST_STALE',
   'E_COMPONENT_MISSING',
   'E_MODEL_DOWNLOAD_FAILED',
   'E_TRANSCRIBE_FAILED',

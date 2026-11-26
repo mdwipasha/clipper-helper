@@ -50,6 +50,79 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Debug-only: starts or verifies the local dev-server serving test fixtures.
+   */
+  async devStartFixtureServer(): Promise<Result<DevFixtureServerStatus, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_start_fixture_server') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: inspects the status of the local fixture server.
+   */
+  async devGetFixtureServerStatus(): Promise<DevFixtureServerStatus> {
+    return await TAURI_INVOKE('dev_get_fixture_server_status');
+  },
+  /**
+   * Debug-only: stops the local fixture server if running.
+   */
+  async devStopFixtureServer(): Promise<Result<DevFixtureServerStatus, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dev_stop_fixture_server') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: fetches and cryptographically verifies the component manifest.
+   */
+  async devFetchManifest(
+    manifestUrl: string,
+    sigUrl: string
+  ): Promise<Result<DevManifestInfo, DevManifestError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_fetch_manifest', { manifestUrl, sigUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Debug-only: downloads and verifies a component from the manifest with live progress.
+   */
+  async devDownloadComponent(
+    component: string,
+    version: string,
+    url: string,
+    sizeBytes: number,
+    sha256: string,
+    archive: string
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('dev_download_component', {
+          component,
+          version,
+          url,
+          sizeBytes,
+          sha256,
+          archive,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -62,6 +135,30 @@ export const commands = {
  * Application metadata returned to the frontend.
  */
 export type AppInfo = { name: string; version: string; platform: string };
+export type DevFixtureServerStatus = {
+  state: string;
+  port: number | null;
+  url: string | null;
+  error: string | null;
+};
+export type DevManifestComponent = {
+  component: string;
+  version: string;
+  platform: string;
+  url: string;
+  size_bytes: number;
+  sha256: string;
+  archive: string;
+  is_downloaded: boolean;
+};
+export type DevManifestError = { code: string; message: string };
+export type DevManifestInfo = {
+  sequence: number;
+  channel: string;
+  generated_at: string;
+  signature_valid: boolean;
+  components: DevManifestComponent[];
+};
 export type DevSidecarRunResult = {
   exit_code: number;
   lines: string[];

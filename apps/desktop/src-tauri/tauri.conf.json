@@ -16,7 +16,7 @@
       "capabilities": ["default"],
       "assetProtocol": {
         "enable": true,
-        "scope": ["$LOCALAPPDATA/ClipperHelper/**"]
+        "scope": ["$LOCALAPPDATA/ClipperHelper/**", "$LOCALAPPDATA/ClipperHelper-Dev/**"]
       }
     },
     "windows": [

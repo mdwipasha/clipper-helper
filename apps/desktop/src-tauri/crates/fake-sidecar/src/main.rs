@@ -78,65 +78,35 @@ fn main() {
                 .expect("spawn grandchild");
             println!("grandchild pid: {}", child.id());
         }
-        "supervisor-sim" => {
-            #[cfg(windows)]
-            {
-                use std::io::BufRead;
-                use std::os::windows::io::AsRawHandle;
-                use windows_sys::Win32::System::JobObjects::{
-                    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-                    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                };
-
-                let exe = env::current_exe().expect("get current exe");
-                let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-                assert!(!job.is_null());
-
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                unsafe {
-                    SetInformationJobObject(
-                        job,
-                        JobObjectExtendedLimitInformation,
-                        &info as *const _ as *const std::ffi::c_void,
-                        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                    );
-                }
-
-                let mut child = Command::new(&exe)
-                    .args(["--mode", "grandchild"])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("spawn grandchild parent");
-
-                let child_pid = child.id();
-                unsafe {
-                    AssignProcessToJobObject(job, child.as_raw_handle() as _);
-                }
-
-                let child_out = child.stdout.take().expect("take child stdout");
-                let mut reader = std::io::BufReader::new(child_out);
-                let mut first_line = String::new();
-                reader.read_line(&mut first_line).ok();
-
-                let grandchild_pid = first_line
-                    .trim()
-                    .split(':')
-                    .nth(1)
-                    .and_then(|s| s.trim().parse::<u32>().ok())
-                    .unwrap_or(0);
-
-                println!(
-                    "SUPERVISOR_READY child={} grandchild={}",
-                    child_pid, grandchild_pid
-                );
-                let _ = std::io::stdout().flush();
-
-                // Terminate abruptly without cleaning up child
-                std::process::exit(42);
+        "env" => {
+            // Dump environment variables to stdout as KEY=VALUE
+            for (key, val) in env::vars() {
+                println!("{}={}", key, val);
             }
+        }
+        "pwd" => {
+            if let Ok(current_dir) = env::current_dir() {
+                println!("{}", current_dir.display());
+            }
+        }
+        "tree-child" => {
+            // Spawn a grandchild that sleeps, then sleep ourselves.
+            let exe = env::current_exe().expect("get current exe");
+            let grandchild = Command::new(&exe)
+                .args(["--mode", "sleep", "30000"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn grandchild");
+            let child_pid = std::process::id();
+            let grandchild_pid = grandchild.id();
+            println!(
+                "TREE_READY child={} grandchild={}",
+                child_pid, grandchild_pid
+            );
+            let _ = std::io::stdout().flush();
+            std::thread::sleep(std::time::Duration::from_millis(30000));
         }
         other => {
             eprintln!("Unknown mode: {}", other);

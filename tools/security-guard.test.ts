@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,7 +68,7 @@ describe('Security Baseline Guard', () => {
     expect(Array.isArray(assetProtocol.scope)).toBe(true);
 
     for (const entry of assetProtocol.scope) {
-      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper[/\\]/);
+      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper(-Dev)?[/\\]/);
       expect(entry).not.toContain('..');
     }
   });
@@ -124,6 +125,22 @@ describe('Security Baseline Guard', () => {
       expect(str.includes('dev_run_fake_sidecar')).toBe(false);
       expect(str.includes('dev_get_system_info')).toBe(false);
       expect(str.includes('dev_reset_workspace')).toBe(false);
+      expect(str.includes('dev_start_fixture_server')).toBe(false);
+      expect(str.includes('dev_fetch_manifest')).toBe(false);
+      expect(str.includes('dev_download_component')).toBe(false);
+    }
+  });
+
+  it('asserts no private keys or dev key files are tracked or committed in git', () => {
+    const trackedFiles = execSync('git ls-files', { encoding: 'utf8' })
+      .split('\n')
+      .map((f: string) => f.trim())
+      .filter(Boolean);
+
+    for (const file of trackedFiles) {
+      expect(file).not.toMatch(/\.dev-keys\//);
+      expect(file).not.toMatch(/\.(priv|priv\.hex|pem|key)$/i);
+      expect(file).not.toMatch(/id_ed25519/i);
     }
   });
 });

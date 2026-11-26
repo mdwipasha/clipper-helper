@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -13,6 +14,14 @@ export default tseslint.config(
       'apps/bridge/**',
       'apps/desktop/src/ipc/bindings.ts',
     ],
+  },
+  {
+    files: ['tools/**/*.{js,ts}', '*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
   },
   {
     rules: {

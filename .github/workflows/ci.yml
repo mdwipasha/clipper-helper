@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, 'feature/**']
+    branches: [main, master, 'feature/**', 'm1*']
   pull_request:
-    branches: [main, master]
+    branches: [main, master, 'feature/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -133,8 +133,8 @@ jobs:
       - name: Rust Clippy
         run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Build fake-sidecar for tests
-        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p fake-sidecar
+      - name: Build test binaries (fake-sidecar & harness-supervisor)
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p fake-sidecar -p harness-supervisor
 
       - name: Rust Unit Tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all

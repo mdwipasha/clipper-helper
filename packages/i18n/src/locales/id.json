@@ -24,6 +24,14 @@
       "title": "Koneksi terputus",
       "body": "Periksa koneksi internet kamu dan coba lagi."
     },
+    "E_MANIFEST_INVALID": {
+      "title": "Verifikasi manifest gagal",
+      "body": "Verifikasi tanda tangan digital atau skema manifest komponen gagal. Pembaruan mungkin telah diubah atau rusak."
+    },
+    "E_MANIFEST_STALE": {
+      "title": "Rollback manifest ditolak",
+      "body": "Urutan manifest komponen lebih lama daripada versi yang terakhir diterima. Pembaruan ditolak."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Verifikasi anti-bot terdeteksi",
       "body": "YouTube meminta verifikasi 'bukan bot'. Tunggu beberapa menit atau ganti jaringan/VPN."

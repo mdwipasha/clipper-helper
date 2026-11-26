@@ -24,6 +24,14 @@
       "title": "No internet connection",
       "body": "Check your internet connection and try again."
     },
+    "E_MANIFEST_INVALID": {
+      "title": "Manifest verification failed",
+      "body": "Component manifest signature or schema verification failed. Update may be tampered with or corrupted."
+    },
+    "E_MANIFEST_STALE": {
+      "title": "Manifest sequence rollback rejected",
+      "body": "The component manifest sequence is older than the last accepted sequence. Update rejected."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Anti-bot verification detected",
       "body": "YouTube is requesting a bot check. Wait a few minutes or switch networks/VPN."
