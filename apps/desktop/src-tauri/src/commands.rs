@@ -603,7 +603,9 @@ fn get_cached_manifest_entry(
         .find(|c| c.component == component && version.map(|v| v == c.version).unwrap_or(true))
         .cloned()
         .ok_or_else(|| {
-            let ver_display = version.unwrap_or("(latest)");
+            let ver_display = version
+                .map(manifest::format_component_version)
+                .unwrap_or_else(|| "(latest)".to_string());
             let msg = format!(
                 "Komponen '{}' versi {} tidak tersedia di manifest.",
                 component, ver_display

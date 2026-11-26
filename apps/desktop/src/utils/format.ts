@@ -1,8 +1,8 @@
-export function formatVersionBadge(version: string | null | undefined): string {
+export function formatComponentVersion(version: string | null | undefined): string {
   if (!version) return '';
   const trimmed = version.trim();
   if (!trimmed) return '';
-  return /^v/i.test(trimmed) ? trimmed : `v${trimmed}`;
+  return /^[A-Za-z]/.test(trimmed) ? trimmed : `v${trimmed}`;
 }
 
 export function formatBytesHuman(bytes: number): string {

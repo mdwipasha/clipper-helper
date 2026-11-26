@@ -33,6 +33,24 @@ impl ManifestError {
     }
 }
 
+/// Formats a component or model version consistently for UI, Diagnostics reports, and errors:
+/// never prepends `v` when the trimmed string already begins with an ASCII letter (`v`, `n`, `silero-...`, `whisper-...`).
+pub fn format_component_version(version: &str) -> String {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        trimmed.to_string()
+    } else {
+        format!("v{}", trimmed)
+    }
+}
+
 const fn parse_u64_const(s: &str) -> u64 {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -768,5 +786,24 @@ mod tests {
         .expect("in-range version must succeed");
         assert_eq!(res_in_range.components.len(), 1);
         assert_eq!(res_in_range.components[0].component, "yt-dlp");
+    }
+
+    #[test]
+    fn test_format_component_version_table() {
+        let cases = [
+            (
+                "n9.0.2-58-g8c7ef49002-20261119",
+                "n9.0.2-58-g8c7ef49002-20261119",
+            ),
+            ("v0.18.0", "v0.18.0"),
+            ("1.9.5", "v1.9.5"),
+            ("2026.10.26", "v2026.10.26"),
+            ("silero-v6.2.0-2aa269b7", "silero-v6.2.0-2aa269b7"),
+            ("whisper-small-q5_1-ae85e4a9", "whisper-small-q5_1-ae85e4a9"),
+            ("  ", ""),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(format_component_version(raw), expected, "raw={}", raw);
+        }
     }
 }

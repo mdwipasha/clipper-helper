@@ -530,9 +530,9 @@ impl ComponentResolver {
 
         if let Err(reason) = quick_verify_row(&self.ws_root, &row) {
             tracing::error!(
-                "Resolved component {} v{} failed quick check: {}",
+                "Resolved component {} ({}) failed quick check: {}",
                 component,
-                row.version,
+                crate::manifest::format_component_version(&row.version),
                 reason
             );
             return Err(ResolverError::Missing(ComponentMissingAdvice {

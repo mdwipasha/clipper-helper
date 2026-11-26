@@ -140,7 +140,11 @@ fn build_ringkasan_section(
                 .iter()
                 .filter(|v| v.status == "quarantined")
                 .count();
-            let ver = c.current_version.as_deref().unwrap_or("BELUM PASANG");
+            let ver = c
+                .current_version
+                .as_deref()
+                .map(crate::manifest::format_component_version)
+                .unwrap_or_else(|| "BELUM PASANG".to_string());
             let custom_tag = if c.component == "ffmpeg" && c.active_source == "custom" {
                 " [Custom]"
             } else {
@@ -170,7 +174,11 @@ fn build_ringkasan_section(
         let _ = writeln!(s, "## RINGKASAN");
         let _ = writeln!(s, "- ID Laporan: {}", report_id);
         let _ = writeln!(s, "- Waktu (UTC epoch): {}", ts_secs);
-        let _ = writeln!(s, "- Versi App: v{}", opts.app_version);
+        let _ = writeln!(
+            s,
+            "- Versi App: {}",
+            crate::manifest::format_component_version(&opts.app_version)
+        );
 
         if !clean_note.is_empty() {
             let note_single_line = clean_note.replace('\r', "").replace('\n', " ");
@@ -240,9 +248,9 @@ fn build_ringkasan_section(
     // Extreme fallback truncation should fixed fields themselves exceed 4096 bytes.
     let hard = truncate_utf8_bytes(
         &format!(
-            "# ClipperHelper Diagnostics Report\n## RINGKASAN\n- ID Laporan: {}\n- Versi App: v{}\n- Catatan: {}\n",
+            "# ClipperHelper Diagnostics Report\n## RINGKASAN\n- ID Laporan: {}\n- Versi App: {}\n- Catatan: {}\n",
             report_id,
-            opts.app_version,
+            crate::manifest::format_component_version(&opts.app_version),
             truncate_utf8_bytes(&clean_note.replace('\n', " "), 200)
         ),
         RINGKASAN_MAX_BYTES,
@@ -285,12 +293,15 @@ fn assemble_detail_section(
 
     let _ = writeln!(s, "\n### Laporan Kapabilitas Komponen");
     for comp in &snapshot.components {
+        let active_ver_fmt = comp
+            .current_version
+            .as_deref()
+            .map(crate::manifest::format_component_version)
+            .unwrap_or_else(|| "tidak ada".to_string());
         let _ = writeln!(
             s,
             "- {} (aktif: {}, sumber: {})",
-            comp.component,
-            comp.current_version.as_deref().unwrap_or("tidak ada"),
-            comp.active_source
+            comp.component, active_ver_fmt, comp.active_source
         );
         for v in &comp.versions {
             let cap_status = v
@@ -310,7 +321,10 @@ fn assemble_detail_section(
             let _ = writeln!(
                 s,
                 "  - ver={} status={} cap={}{}",
-                v.version, v.status, cap_status, q_note
+                crate::manifest::format_component_version(&v.version),
+                v.status,
+                cap_status,
+                q_note
             );
             if let Some(rep) = &v.capability_report {
                 if let Some(ff) = &rep.ffmpeg {

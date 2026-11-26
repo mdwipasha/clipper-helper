@@ -11,7 +11,7 @@ import {
   DataRootChangeOutcome,
   events,
 } from '../ipc/bindings';
-import { formatBytesHuman, formatEtaText, formatVersionBadge } from '../utils/format';
+import { formatBytesHuman, formatComponentVersion, formatEtaText } from '../utils/format';
 import { ErrorBanner, ErrorBannerModel } from './ErrorBanner';
 
 interface ComponentsViewProps {
@@ -37,7 +37,7 @@ function CapabilityDetailsDrawer({
       <div className="flex items-center justify-between text-slate-300">
         <span>
           Verifikasi ({report.mode})
-          {report.reported_version ? ` · ${formatVersionBadge(report.reported_version)}` : ''}
+          {report.reported_version ? ` · ${formatComponentVersion(report.reported_version)}` : ''}
         </span>
         <span className="uppercase font-mono font-bold text-slate-200">{report.status}</span>
       </div>
@@ -508,7 +508,7 @@ export function ComponentsView({
                   <span className="font-semibold text-sm text-white">{name}</span>
                   {currentVer && (
                     <span className="font-mono text-[11px] bg-slate-800 text-slate-200 px-2 py-0.5 rounded">
-                      {formatVersionBadge(currentVer)}
+                      {formatComponentVersion(currentVer)}
                     </span>
                   )}
                   <span
@@ -522,7 +522,7 @@ export function ComponentsView({
                   </span>
                   {manifestItem && !currentVer && (
                     <span className="text-slate-400">
-                      ({formatVersionBadge(manifestItem.version)} ·{' '}
+                      ({formatComponentVersion(manifestItem.version)} ·{' '}
                       {formatBytesHuman(manifestItem.size_bytes)})
                     </span>
                   )}
@@ -583,7 +583,7 @@ export function ComponentsView({
                   <div className="text-rose-200">
                     <strong>
                       {t('components.statusQuarantined', undefined, locale)}{' '}
-                      {formatVersionBadge(qv.version)}:
+                      {formatComponentVersion(qv.version)}:
                     </strong>{' '}
                     {qv.quarantine_reason ?? 'Gagal pemeriksaan kapabilitas'}
                   </div>

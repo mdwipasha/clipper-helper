@@ -18,7 +18,7 @@ import {
   SettingsOverview,
   WorkspaceStatus,
 } from './ipc/bindings';
-import { copyTextToClipboard, formatVersionBadge } from './utils/format';
+import { copyTextToClipboard, formatComponentVersion } from './utils/format';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
@@ -120,7 +120,7 @@ export function App() {
                 {t('app.name', undefined, locale)}
               </h1>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                {appInfo ? formatVersionBadge(appInfo.version) : '…'} ·{' '}
+                {appInfo ? formatComponentVersion(appInfo.version) : '…'} ·{' '}
                 {appInfo?.platform ?? 'windows'}
               </p>
             </div>
