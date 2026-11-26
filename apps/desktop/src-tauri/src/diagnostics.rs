@@ -579,12 +579,12 @@ pub fn build_diagnostics_report(
         .list_recent_job_summaries(20, opts.include_video_ids)
         .unwrap_or_default();
     let logs_dir = ws_root.join("logs");
-    let logs_file = logging::read_recent_redacted_log_lines(&logs_dir, 800, 512 * 1024);
-    let logs_clip: Vec<String> = logs_file
-        .iter()
-        .skip(logs_file.len().saturating_sub(150))
-        .cloned()
-        .collect();
+    let logs_file = logging::read_recent_redacted_log_lines(
+        &logs_dir,
+        logging::REPORT_MAX_LOG_LINES,
+        512 * 1024,
+    );
+    let logs_clip: Vec<String> = logs_file.clone();
 
     let ringkasan = build_ringkasan_section(
         &report_id,
@@ -681,11 +681,16 @@ mod tests {
             .set_setting("supabase_service_role_key", "NEVER_SHOULD_APPEAR_SECRET")
             .unwrap();
 
-        // Write oversized log lines (> 150 KB) to exercise clipboard ~100 KB truncation + notice
-        let big_log_line = "INFO stage=transcribe progress=45% buffer=0123456789abcdef0123456789abcdef user=C:\\Users\\RahmatClipper\\clip.mp4 email=rahmat@domain.id token=tok_secret_99 Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig1234567890 ".repeat(10);
+        // Write oversized log lines (> 150 KB across newest 80 lines) to exercise clipboard ~100 KB truncation + notice
+        let big_log_line = "stage=transcribe progress=45% buffer=0123456789abcdef0123456789abcdef user=C:\\Users\\RahmatClipper\\clip.mp4 email=rahmat@domain.id token=tok_secret_99 Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig1234567890 ".repeat(10);
         let mut big_log_content = String::new();
-        for i in 0..140 {
-            big_log_content.push_str(&format!("line={} {}\n", i, big_log_line));
+        for i in 0..80 {
+            big_log_content.push_str(&format!(
+                "[2026-11-26T10:00:{:02}Z] INFO clipper_helper_desktop_lib::stage: line={} {}\n",
+                i % 60,
+                i,
+                big_log_line
+            ));
         }
         std::fs::write(ws.join("logs/clipper.log"), &big_log_content).unwrap();
 

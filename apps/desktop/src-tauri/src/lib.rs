@@ -39,6 +39,7 @@ pub fn init_logging() {
         .with_thread_ids(false);
 
     let _ = tracing_subscriber::registry()
+        .with(logging::build_runtime_log_targets())
         .with(fmt_layer)
         .with(RedactionLayer)
         .with(logging::RotatingFileLogLayer)
