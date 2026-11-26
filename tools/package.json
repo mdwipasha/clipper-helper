@@ -10,7 +10,7 @@
     "fetch-pinned-components": "node src/fetch-pinned-components.js"
   },
   "devDependencies": {
-    "@types/node": "22.10.7",
+    "@types/node": "26.6.6",
     "typescript": "5.7.3",
     "vitest": "3.0.5"
   }
