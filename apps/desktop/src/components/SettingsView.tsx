@@ -9,7 +9,7 @@ import {
   SpeechModel,
 } from '../ipc/bindings';
 import { formatBytesHuman } from '../utils/format';
-import { ErrorBanner, ErrorBannerModel } from './ErrorBanner';
+import { ErrorBanner, ErrorBannerModel, toErrorBannerModel } from './ErrorBanner';
 
 interface SettingsViewProps {
   locale: SupportedLocale;
@@ -75,12 +75,7 @@ export function SettingsView({
   };
 
   const errBanner: ErrorBannerModel | null = cmdError
-    ? {
-        code: cmdError.code,
-        message: cmdError.message,
-        redactedDetail: cmdError.detail,
-        actions: [{ label: 'Tutup', onClick: () => setCmdError(null) }],
-      }
+    ? toErrorBannerModel(cmdError, locale, [{ label: 'Tutup', onClick: () => setCmdError(null) }])
     : null;
 
   const speechState = settings?.speech_state;

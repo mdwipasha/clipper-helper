@@ -9,7 +9,7 @@ import {
   ErrorEventRow,
 } from '../ipc/bindings';
 import { copyTextToClipboard } from '../utils/format';
-import { ErrorBanner, ErrorBannerModel } from './ErrorBanner';
+import { ErrorBanner, ErrorBannerModel, toErrorBannerModel } from './ErrorBanner';
 
 interface DiagnosticsViewProps {
   locale: SupportedLocale;
@@ -112,12 +112,7 @@ export function DiagnosticsView({
   };
 
   const bannerModel: ErrorBannerModel | null = cmdError
-    ? {
-        code: cmdError.code,
-        message: cmdError.message,
-        redactedDetail: cmdError.detail,
-        actions: [{ label: 'Tutup', onClick: () => setCmdError(null) }],
-      }
+    ? toErrorBannerModel(cmdError, locale, [{ label: 'Tutup', onClick: () => setCmdError(null) }])
     : null;
 
   return (

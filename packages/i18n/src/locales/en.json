@@ -28,7 +28,9 @@
   "errorBanner": {
     "copyDetail": "Copy error detail",
     "copiedDetail": "Copied",
-    "openDiagnostics": "Open Diagnostics"
+    "openDiagnostics": "Open Diagnostics",
+    "technicalDetail": "Technical details",
+    "hideTechnicalDetail": "Hide technical details"
   },
   "crash": {
     "bannerText": "The app closed unexpectedly last time — Copy report",
@@ -108,47 +110,47 @@
     },
     "E_NET_OFFLINE": {
       "title": "No internet connection",
-      "body": "Check your internet connection and try again."
+      "body": "The app could not reach the server because your network is offline or unreachable. No local files were changed. Check your connection and click Retry."
     },
     "E_NET_TIMEOUT": {
       "title": "Connection timed out",
-      "body": "The request or download timed out. Please try again."
+      "body": "The request or download timed out before completing. The operation stopped safely. Check your connection stability and click Retry."
     },
     "E_DISK_LOW": {
       "title": "Low disk space",
-      "body": "Available disk space is running low. Free up space or choose another data folder."
+      "body": "Free disk space at your data folder is running low. Writing was paused to prevent corrupt files. Free up disk space or choose another data folder in Settings."
     },
     "E_DISK_FULL": {
       "title": "Insufficient disk space",
-      "body": "Not enough free disk space to complete this operation."
+      "body": "There is not enough free disk space to download or write output. No local files were overwritten. Free up space or click Choose another data location."
     },
     "E_COMPONENT_MISSING": {
       "title": "Component missing",
-      "body": "Required component files are missing or damaged (antivirus software may have quarantined them). Click Repair to re-download."
+      "body": "A required processing component is missing or damaged (antivirus software often removes or quarantines it). The app paused safely. Open Components and click Repair."
     },
     "E_MODEL_DOWNLOAD_FAILED": {
       "title": "Model download failed",
-      "body": "Failed to download or verify the speech model file. Please try again."
+      "body": "Failed to download or verify the speech model file. Any existing model remains intact. Click Retry to resume the download."
     },
     "E_VERIFY_FAILED": {
-      "title": "Verification failed",
-      "body": "Component or output failed integrity or capability verification checks."
+      "title": "Component verification rejected",
+      "body": "This component version was rejected because it failed integrity, capability, or license checks. Any previous working version remains active and the new files were quarantined. Click Repair to install an official build."
     },
     "E_MANIFEST_INVALID": {
       "title": "Manifest verification failed",
-      "body": "Component manifest signature or schema verification failed. Update may be tampered with or corrupted."
+      "body": "The official component list (manifest) failed security signature verification. The app rejected it and kept your existing components. Click Retry or update the app."
     },
     "E_MANIFEST_STALE": {
-      "title": "Manifest sequence rollback rejected",
-      "body": "The component manifest sequence is older than the last accepted sequence. Update rejected."
+      "title": "Outdated manifest rejected",
+      "body": "The server returned a component list older than the last accepted version. The app blocked it to prevent unsafe downgrades. Retry later or report this via Diagnostics."
     },
     "E_SERVER_UNAVAILABLE": {
       "title": "Server unavailable",
-      "body": "The component server returned an error response. Please try again later.",
-      "not_found": "File not found on server. Retry fetching components or report this issue.",
-      "auth": "Access denied by server. Check for app updates or try again later.",
-      "rate_limited": "Server rate limit reached. Wait a few minutes and try again.",
-      "server_error": "The server encountered a temporary error. Please try again shortly."
+      "body": "The component server returned an error response. Your local components were not changed. Please click Retry shortly.",
+      "not_found": "File not found on server. Your local components were not changed. Retry fetching components or report this issue.",
+      "auth": "Access denied by server. Your local components were not changed. Check for app updates or try again later.",
+      "rate_limited": "Server rate limit reached. Your local components were not changed. Wait a few minutes and click Retry.",
+      "server_error": "The update server encountered a temporary error. Your local components were not changed. Please click Retry shortly."
     },
     "E_ENCODER_UNAVAILABLE": {
       "title": "Video encoder unavailable",

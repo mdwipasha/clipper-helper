@@ -28,7 +28,9 @@
   "errorBanner": {
     "copyDetail": "Salin detail error",
     "copiedDetail": "Tersalin",
-    "openDiagnostics": "Buka Diagnostik"
+    "openDiagnostics": "Buka Diagnostik",
+    "technicalDetail": "Detail teknis",
+    "hideTechnicalDetail": "Sembunyikan detail teknis"
   },
   "crash": {
     "bannerText": "Aplikasi sebelumnya berhenti tiba-tiba — Salin laporan",
@@ -108,47 +110,47 @@
     },
     "E_NET_OFFLINE": {
       "title": "Koneksi terputus",
-      "body": "Periksa koneksi internet kamu dan coba lagi."
+      "body": "Aplikasi tidak dapat terhubung ke server karena jaringan terputus atau server belum terjangkau. Tidak ada file lokal yang diubah. Periksa koneksi internet kamu lalu klik Coba Lagi."
     },
     "E_NET_TIMEOUT": {
       "title": "Waktu koneksi habis",
-      "body": "Permintaan atau unduhan melebihi batas waktu. Silakan coba lagi."
+      "body": "Permintaan atau unduhan terhenti karena waktu koneksi habis. Proses dihentikan dengan aman tanpa merusak file. Periksa kestabilan internet lalu klik Coba Lagi."
     },
     "E_DISK_LOW": {
       "title": "Ruang penyimpanan hampir penuh",
-      "body": "Ruang disk tersisa menipis. Kosongkan ruang atau pilih lokasi data lain."
+      "body": "Ruang penyimpanan di lokasi data hampir habis. Aplikasi menghentikan penulisan sementara agar file tidak rusak. Kosongkan ruang disk atau pilih lokasi data lain di Pengaturan."
     },
     "E_DISK_FULL": {
       "title": "Ruang disk tidak mencukupi",
-      "body": "Ruang penyimpanan tidak cukup untuk menyelesaikan operasi ini."
+      "body": "Ruang penyimpanan tidak mencukupi untuk mengunduh atau menulis file. Tidak ada data yang tertimpa. Kosongkan ruang disk atau klik Pilih lokasi data lain."
     },
     "E_COMPONENT_MISSING": {
       "title": "Komponen tidak ditemukan",
-      "body": "File komponen hilang atau rusak (kemungkinan dihapus/dikarantina oleh antivirus). Klik Perbaiki untuk mengunduh ulang."
+      "body": "Komponen pemrosesan yang dibutuhkan tidak ditemukan atau rusak (sering kali dikarantina oleh antivirus). Aplikasi menahan proses ini agar aman. Klik Perbaiki di tab Komponen untuk mengunduh ulang."
     },
     "E_MODEL_DOWNLOAD_FAILED": {
       "title": "Unduhan model gagal",
-      "body": "Gagal mengunduh atau memverifikasi file model suara. Silakan coba lagi."
+      "body": "Gagal mengunduh atau memverifikasi file model suara. Model lama (jika ada) tetap dipertahankan. Silakan klik Coba Lagi untuk melanjutkan unduhan."
     },
     "E_VERIFY_FAILED": {
-      "title": "Verifikasi gagal",
-      "body": "Komponen atau hasil tidak lolos pemeriksaan integritas atau kapabilitas."
+      "title": "Verifikasi komponen ditolak",
+      "body": "Versi komponen ini ditolak karena tidak memenuhi syarat keamanan atau lisensi. Versi sebelumnya tetap dipakai dan file baru dikarantina. Klik Perbaiki untuk memasang versi resmi."
     },
     "E_MANIFEST_INVALID": {
-      "title": "Verifikasi manifest gagal",
-      "body": "Verifikasi tanda tangan digital atau skema manifest komponen gagal. Pembaruan mungkin telah diubah atau rusak."
+      "title": "Verifikasi daftar komponen gagal",
+      "body": "Daftar pembaruan resmi (manifest) tidak lolos pemeriksaan tanda tangan keamanan. Aplikasi menolaknya dan mempertahankan komponen yang ada. Klik Coba Lagi atau perbarui aplikasi."
     },
     "E_MANIFEST_STALE": {
-      "title": "Rollback manifest ditolak",
-      "body": "Urutan manifest komponen lebih lama daripada versi yang terakhir diterima. Pembaruan ditolak."
+      "title": "Pembaruan kedaluwarsa ditolak",
+      "body": "Server mengirim daftar pembaruan dengan urutan lebih lama daripada versi yang sudah diterima. Aplikasi memblokirnya untuk mencegah penurunan versi. Klik Coba Lagi nanti atau laporkan lewat Diagnostik."
     },
     "E_SERVER_UNAVAILABLE": {
       "title": "Server tidak tersedia",
-      "body": "Server komponen sedang bermasalah atau mengembalikan respons error. Coba lagi beberapa saat lagi.",
-      "not_found": "Berkas tidak ada di server. Coba muat ulang daftar komponen atau laporkan ke pengembang.",
-      "auth": "Akses ke berkas di server ditolak. Periksa pembaruan aplikasi atau coba lagi nanti.",
-      "rate_limited": "Terlalu banyak permintaan ke server. Tunggu beberapa menit lalu coba lagi.",
-      "server_error": "Server pembaruan sedang mengalami gangguan sementara. Silakan coba lagi beberapa saat lagi."
+      "body": "Server komponen sedang bermasalah atau mengembalikan respons error. Komponen lokal kamu tidak diubah. Coba Lagi beberapa saat lagi.",
+      "not_found": "Berkas tidak ada di server. Komponen lokal tidak diubah. Coba muat ulang daftar komponen atau laporkan ke pengembang.",
+      "auth": "Akses ke berkas di server ditolak. Komponen lokal tidak diubah. Periksa pembaruan aplikasi atau coba lagi nanti.",
+      "rate_limited": "Terlalu banyak permintaan ke server saat ini. Komponen lokal tidak diubah. Tunggu beberapa menit lalu klik Coba Lagi.",
+      "server_error": "Server pembaruan sedang mengalami gangguan sementara. Komponen lokal tidak diubah. Silakan klik Coba Lagi beberapa saat lagi."
     },
     "E_ENCODER_UNAVAILABLE": {
       "title": "Encoder video tidak tersedia",

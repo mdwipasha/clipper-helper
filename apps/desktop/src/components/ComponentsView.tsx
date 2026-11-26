@@ -12,7 +12,7 @@ import {
   events,
 } from '../ipc/bindings';
 import { formatBytesHuman, formatComponentVersion, formatEtaText } from '../utils/format';
-import { ErrorBanner, ErrorBannerModel } from './ErrorBanner';
+import { ErrorBanner, ErrorBannerModel, toErrorBannerModel } from './ErrorBanner';
 
 interface ComponentsViewProps {
   locale: SupportedLocale;
@@ -239,42 +239,27 @@ export function ComponentsView({
     manifestError?.code === 'E_NET_OFFLINE' ||
     manifestError?.code === 'E_NET_TIMEOUT';
 
-  const resolveFriendlyMessage = (err: AppCommandError): string => {
-    const translated = t(err.message_key, undefined, locale);
-    return translated === err.message_key ? err.message : translated;
-  };
-
   const criticalManifestError: ErrorBannerModel | null =
     manifestError &&
     manifestError.code !== 'E_NET_OFFLINE' &&
     manifestError.code !== 'E_NET_TIMEOUT'
-      ? {
-          code: manifestError.code,
-          message: resolveFriendlyMessage(manifestError),
-          redactedDetail: manifestError.detail,
-          actions: [
-            {
-              label: t('components.retry', undefined, locale),
-              variant: 'primary',
-              onClick: () => void handleFetchManifest(),
-            },
-          ],
-        }
+      ? toErrorBannerModel(manifestError, locale, [
+          {
+            label: t('components.retry', undefined, locale),
+            variant: 'primary',
+            onClick: () => void handleFetchManifest(),
+          },
+        ])
       : null;
 
   const activeErrorBanner: ErrorBannerModel | null =
     actionError && actionError.code !== 'E_DISK_FULL'
-      ? {
-          code: actionError.code,
-          message: resolveFriendlyMessage(actionError),
-          redactedDetail: actionError.detail,
-          actions: [
-            {
-              label: t('components.retry', undefined, locale),
-              onClick: () => setActionError(null),
-            },
-          ],
-        }
+      ? toErrorBannerModel(actionError, locale, [
+          {
+            label: t('components.retry', undefined, locale),
+            onClick: () => setActionError(null),
+          },
+        ])
       : null;
 
   return (
