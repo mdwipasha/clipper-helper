@@ -1,0 +1,8 @@
+[package]
+name = "harness-supervisor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clipper-helper-desktop = { package = "clipper-helper-desktop", path = "../.." }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time"] }

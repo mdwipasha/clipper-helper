@@ -11,6 +11,47 @@ Built for clippers who take part in clipping campaigns (Motionklip-style program
 Pre-implementation. This folder is the source of truth for product, architecture, data and security.
 When code and docs disagree, fix one of them **in the same PR**.
 
+## Getting started (Windows 10/11 x64)
+
+### Prerequisites
+- **Node.js**: v20+ LTS or v22+
+- **pnpm**: v9+ or v11+ (`npm install -g pnpm`)
+- **Rust**: stable MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`) with components `rustfmt`, `clippy` and Visual Studio C++ Build Tools
+- **WebView2**: pre-installed on Windows 10 (1803+) and Windows 11
+
+### Setup & Development
+```powershell
+# 1. Install workspace dependencies
+pnpm install
+
+# 2. Run the desktop app in development mode (launches Vite + Tauri 2 window)
+pnpm tauri dev
+
+# 3. Run all workspace TypeScript unit tests & security guard
+pnpm test
+
+# 4. Run Rust unit tests and clippy
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# 5. Run typecheck and linting
+pnpm run typecheck
+pnpm run lint
+```
+
+### Debug Dev Panel (Development Only)
+When running in development mode (`pnpm tauri dev`), the app renders an internal collapsible debug panel showcasing:
+- **SQLite Store & Workspace**: Displays current schema version (from `PRAGMA user_version`) and canonical workspace root.
+- **Sidecar Supervisor**: Interactive runner for `fake-sidecar` across test modes (`progress`, `sleep`, `exit-code`, `invalid-utf8`, `grandchild`, `flood`) showing live stdout, execution time, and Windows Job Object process tree termination.
+- **Security Invariant**: Dev commands and UI components are strictly gated behind `#[cfg(debug_assertions)]` and `import.meta.env.DEV`, excluded from production release builds, and enforced by `tools/security-guard.test.ts`.
+
+### Reporting Problems (Local Diagnostics)
+During beta/MVP, no telemetry or crash data is uploaded automatically over the network. To report an issue:
+1. Open the **Diagnostik** tab in the app (or click **Salin laporan** on the unexpected-exit banner if the app previously crashed).
+2. Type what you were doing in *"Apa yang sedang kamu lakukan?"* (optional) and verify the exact preview.
+3. Click **Salin laporan** (copies `≤ 100 KB` plain text/Markdown with a `CH-XXXX-XXXX` report ID) or **Simpan sebagai file .txt** (`≤ 1 MB`), and paste it to support.
+- **Privacy & redaction:** Windows usernames/profile paths, emails, JWT/Bearer tokens, secrets/API keys, URL query strings/fragments, IP addresses, machine GUIDs/serials, and license keys are scrubbed across rotating log files (`<DataRoot>/logs/`, max 7 days / 20 MB), `error_events` (max 30 days / 500 rows), crash records, and the exported report. Video/audio content, transcripts, and full URLs are never included.
+
 ## Read order
 
 | # | File | What it answers |

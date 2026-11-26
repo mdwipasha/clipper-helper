@@ -1,0 +1,189 @@
+import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+describe('Security Baseline Guard', () => {
+  const tauriConfPath = path.resolve(__dirname, '../apps/desktop/src-tauri/tauri.conf.json');
+  const capabilityPath = path.resolve(
+    __dirname,
+    '../apps/desktop/src-tauri/capabilities/default.json'
+  );
+
+  it('enforces strict CSP in tauri.conf.json', () => {
+    expect(fs.existsSync(tauriConfPath)).toBe(true);
+    const content = fs.readFileSync(tauriConfPath, 'utf8');
+    const conf = JSON.parse(content);
+
+    const csp = conf.app?.security?.csp;
+    expect(csp, 'CSP must be defined in app.security.csp').toBeDefined();
+    expect(typeof csp).toBe('string');
+
+    // default-src must be 'self'
+    expect(csp).toMatch(/default-src\s+['"]self['"]/);
+
+    // No unsafe-eval or unsafe-inline in script-src / default-src
+    expect(csp).not.toContain("'unsafe-eval'");
+    const scriptSrcMatch = csp.match(/script-src\s+([^;]+)/);
+    if (scriptSrcMatch) {
+      expect(scriptSrcMatch[1]).not.toContain("'unsafe-inline'");
+      expect(scriptSrcMatch[1]).not.toContain("'unsafe-eval'");
+    }
+
+    // connect-src: only 'self' and the two documented placeholders (*.supabase.co and *.r2.cloudflarestorage.com)
+    const connectSrcMatch = csp.match(/connect-src\s+([^;]+)/);
+    expect(connectSrcMatch, 'connect-src directive must be present').toBeTruthy();
+    const connectSources = connectSrcMatch![1]!.trim().split(/\s+/);
+    for (const source of connectSources) {
+      if (source.includes('*')) {
+        expect(['https://*.supabase.co', 'https://*.r2.cloudflarestorage.com']).toContain(source);
+      }
+    }
+
+    // frame-src must strictly be limited to https://clipper-bridge.vercel.app
+    const frameSrcMatch = csp.match(/frame-src\s+([^;]+)/);
+    expect(frameSrcMatch, 'frame-src directive must be present').toBeTruthy();
+    const frameSrcSources = frameSrcMatch![1]!.trim().split(/\s+/);
+    expect(frameSrcSources).toEqual(['https://clipper-bridge.vercel.app']);
+    expect(csp).not.toMatch(/frame-src[^;]*\*/);
+  });
+
+  it('asserts devtools are disabled in release configuration', () => {
+    const content = fs.readFileSync(tauriConfPath, 'utf8');
+    const conf = JSON.parse(content);
+
+    for (const win of conf.app?.windows ?? []) {
+      expect(win.devtools, 'devtools must not be explicitly enabled on windows').not.toBe(true);
+    }
+    expect(conf.build?.devtools, 'build.devtools must not be enabled').not.toBe(true);
+  });
+
+  it('asserts asset protocol scope is restricted strictly to the workspace directory', () => {
+    const content = fs.readFileSync(tauriConfPath, 'utf8');
+    const conf = JSON.parse(content);
+
+    const assetProtocol = conf.app?.security?.assetProtocol;
+    expect(assetProtocol, 'assetProtocol configuration must exist').toBeDefined();
+    expect(assetProtocol.enable).toBe(true);
+    expect(Array.isArray(assetProtocol.scope)).toBe(true);
+
+    for (const entry of assetProtocol.scope) {
+      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper(-Dev)?[/\\]/);
+      expect(entry).not.toContain('..');
+    }
+  });
+
+  it('enforces least-privilege capabilities and rejects broad fs/shell permissions', () => {
+    expect(fs.existsSync(capabilityPath)).toBe(true);
+    const content = fs.readFileSync(capabilityPath, 'utf8');
+    const cap = JSON.parse(content);
+
+    expect(cap.permissions, 'Permissions array must exist').toBeDefined();
+    expect(Array.isArray(cap.permissions)).toBe(true);
+
+    // Disallow dangerous broad permissions (fs:*, shell:*, dialog:default) and inspect scopes
+    for (const perm of cap.permissions) {
+      const permName = typeof perm === 'string' ? perm : perm.identifier;
+      expect(permName).not.toMatch(/^(fs|shell):/);
+      expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
+      expect(permName).not.toBe('dialog:default');
+      if (permName.startsWith('dialog:')) {
+        expect(['dialog:allow-open', 'dialog:allow-save']).toContain(permName);
+      }
+      if (permName === 'opener:allow-open-path') {
+        expect(typeof perm).toBe('object');
+        const allowed = (perm.allow ?? []).map((entry: { path?: string }) => entry.path);
+        expect(allowed).toEqual([
+          '$LOCALDATA/ClipperHelper/logs',
+          '$LOCALDATA/ClipperHelper-Dev/logs',
+        ]);
+      }
+      // Disallow dev commands in production default capabilities
+      expect(permName).not.toMatch(/dev_/);
+    }
+  });
+
+  it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {
+    // Check lib.rs has dev_commands gated with #[cfg(debug_assertions)]
+    const libRsPath = path.resolve(__dirname, '../apps/desktop/src-tauri/src/lib.rs');
+    expect(fs.existsSync(libRsPath)).toBe(true);
+    const libContent = fs.readFileSync(libRsPath, 'utf8');
+
+    // dev_commands module must be cfg(debug_assertions)
+    expect(libContent).toMatch(/#\[cfg\(debug_assertions\)\]\s+pub mod dev_commands;/);
+
+    // Production commands must appear in release builder without any dev_ commands
+    expect(libContent).toMatch(
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status[\s\S]*?commands::install_all_required_components[\s\S]*?commands::generate_diagnostics_report[\s\S]*?commands::open_logs_folder\s*,?\s*\]\)/
+    );
+    expect(libContent).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?dev_/);
+
+    // Check App.tsx gates DevPanel with import.meta.env.DEV
+    const appTsxPath = path.resolve(__dirname, '../apps/desktop/src/App.tsx');
+    expect(fs.existsSync(appTsxPath)).toBe(true);
+    const appContent = fs.readFileSync(appTsxPath, 'utf8');
+    expect(appContent).toContain('import.meta.env.DEV');
+    expect(appContent).toMatch(/import\.meta\.env\.DEV\s*&&\s*<DevPanel\s*\/>/);
+  });
+
+  it('asserts dev commands are absent from release binary if built', () => {
+    const releaseExePath = path.resolve(
+      __dirname,
+      '../apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe'
+    );
+    if (fs.existsSync(releaseExePath)) {
+      const buffer = fs.readFileSync(releaseExePath);
+      const str = buffer.toString('latin1');
+      expect(str.includes('dev_run_fake_sidecar')).toBe(false);
+      expect(str.includes('dev_get_system_info')).toBe(false);
+      expect(str.includes('dev_reset_workspace')).toBe(false);
+      expect(str.includes('dev_start_fixture_server')).toBe(false);
+      expect(str.includes('dev_fetch_manifest')).toBe(false);
+      expect(str.includes('dev_download_component')).toBe(false);
+      expect(str.includes('dev_install_component')).toBe(false);
+      expect(str.includes('dev_get_component_diagnostics')).toBe(false);
+      expect(str.includes('dev_rollback_component')).toBe(false);
+      expect(str.includes('dev_gc_component')).toBe(false);
+      expect(str.includes('dev_verify_component')).toBe(false);
+      expect(str.includes('dev_retry_quarantined_component')).toBe(false);
+      expect(str.includes('dev_repair_component')).toBe(false);
+      expect(str.includes('dev_reset_manifest_sequence_floor')).toBe(false);
+      expect(str.includes('dev_set_custom_ffmpeg')).toBe(false);
+      expect(str.includes('dev_clear_custom_ffmpeg')).toBe(false);
+      expect(str.includes('find_node_executable')).toBe(false);
+      expect(str.includes('CLIPPER_DEV_NODE_PATH')).toBe(false);
+      expect(str.includes('fnm_multishells')).toBe(false);
+      expect(str.includes('NVM_HOME')).toBe(false);
+      expect(str.includes('where.exe')).toBe(false);
+    }
+  });
+
+  it('asserts Node discovery (nvm/fnm/where.exe) exists strictly under cfg(debug_assertions)', () => {
+    const srcDir = path.resolve(__dirname, '../apps/desktop/src-tauri/src');
+    const rustFiles = fs.readdirSync(srcDir).filter((f) => f.endsWith('.rs'));
+
+    const devCmdsContent = fs.readFileSync(path.join(srcDir, 'dev_commands.rs'), 'utf8');
+    expect(devCmdsContent).toContain('#![cfg(debug_assertions)]');
+
+    for (const file of rustFiles) {
+      if (file === 'dev_commands.rs' || file === 'lib.rs') continue;
+      const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
+      expect(content).not.toMatch(
+        /find_node_executable|where\.exe|fnm_multishells|NVM_HOME|NVM_SYMLINK/
+      );
+    }
+  });
+
+  it('asserts no private keys or dev key files are tracked or committed in git', () => {
+    const trackedFiles = execSync('git ls-files', { encoding: 'utf8' })
+      .split('\n')
+      .map((f: string) => f.trim())
+      .filter(Boolean);
+
+    for (const file of trackedFiles) {
+      expect(file).not.toMatch(/\.dev-keys\//);
+      expect(file).not.toMatch(/\.(priv|priv\.hex|pem|key)$/i);
+      expect(file).not.toMatch(/id_ed25519/i);
+    }
+  });
+});

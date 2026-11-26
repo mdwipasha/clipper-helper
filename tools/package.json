@@ -1,0 +1,17 @@
+{
+  "name": "@clipper-helper/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "manifest-signer": "node src/manifest-signer.js",
+    "dev-server": "node src/dev-server.js --port 8080 --root dev-fixtures",
+    "fetch-pinned-components": "node src/fetch-pinned-components.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.7",
+    "typescript": "5.7.3",
+    "vitest": "3.0.5"
+  }
+}

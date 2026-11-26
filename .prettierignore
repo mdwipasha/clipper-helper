@@ -1,0 +1,11 @@
+dist
+target
+node_modules
+pnpm-lock.yaml
+spikes
+apps/bridge
+apps/desktop/src-tauri/gen
+apps/desktop/src-tauri/target
+docs
+*.md
+tools/dev-fixtures

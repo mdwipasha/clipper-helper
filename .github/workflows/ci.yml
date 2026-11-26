@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, 'feature/**', 'm1*']
+  pull_request:
+    branches: [main, master, 'feature/**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Security & License Audit (Report-Only)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.16.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create reports directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path audit-reports
+
+      - name: Run pnpm audit (report-only)
+        shell: cmd
+        run: |
+          pnpm audit > audit-reports\pnpm-audit.txt 2>&1 || exit 0
+
+      - name: Run license audit (report-only)
+        shell: cmd
+        run: |
+          pnpm licenses list > audit-reports\license-audit.txt 2>&1 || exit 0
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo audit (report-only)
+        shell: cmd
+        run: |
+          cargo audit --file apps\desktop\src-tauri\Cargo.lock > audit-reports\cargo-audit.txt 2>&1 || exit 0
+
+      - name: Upload Audit Reports Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-reports
+          path: audit-reports/
+
+  check:
+    name: Lint, Test & Build (Windows)
+    runs-on: windows-latest
+    env:
+      CLIPPER_MIN_MANIFEST_SEQUENCE: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.16.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Tauri version parity (tauri info)
+        shell: powershell
+        run: |
+          $info = pnpm --filter @clipper-helper/desktop tauri info
+          $cleanInfo = $info | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m', '' }
+          $infoText = $cleanInfo -join "`n"
+          Write-Host $infoText
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "tauri info exited with code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          if ($infoText -match '\(mismatch') {
+            Write-Error "Tauri package/crate version mismatch detected!"
+            exit 1
+          }
+          $outdatedTauri = $cleanInfo | Where-Object { $_ -match '^\s*-\s+(tauri\b|tauri-|@tauri-apps/)' -and $_ -match '\(outdated' }
+          if ($outdatedTauri) {
+            Write-Error "Outdated direct Tauri package/crate detected:`n$($outdatedTauri -join "`n")"
+            exit 1
+          }
+
+      - name: Check code formatting
+        run: pnpm run format
+
+      - name: Run ESLint
+        run: pnpm run lint
+
+      - name: Build workspace packages
+        run: pnpm run build
+
+      - name: TypeScript typecheck
+        run: pnpm run typecheck
+
+      - name: Run Vitest unit & security guard tests
+        run: pnpm run test
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all --check
+
+      - name: Rust Clippy
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build test binaries (fake-sidecar & harness-supervisor)
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p fake-sidecar -p harness-supervisor
+
+      - name: Rust Unit Tests (Debug)
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+
+      - name: Cache Pinned Real Binaries (by inventory SHA-256)
+        uses: actions/cache@v4
+        with:
+          path: tools/dev-fixtures/real
+          key: ${{ runner.os }}-pinned-components-${{ hashFiles('tools/src/fetch-pinned-components.js') }}
+
+      - name: Fetch & Verify Pinned Real Components
+        run: node tools/src/fetch-pinned-components.js --skip-models
+
+      - name: Real-Binary Capability Tests (SidecarSupervisor)
+        env:
+          CLIPPER_REQUIRE_REAL_COMPONENTS: '1'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test real_components_capabilities
+
+      - name: Rust Unit Tests (Release Profile)
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --release --all
+
+      - name: Check build-time manifest sequence floor
+        run: node tools/src/check-manifest-sequence.js
+
+      - name: Build Tauri Desktop App (Release, Unsigned)
+        run: pnpm --filter @clipper-helper/desktop tauri build --no-bundle
+
+      - name: Release Binary Smoke Test
+        shell: powershell
+        run: |
+          $binPath = "apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe"
+          if (!(Test-Path $binPath)) {
+            Write-Error "Release binary not found at $binPath"
+            exit 1
+          }
+          $item = Get-Item $binPath
+          Write-Host "Binary exists: $($item.FullName) ($($item.Length) bytes)"
+          if ($item.Length -lt 1000000) {
+            Write-Error "Binary size is unexpectedly small ($($item.Length) bytes)"
+            exit 1
+          }
+          $content = [System.IO.File]::ReadAllText($item.FullName, [System.Text.Encoding]::GetEncoding("ISO-8859-1"))
+          $devCmds = @("dev_run_fake_sidecar", "dev_get_system_info", "dev_reset_workspace", "dev_install_component", "dev_rollback_component", "dev_retry_quarantined_component", "dev_reset_manifest_sequence_floor", "dev_set_custom_ffmpeg", "find_node_executable", "CLIPPER_DEV_NODE_PATH", "fnm_multishells", "NVM_HOME", "where.exe")
+          foreach ($cmd in $devCmds) {
+            if ($content.Contains($cmd)) {
+              Write-Error "Security guard violation: dev command '$cmd' detected in release binary!"
+              exit 1
+            }
+          }
+          Write-Host "Release binary verified: strict isolation confirmed (zero dev commands present)."
+
+      - name: Upload Desktop Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clipper-helper-desktop-binary
+          path: apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe
+          if-no-files-found: error
