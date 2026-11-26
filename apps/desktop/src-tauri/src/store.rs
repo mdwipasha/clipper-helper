@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version. Bump this when adding new migrations.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 pub const ERROR_EVENT_RETENTION_DAYS: u64 = 30;
 pub const ERROR_EVENT_MAX_ROWS: usize = 500;
@@ -120,6 +120,24 @@ pub struct DeferredDeleteRow {
     pub created_at: u64,
     pub attempts: u32,
     pub last_error: Option<String>,
+}
+
+/// Persisted project summary record exposed to the Beranda / Editor workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, specta::Type)]
+pub struct ProjectRecord {
+    pub id: String,
+    pub title: String,
+    pub channel: String,
+    pub source_provider: String,
+    pub source_video_id: String,
+    pub source_url: String,
+    pub duration_seconds: u32,
+    pub live_status: Option<String>,
+    pub preview_mode: String,
+    pub suggested_start_seconds: Option<u32>,
+    pub status: String,
+    pub created_at: f64,
+    pub updated_at: f64,
 }
 
 fn unix_now_secs() -> u64 {
@@ -285,6 +303,16 @@ impl LocalStore {
                 })?;
             conn.pragma_update(None, "user_version", 3)?;
             tracing::info!("Database migrated to schema version 3");
+        }
+
+        if version < 4 {
+            conn.execute_batch(MIGRATION_V4)
+                .map_err(|e| StoreError::MigrationFailed {
+                    version: 4,
+                    detail: e.to_string(),
+                })?;
+            conn.pragma_update(None, "user_version", 4)?;
+            tracing::info!("Database migrated to schema version 4");
         }
 
         let final_version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -1170,6 +1198,180 @@ impl LocalStore {
     }
 }
 
+/// Repository for `projects` CRUD + confined workspace directory cleanup (`projects/<id>`).
+pub struct ProjectRepo<'a> {
+    store: &'a LocalStore,
+}
+
+impl<'a> ProjectRepo<'a> {
+    pub fn new(store: &'a LocalStore) -> Self {
+        Self { store }
+    }
+
+    fn validate_project_id(project_id: &str) -> Result<(), StoreError> {
+        if uuid::Uuid::parse_str(project_id).is_ok() {
+            return Ok(());
+        }
+        let valid_slug = !project_id.is_empty()
+            && project_id.len() <= 64
+            && project_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if valid_slug {
+            Ok(())
+        } else {
+            Err(StoreError::Internal(format!(
+                "Invalid project identifier '{}'",
+                project_id
+            )))
+        }
+    }
+
+    fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRecord> {
+        let dur: i64 = row.get(6)?;
+        let suggested: Option<i64> = row.get(9)?;
+        let created: i64 = row.get(11)?;
+        let updated: i64 = row.get(12)?;
+        Ok(ProjectRecord {
+            id: row.get(0)?,
+            title: row
+                .get::<_, Option<String>>(1)?
+                .unwrap_or_else(|| "Untitled Project".to_string()),
+            channel: row
+                .get::<_, Option<String>>(2)?
+                .unwrap_or_else(|| "Unknown Channel".to_string()),
+            source_provider: row
+                .get::<_, Option<String>>(3)?
+                .unwrap_or_else(|| "youtube".to_string()),
+            source_video_id: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            source_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            duration_seconds: dur.max(0).min(u32::MAX as i64) as u32,
+            live_status: row.get(7)?,
+            preview_mode: row
+                .get::<_, Option<String>>(8)?
+                .unwrap_or_else(|| "timecode_only".to_string()),
+            suggested_start_seconds: suggested.map(|s| s.max(0).min(u32::MAX as i64) as u32),
+            status: row
+                .get::<_, Option<String>>(10)?
+                .unwrap_or_else(|| "probed".to_string()),
+            created_at: created.max(0) as f64,
+            updated_at: updated.max(0) as f64,
+        })
+    }
+
+    /// Inserts a new `probed` project row on successful YouTube probe.
+    pub fn create_from_probe(
+        &self,
+        parsed: &crate::url_intake::ParsedYouTubeUrl,
+        info: &crate::probe::ProbeInfo,
+    ) -> Result<ProjectRecord, StoreError> {
+        let now = unix_now_secs();
+        let id = uuid::Uuid::new_v4().to_string();
+        let preview_mode_str = match info.preview_mode {
+            crate::probe::PreviewMode::Embed => "embed",
+            crate::probe::PreviewMode::TimecodeOnly => "timecode_only",
+        };
+        let sanitized_title =
+            crate::probe::sanitize_untrusted_text(&info.title, crate::probe::PROBE_MAX_TITLE_CHARS);
+        let sanitized_channel = crate::probe::sanitize_untrusted_text(
+            &info.channel,
+            crate::probe::PROBE_MAX_TITLE_CHARS,
+        );
+
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "INSERT INTO projects (
+                id, title, channel, source_provider, source_video_id, source_url, source_title,
+                duration_seconds, live_status, preview_mode, suggested_start_seconds, status,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'youtube', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'probed', ?11, ?12)",
+            params![
+                id,
+                sanitized_title,
+                sanitized_channel,
+                parsed.video_id,
+                parsed.canonical_url,
+                sanitized_title,
+                info.duration_seconds as i64,
+                info.live_status,
+                preview_mode_str,
+                parsed.suggested_start_seconds.map(|s| s as i64),
+                now as i64,
+                now as i64,
+            ],
+        )?;
+
+        Ok(ProjectRecord {
+            id,
+            title: sanitized_title,
+            channel: sanitized_channel,
+            source_provider: "youtube".to_string(),
+            source_video_id: parsed.video_id.clone(),
+            source_url: parsed.canonical_url.clone(),
+            duration_seconds: info.duration_seconds,
+            live_status: info.live_status.clone(),
+            preview_mode: preview_mode_str.to_string(),
+            suggested_start_seconds: parsed.suggested_start_seconds,
+            status: "probed".to_string(),
+            created_at: now as f64,
+            updated_at: now as f64,
+        })
+    }
+
+    /// Lists up to `limit` most recently updated projects.
+    pub fn list_recent(&self, limit: usize) -> Result<Vec<ProjectRecord>, StoreError> {
+        let clamped_limit = limit.clamp(1, 50) as i64;
+        let conn = self.store.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, channel, source_provider, source_video_id, source_url,
+                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
+                    status, created_at, updated_at
+             FROM projects
+             ORDER BY updated_at DESC, created_at DESC, rowid DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![clamped_limit], Self::map_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Fetches a single project by ID.
+    pub fn get(&self, project_id: &str) -> Result<Option<ProjectRecord>, StoreError> {
+        Self::validate_project_id(project_id)?;
+        let conn = self.store.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, channel, source_provider, source_video_id, source_url,
+                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
+                    status, created_at, updated_at
+             FROM projects
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(Some(rec)),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    /// Deletes a project record from SQLite and removes its confined `projects/<id>` directory
+    /// via `security::resolve_workspace_path_with_root`.
+    pub fn delete(&self, ws_root: &Path, project_id: &str) -> Result<bool, StoreError> {
+        Self::validate_project_id(project_id)?;
+        let rel_dir = format!("projects/{}", project_id);
+        let target_dir = crate::security::resolve_workspace_path_with_root(ws_root, &rel_dir)
+            .map_err(|e| StoreError::Internal(format!("Invalid project directory path: {}", e)))?;
+
+        if target_dir.exists() {
+            std::fs::remove_dir_all(&target_dir)?;
+        }
+
+        let conn = self.store.lock_conn()?;
+        let changed = conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
+        Ok(changed > 0)
+    }
+}
+
 /// Accepts only strict 11-character YouTube video IDs (`[A-Za-z0-9_-]{11}`); never URLs/query strings.
 pub fn sanitize_youtube_video_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -1342,6 +1544,17 @@ CREATE TABLE IF NOT EXISTS error_events (
 
 CREATE INDEX IF NOT EXISTS idx_error_events_ts ON error_events(ts DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_error_events_code ON error_events(code, ts DESC);
+";
+
+/// V4: Extend `projects` with M1.2 intake & probe metadata columns and recent-sort index.
+const MIGRATION_V4: &str = "
+ALTER TABLE projects ADD COLUMN channel TEXT;
+ALTER TABLE projects ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN live_status TEXT;
+ALTER TABLE projects ADD COLUMN preview_mode TEXT NOT NULL DEFAULT 'timecode_only';
+ALTER TABLE projects ADD COLUMN suggested_start_seconds INTEGER;
+
+CREATE INDEX IF NOT EXISTS idx_projects_recent ON projects(updated_at DESC, created_at DESC);
 ";
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -1903,7 +2116,7 @@ mod tests {
     fn test_error_events_redaction_filter_and_retention() {
         let (_dir, path) = temp_db();
         let store = LocalStore::open(&path).expect("open");
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
 
         let now = 1_800_000_000u64;
         // 1. Expired row (> 30 days old) gets pruned when recording a newer row
@@ -2013,11 +2226,105 @@ mod tests {
             .unwrap();
         }
         let store = LocalStore::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 3);
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
         assert_eq!(
             store.get_setting("preferred_encoder").unwrap().as_deref(),
             Some("h264_nvenc")
         );
         assert!(store.list_error_events(None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_v3_to_v4_forward_migration_preserves_existing_projects() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.execute_batch(MIGRATION_V3).unwrap();
+            conn.pragma_update(None, "user_version", 3).unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, title, source_provider, source_video_id, source_url, status, created_at, updated_at)
+                 VALUES ('legacy-proj-1', 'Legacy Video', 'youtube', 'dQw4w9WgXcQ', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'probed', 1000, 1000)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 4);
+        let repo = ProjectRepo::new(&store);
+        let legacy = repo.get("legacy-proj-1").unwrap().expect("legacy row");
+        assert_eq!(legacy.title, "Legacy Video");
+        assert_eq!(legacy.duration_seconds, 0);
+        assert_eq!(legacy.preview_mode, "timecode_only");
+    }
+
+    #[test]
+    fn test_project_repo_create_list_recent_get_and_delete_workspace_dir() {
+        let ws_dir = TempDir::new().unwrap();
+        let ws_root = ws_dir.path();
+        fs::create_dir_all(ws_root.join("projects")).unwrap();
+        let store = LocalStore::open(&ws_root.join("clipper.db")).unwrap();
+        let repo = ProjectRepo::new(&store);
+
+        let parsed =
+            crate::url_intake::parse_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=42").unwrap();
+
+        let mut created_ids = Vec::new();
+        for idx in 0..12 {
+            let info = crate::probe::ProbeInfo {
+                id: "dQw4w9WgXcQ".to_string(),
+                title: format!("Podcast Episode #{}", idx),
+                channel: "Creator Channel".to_string(),
+                duration_seconds: 600 + idx,
+                live_status: Some("not_live".to_string()),
+                availability: Some("public".to_string()),
+                playable_in_embed: idx % 2 == 0,
+                was_live: false,
+                is_live: false,
+                estimated_bytes_per_second: Some(125_000.0),
+                has_avc1_1080p: true,
+                preview_mode: if idx % 2 == 0 {
+                    crate::probe::PreviewMode::Embed
+                } else {
+                    crate::probe::PreviewMode::TimecodeOnly
+                },
+            };
+            let rec = repo.create_from_probe(&parsed, &info).unwrap();
+            assert_eq!(rec.status, "probed");
+            assert_eq!(rec.source_provider, "youtube");
+            assert_eq!(rec.source_video_id, "dQw4w9WgXcQ");
+            assert_eq!(rec.suggested_start_seconds, Some(42));
+            created_ids.push(rec.id);
+        }
+
+        // list_recent(10) returns newest 10 rows (latest created is index 11)
+        let recent = repo.list_recent(10).unwrap();
+        assert_eq!(recent.len(), 10);
+        assert_eq!(recent[0].title, "Podcast Episode #11");
+        assert_eq!(recent[9].title, "Podcast Episode #2");
+
+        // get returns specific record
+        let target_id = &created_ids[11];
+        let fetched = repo.get(target_id).unwrap().expect("project present");
+        assert_eq!(fetched.id, *target_id);
+        assert_eq!(fetched.preview_mode, "timecode_only");
+
+        // Reject unsafe traversal IDs on delete/get
+        assert!(repo.delete(ws_root, "../escape").is_err());
+
+        // Create workspace directory under projects/<id> and verify delete removes both dir & DB row
+        let proj_dir = ws_root.join("projects").join(target_id);
+        fs::create_dir_all(&proj_dir).unwrap();
+        fs::write(proj_dir.join("notes.tmp"), b"temp").unwrap();
+        assert!(proj_dir.exists());
+
+        assert!(repo.delete(ws_root, target_id).unwrap());
+        assert!(
+            !proj_dir.exists(),
+            "projects/<id> directory must be removed"
+        );
+        assert!(repo.get(target_id).unwrap().is_none());
+        assert!(!repo.delete(ws_root, target_id).unwrap());
     }
 }
