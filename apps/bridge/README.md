@@ -52,10 +52,24 @@ Provides an authentic HTTPS origin (`https://clipper-bridge.vercel.app`, moving 
    Confirm `Referrer-Policy: strict-origin-when-cross-origin`, `X-Content-Type-Options: nosniff`, `Permissions-Policy`, and no `'unsafe-inline'` or `localhost` in `Content-Security-Policy`.
 
 ### Separate Development / Local Preview Deployment
-- For local WebView/Vite testing (`http://localhost:1420` or `http://127.0.0.1:*`), serve `apps/bridge` locally (`pnpm --filter clipper-bridge start`) or deploy a separate dev Vercel project with `-A vercel.dev.json`:
+- Production `https://clipper-bridge.vercel.app` strictly rejects `http://localhost:1420` (`pnpm tauri dev`).
+- **Important (Vercel Preview SSO):** Because `apps/bridge` is linked to the `clipper-bridge` Vercel project, running `vercel --local-config vercel.dev.json` creates a **Preview** deployment on `clipper-bridge`. By default, Vercel Deployment Protection blocks Preview URLs with `HTTP 302 -> vercel.com/sso-api` and `X-Frame-Options: DENY`. Either:
+  1. Disable **Vercel Authentication** for Preview Deployments in Vercel (*Settings → Deployment Protection*), then run:
+     ```powershell
+     cd apps\bridge
+     vercel --local-config vercel.dev.json
+     ```
+  2. Or deploy to a separate dev Vercel project (`--prod`) using `vercel.dev.json`.
+- Then run `pnpm tauri dev` from the **same** PowerShell session with `$env:CLIPPER_BRIDGE_URL` set to that public dev URL:
   ```powershell
-  cd apps/bridge
-  vercel --local-config vercel.dev.json
+  $env:CLIPPER_BRIDGE_URL = "https://<your-public-dev-bridge>.vercel.app"
+  pnpm tauri dev
+  ```
+- **To test directly against production `https://clipper-bridge.vercel.app`**, build and launch the bundled app (which runs at `http://tauri.localhost`, matching `vercel.json` `frame-ancestors`):
+  ```powershell
+  $env:CLIPPER_MIN_MANIFEST_SEQUENCE = "1"
+  pnpm --filter @clipper-helper/desktop tauri build --no-bundle
+  .\apps\desktop\src-tauri\target\release\clipper-helper-desktop.exe
   ```
 - **Never** merge `vercel.dev.json` origins into production `vercel.json`.
 
