@@ -230,6 +230,14 @@
       "title": "Preview configuration error",
       "body": "Preview could not load due to a configuration mismatch. Switching to timecode-only mode."
     },
+    "E_RANGE_INVALID": {
+      "title": "Invalid time range",
+      "body": "Ensure start time precedes end time, duration is at least 1 second, and end stays within the video duration."
+    },
+    "E_RANGE_TOO_LONG": {
+      "title": "Selected clip exceeds limit",
+      "body": "Selected clip duration exceeds the maximum allowed range."
+    },
     "E_UNKNOWN": {
       "title": "An error occurred",
       "body": "An unexpected error occurred. Try again or open Diagnostics to copy a report."
@@ -242,5 +250,34 @@
     "unreachableTitle": "Data folder not found — reconnect drive or use default location",
     "unreachableBody": "The configured data location ({path}) is unreachable. Reconnect the drive and Retry, or switch to the default local location (your existing data is never deleted).",
     "useDefault": "Use default location"
+  },
+  "range": {
+    "title": "Select range",
+    "backHome": "Back to Home",
+    "playRange": "Play range",
+    "stopLoop": "Stop loop",
+    "play": "Play",
+    "pause": "Pause",
+    "currentTime": "Current position",
+    "startLabel": "Start time (HH:MM:SS)",
+    "endLabel": "End time (HH:MM:SS)",
+    "setStartHere": "Set start here",
+    "setEndHere": "Set end here",
+    "clipDurationLabel": "Selected clip duration",
+    "downloadEstimate": "Estimated download: ~{minutes} min (±{seconds} s)",
+    "timecodeOnlyBanner": "Pratinjau tidak tersedia untuk video ini",
+    "timecodeOnlyOwnerHint": "The video owner disabled external embedding. You can still set start and end timecodes manually.",
+    "timecodeOnlyTimeoutHint": "Preview bridge did not respond within 6 seconds. Switched to timecode-only mode.",
+    "openInBrowser": "Open video in browser",
+    "adNotice": "An ad is playing — range set buttons are temporarily disabled.",
+    "saveRange": "Save range",
+    "savedStatus": "Range saved to project.",
+    "nextDownload": "Continue to download",
+    "comingSoon": "Coming soon",
+    "errInvalidFormat": "Invalid timecode. Use HH:MM:SS, MM:SS, or seconds (e.g. 1:02:03, 62:03, 90.5).",
+    "errStartBeforeEnd": "Start time must be earlier than end time.",
+    "errExceedsDuration": "End time cannot exceed video duration ({duration}).",
+    "errMinDuration": "Clip duration must be at least 1 second.",
+    "errMaxDuration": "Maximum clip duration is {maxSeconds} seconds ({maxMinutes} minutes) for beta."
   }
 }

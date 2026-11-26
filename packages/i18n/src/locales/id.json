@@ -230,6 +230,14 @@
       "title": "Konfigurasi pratinjau bermasalah",
       "body": "Pratinjau tidak dapat dimuat karena kendala konfigurasi. Beralih otomatis ke mode timecode-only."
     },
+    "E_RANGE_INVALID": {
+      "title": "Rentang waktu tidak valid",
+      "body": "Pastikan waktu mulai lebih kecil dari waktu akhir, minimal 1 detik, dan tidak melebihi durasi video."
+    },
+    "E_RANGE_TOO_LONG": {
+      "title": "Rentang klip melebihi batas",
+      "body": "Durasi klip melebihi batas maksimum saat ini."
+    },
     "E_UNKNOWN": {
       "title": "Terjadi kesalahan",
       "body": "Terjadi kendala tak terduga. Silakan coba lagi atau buka tab Diagnostik untuk menyalin laporan."
@@ -242,5 +250,34 @@
     "unreachableTitle": "Folder data tidak ditemukan — sambungkan drive atau gunakan lokasi bawaan",
     "unreachableBody": "Lokasi data ({path}) tidak dapat dijangkau. Sambungkan kembali drive tersebut lalu Coba Lagi, atau gunakan lokasi bawaan di drive utama (data lama kamu tidak dihapus).",
     "useDefault": "Gunakan lokasi bawaan"
+  },
+  "range": {
+    "title": "Pilih rentang",
+    "backHome": "Kembali ke Beranda",
+    "playRange": "Putar rentang",
+    "stopLoop": "Hentikan loop",
+    "play": "Putar",
+    "pause": "Jeda",
+    "currentTime": "Posisi saat ini",
+    "startLabel": "Waktu mulai (HH:MM:SS)",
+    "endLabel": "Waktu akhir (HH:MM:SS)",
+    "setStartHere": "Set mulai di sini",
+    "setEndHere": "Set akhir di sini",
+    "clipDurationLabel": "Durasi klip terpilih",
+    "downloadEstimate": "Perkiraan unduh: ~{minutes} menit (±{seconds} dtk)",
+    "timecodeOnlyBanner": "Pratinjau tidak tersedia untuk video ini",
+    "timecodeOnlyOwnerHint": "Pemilik video membatasi pemutaran embed. Kamu tetap dapat mengatur timecode secara manual.",
+    "timecodeOnlyTimeoutHint": "Pemutar pratinjau tidak merespons dalam 6 detik. Beralih ke mode timecode-only.",
+    "openInBrowser": "Buka video di browser",
+    "adNotice": "Iklan sedang diputar — tombol penetapan rentang dinonaktifkan sementara.",
+    "saveRange": "Simpan rentang",
+    "savedStatus": "Rentang tersimpan ke proyek.",
+    "nextDownload": "Lanjut ke unduh",
+    "comingSoon": "Segera hadir",
+    "errInvalidFormat": "Format waktu tidak valid. Gunakan HH:MM:SS, MM:SS, atau detik (contoh: 1:02:03, 62:03, 90.5).",
+    "errStartBeforeEnd": "Waktu mulai harus lebih awal daripada waktu akhir.",
+    "errExceedsDuration": "Waktu akhir tidak boleh melebihi durasi video ({duration}).",
+    "errMinDuration": "Durasi klip minimal 1 detik.",
+    "errMaxDuration": "Durasi klip maksimal {maxSeconds} detik ({maxMinutes} menit) untuk versi beta."
   }
 }

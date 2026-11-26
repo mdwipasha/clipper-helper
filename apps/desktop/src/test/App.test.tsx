@@ -33,6 +33,16 @@ vi.mock('../ipc/bindings', async () => {
       getSettingsOverview: vi.fn(),
       fetchComponentsManifest: vi.fn(),
       listRecentProjects: vi.fn().mockResolvedValue({ status: 'ok', data: [] }),
+      getPreviewConfig: vi.fn().mockResolvedValue({
+        bridge_url: 'https://clipper-bridge.vercel.app',
+        bridge_protocol_version: 1,
+        control_video_id: 'WufkeDaJisQ',
+        ready_timeout_ms: 6000,
+        max_range_seconds: 300,
+        download_prior_rt_factor: 1.66,
+        download_prior_startup_seconds: 10,
+        can_force_timecode_only: false,
+      }),
     },
   };
 });

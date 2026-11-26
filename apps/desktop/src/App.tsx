@@ -5,6 +5,7 @@ import { DevPanel } from './components/DevPanel';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { ErrorBanner } from './components/ErrorBanner';
 import { HomeView, NavTab } from './components/HomeView';
+import { RangePickerView } from './components/RangePickerView';
 import { SettingsView } from './components/SettingsView';
 import {
   installGlobalWebViewErrorHandlers,
@@ -15,13 +16,28 @@ import {
   commands,
   ComponentsOverview,
   CrashRecoveryStatus,
+  PreviewConfigResponse,
+  ProjectRecord,
   SettingsOverview,
   WorkspaceStatus,
 } from './ipc/bindings';
 import { copyTextToClipboard, formatComponentVersion } from './utils/format';
 
+const DEFAULT_PREVIEW_CONFIG: PreviewConfigResponse = {
+  bridge_url: 'https://clipper-bridge.vercel.app',
+  bridge_protocol_version: 1,
+  control_video_id: 'WufkeDaJisQ',
+  ready_timeout_ms: 6000,
+  max_range_seconds: 300,
+  download_prior_rt_factor: 1.66,
+  download_prior_startup_seconds: 10,
+  can_force_timecode_only: false,
+};
+
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
+  const [selectedProject, setSelectedProject] = useState<ProjectRecord | null>(null);
+  const [previewConfig, setPreviewConfig] = useState<PreviewConfigResponse>(DEFAULT_PREVIEW_CONFIG);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [wsStatus, setWsStatus] = useState<WorkspaceStatus | null>(null);
   const [overview, setOverview] = useState<ComponentsOverview | null>(null);
@@ -50,12 +66,14 @@ export function App() {
       setCrashStatus(crash);
 
       if (ws.is_initialized) {
-        const [ovRes, setRes] = await Promise.all([
+        const [ovRes, setRes, prevCfg] = await Promise.all([
           commands.getComponentsOverview(null),
           commands.getSettingsOverview(),
+          commands.getPreviewConfig().catch(() => DEFAULT_PREVIEW_CONFIG),
         ]);
         if (ovRes.status === 'ok') setOverview(ovRes.data);
         if (setRes.status === 'ok') setSettings(setRes.data);
+        if (prevCfg) setPreviewConfig(prevCfg);
         // Best-effort non-blocking manifest check on startup (falls back cleanly to neutral offline state)
         const manifestRes = await commands.fetchComponentsManifest(null);
         if (manifestRes.status === 'ok') {
@@ -133,7 +151,12 @@ export function App() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => {
+                    setActiveTab(item.id);
+                    if (item.id === 'home') {
+                      setSelectedProject(null);
+                    }
+                  }}
                   className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
                     active
                       ? 'bg-indigo-600 text-white shadow-sm'
@@ -262,12 +285,23 @@ export function App() {
         )}
 
         <WebViewErrorBoundary locale={locale} onOpenDiagnostics={() => setActiveTab('diagnostics')}>
-          {activeTab === 'home' && (
+          {activeTab === 'home' && !selectedProject && (
             <HomeView
               locale={locale}
               overview={overview}
               settings={settings}
               onNavigate={setActiveTab}
+              onOpenProject={(proj) => setSelectedProject(proj)}
+            />
+          )}
+          {activeTab === 'home' && selectedProject && (
+            <RangePickerView
+              locale={locale}
+              project={selectedProject}
+              previewConfig={previewConfig}
+              onBackHome={() => setSelectedProject(null)}
+              onOpenDiagnostics={() => setActiveTab('diagnostics')}
+              onProjectUpdated={(updated) => setSelectedProject(updated)}
             />
           )}
           {activeTab === 'components' && (
