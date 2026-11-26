@@ -157,9 +157,9 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_NET_TIMEOUT` | Request/download timed out | yes | Retry |
 | `E_MANIFEST_INVALID` | Manifest verification failed (bad signature, unknown kid, malformed JSON, schema mismatch) | no | Contact support · Retry · Update app |
 | `E_MANIFEST_STALE` | Manifest sequence is older than last accepted or build floor (rollback attack prevention) | no | Check update channel · Retry |
-| `E_YT_URL_INVALID` | Not a supported YouTube video URL | no | Fix link |
-| `E_YT_UNAVAILABLE` | Video unavailable on YouTube. Carries a `reason` enum (`members_only` \| `age_restricted` \| `region_blocked` \| `private` \| `deleted` \| `unknown`) to choose the exact Indonesian message per PRD FR-SRC-2 | no | Try another video / local file |
-| `E_YT_LIVE_NOT_ENDED` | Stream still live or premiere not started (VOD not ready) | yes | Try again after the stream ends |
+| `E_YT_URL_INVALID` | Not a supported single YouTube video URL (`err.E_YT_URL_INVALID.{body,collection,too_long,host}`) | no | Fix link |
+| `E_YT_UNAVAILABLE` | Video unavailable on YouTube. Carries `reason` mapped to distinct Indonesian keys `err.E_YT_UNAVAILABLE.<reason>` (`members_only` \| `age_restricted` \| `region_blocked` \| `private` \| `deleted` \| `unknown`) | no | Try another video / local file |
+| `E_YT_LIVE_NOT_ENDED` | Stream live/upcoming/processing (`err.E_YT_LIVE_NOT_ENDED.{ongoing_live,premiere_not_started,post_live}`) | yes | Try again after the stream ends |
 | `E_YT_BOT_CHECK` | "Sign in to confirm you're not a bot" anti-bot challenge | no (not immediately) | Wait a few minutes · Change network/VPN · (Not fixed by updating downloader) |
 | `E_YT_RATE_LIMITED` | Platform rate limit / HTTP 403 or 429 (after silent re-probe retry fails) | yes | Wait a few minutes · Retry |
 | `E_YT_EXTRACT_FAILED` | Downloader can't read the video (unknown classification falls here; raw text in redacted logs only) | yes | **Update downloader** · Retry · Use local file |
@@ -178,7 +178,7 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_REEXPORT_CAP` | Too many re-exports of this clip today | no | Try tomorrow / contact support |
 | `E_ACCOUNT_SUSPENDED` | Account suspended | no | Contact support |
 | `E_APP_OUTDATED` | App below minimum version | yes | Update now |
-| `E_SERVER_UNAVAILABLE` | Backend down/maintenance | yes | Retry later |
+| `E_SERVER_UNAVAILABLE` | Backend/CDN returned HTTP ≥ 400 (`err.E_SERVER_UNAVAILABLE.{not_found,auth,rate_limited,server_error,body}`) | yes | Retry later |
 | `E_TICKET_INVALID` | Ticket failed verification (clock/tamper) | yes | Retry · Update app |
 | `E_PAYMENT_PENDING` / `E_PAYMENT_FAILED` / `E_PAYMENT_EXPIRED` | Checkout states | varies | Continue payment / Try again |
 | `E_TEMPLATE_INVALID` | Template/schema validation failed | no | Fix template |
