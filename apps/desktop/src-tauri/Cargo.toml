@@ -35,7 +35,7 @@ dunce = "=1.0.5"
 rusqlite = { version = "=0.33.0", features = ["bundled"] }
 tokio = { version = "=1.54.1", features = ["rt", "process", "io-util", "sync", "time", "macros"] }
 tokio-util = { version = "=0.7.20", features = ["codec"] }
-ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std", "fast"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "fast"] }
 hex = "=0.4.3"
 sha2 = "=0.10.8"
 reqwest = { version = "=0.12.12", default-features = false, features = ["rustls-tls", "stream"] }
