@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version. Bump this when adding new migrations.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 pub const ERROR_EVENT_RETENTION_DAYS: u64 = 30;
 pub const ERROR_EVENT_MAX_ROWS: usize = 500;
@@ -313,6 +313,16 @@ impl LocalStore {
                 })?;
             conn.pragma_update(None, "user_version", 4)?;
             tracing::info!("Database migrated to schema version 4");
+        }
+
+        if version < 5 {
+            conn.execute_batch(MIGRATION_V5)
+                .map_err(|e| StoreError::MigrationFailed {
+                    version: 5,
+                    detail: e.to_string(),
+                })?;
+            conn.pragma_update(None, "user_version", 5)?;
+            tracing::info!("Database migrated to schema version 5");
         }
 
         let final_version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -1259,7 +1269,8 @@ impl<'a> ProjectRepo<'a> {
         })
     }
 
-    /// Inserts a new `probed` project row on successful YouTube probe.
+    /// Inserts a new `probed` project row on successful YouTube probe, or updates the existing
+    /// row for the same `(source_provider, source_video_id)` without creating duplicates.
     pub fn create_from_probe(
         &self,
         parsed: &crate::url_intake::ParsedYouTubeUrl,
@@ -1284,7 +1295,19 @@ impl<'a> ProjectRepo<'a> {
                 id, title, channel, source_provider, source_video_id, source_url, source_title,
                 duration_seconds, live_status, preview_mode, suggested_start_seconds, status,
                 created_at, updated_at
-             ) VALUES (?1, ?2, ?3, 'youtube', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'probed', ?11, ?12)",
+             ) VALUES (?1, ?2, ?3, 'youtube', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'probed', ?11, ?12)
+             ON CONFLICT(source_provider, source_video_id)
+             WHERE source_provider IS NOT NULL AND source_video_id IS NOT NULL
+             DO UPDATE SET
+                title = excluded.title,
+                channel = excluded.channel,
+                source_url = excluded.source_url,
+                source_title = excluded.source_title,
+                duration_seconds = excluded.duration_seconds,
+                live_status = excluded.live_status,
+                preview_mode = excluded.preview_mode,
+                suggested_start_seconds = excluded.suggested_start_seconds,
+                updated_at = excluded.updated_at",
             params![
                 id,
                 sanitized_title,
@@ -1301,21 +1324,21 @@ impl<'a> ProjectRepo<'a> {
             ],
         )?;
 
-        Ok(ProjectRecord {
-            id,
-            title: sanitized_title,
-            channel: sanitized_channel,
-            source_provider: "youtube".to_string(),
-            source_video_id: parsed.video_id.clone(),
-            source_url: parsed.canonical_url.clone(),
-            duration_seconds: info.duration_seconds,
-            live_status: info.live_status.clone(),
-            preview_mode: preview_mode_str.to_string(),
-            suggested_start_seconds: parsed.suggested_start_seconds,
-            status: "probed".to_string(),
-            created_at: now as f64,
-            updated_at: now as f64,
-        })
+        let mut stmt = conn.prepare(
+            "SELECT id, title, channel, source_provider, source_video_id, source_url,
+                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
+                    status, created_at, updated_at
+             FROM projects
+             WHERE source_provider = 'youtube' AND source_video_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![parsed.video_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(rec),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Err(StoreError::Internal(
+                "Upserted project could not be read back".to_string(),
+            )),
+        }
     }
 
     /// Lists up to `limit` most recently updated projects.
@@ -1555,6 +1578,28 @@ ALTER TABLE projects ADD COLUMN preview_mode TEXT NOT NULL DEFAULT 'timecode_onl
 ALTER TABLE projects ADD COLUMN suggested_start_seconds INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_projects_recent ON projects(updated_at DESC, created_at DESC);
+";
+
+/// V5: Collapse any existing duplicate `(source_provider, source_video_id)` project rows
+/// (retaining the most recently updated entry) and enforce one project per provider + video_id.
+const MIGRATION_V5: &str = "
+DELETE FROM projects
+WHERE source_provider IS NOT NULL
+  AND source_video_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM projects p2
+    WHERE p2.source_provider = projects.source_provider
+      AND p2.source_video_id = projects.source_video_id
+      AND (
+        p2.updated_at > projects.updated_at
+        OR (p2.updated_at = projects.updated_at AND p2.created_at > projects.created_at)
+        OR (p2.updated_at = projects.updated_at AND p2.created_at = projects.created_at AND p2.rowid > projects.rowid)
+      )
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_provider_video
+  ON projects(source_provider, source_video_id)
+  WHERE source_provider IS NOT NULL AND source_video_id IS NOT NULL;
 ";
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -2251,12 +2296,72 @@ mod tests {
             .unwrap();
         }
         let store = LocalStore::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
         let repo = ProjectRepo::new(&store);
         let legacy = repo.get("legacy-proj-1").unwrap().expect("legacy row");
         assert_eq!(legacy.title, "Legacy Video");
         assert_eq!(legacy.duration_seconds, 0);
         assert_eq!(legacy.preview_mode, "timecode_only");
+    }
+
+    #[test]
+    fn test_v4_to_v5_deduplicates_and_reprobe_upserts_same_video() {
+        let (_dir, path) = temp_db();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATION_V1).unwrap();
+            conn.execute_batch(MIGRATION_V2).unwrap();
+            conn.execute_batch(MIGRATION_V3).unwrap();
+            conn.execute_batch(MIGRATION_V4).unwrap();
+            conn.pragma_update(None, "user_version", 4).unwrap();
+
+            conn.execute(
+                "INSERT INTO projects (id, title, channel, source_provider, source_video_id, source_url, duration_seconds, status, created_at, updated_at)
+                 VALUES ('dup-old', 'Old Title', 'Ch', 'youtube', 'dQw4w9WgXcQ', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', 100, 'probed', 1000, 1000)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, title, channel, source_provider, source_video_id, source_url, duration_seconds, status, created_at, updated_at)
+                 VALUES ('dup-new', 'Newer Title', 'Ch', 'youtube', 'dQw4w9WgXcQ', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', 200, 'probed', 1000, 2000)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+
+        let repo = ProjectRepo::new(&store);
+        let recent = repo.list_recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, "dup-new");
+        assert_eq!(recent[0].title, "Newer Title");
+
+        // Re-probing the same video updates existing row rather than inserting a duplicate
+        let parsed =
+            crate::url_intake::parse_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=75").unwrap();
+        let updated_info = crate::probe::ProbeInfo {
+            id: "dQw4w9WgXcQ".to_string(),
+            title: "Refreshed Title After Re-Probe".to_string(),
+            channel: "Updated Channel".to_string(),
+            duration_seconds: 325,
+            live_status: Some("not_live".to_string()),
+            availability: Some("public".to_string()),
+            playable_in_embed: true,
+            was_live: false,
+            is_live: false,
+            estimated_bytes_per_second: Some(150_000.0),
+            has_avc1_1080p: true,
+            preview_mode: crate::probe::PreviewMode::Embed,
+        };
+        let upserted = repo.create_from_probe(&parsed, &updated_info).unwrap();
+        assert_eq!(upserted.id, "dup-new");
+        assert_eq!(upserted.title, "Refreshed Title After Re-Probe");
+        assert_eq!(upserted.duration_seconds, 325);
+        assert_eq!(upserted.suggested_start_seconds, Some(75));
+        assert!(upserted.updated_at >= 2000.0);
+        assert_eq!(repo.list_recent(10).unwrap().len(), 1);
     }
 
     #[test]
@@ -2267,13 +2372,14 @@ mod tests {
         let store = LocalStore::open(&ws_root.join("clipper.db")).unwrap();
         let repo = ProjectRepo::new(&store);
 
-        let parsed =
-            crate::url_intake::parse_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=42").unwrap();
-
         let mut created_ids = Vec::new();
         for idx in 0..12 {
+            let vid = format!("dQw4w9W{:04}", idx);
+            let parsed =
+                crate::url_intake::parse_youtube_url(&format!("https://youtu.be/{}?t=42", vid))
+                    .unwrap();
             let info = crate::probe::ProbeInfo {
-                id: "dQw4w9WgXcQ".to_string(),
+                id: vid.clone(),
                 title: format!("Podcast Episode #{}", idx),
                 channel: "Creator Channel".to_string(),
                 duration_seconds: 600 + idx,
@@ -2293,7 +2399,7 @@ mod tests {
             let rec = repo.create_from_probe(&parsed, &info).unwrap();
             assert_eq!(rec.status, "probed");
             assert_eq!(rec.source_provider, "youtube");
-            assert_eq!(rec.source_video_id, "dQw4w9WgXcQ");
+            assert_eq!(rec.source_video_id, vid);
             assert_eq!(rec.suggested_start_seconds, Some(42));
             created_ids.push(rec.id);
         }
