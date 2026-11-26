@@ -447,7 +447,7 @@ pub fn dev_start_fixture_server() -> Result<DevFixtureServerStatus, String> {
     let node_bin = find_node_executable().map_err(|e| format!("Node resolution failed: {}", e))?;
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let root_dir = manifest_dir.join("../../../tools/dev-fixtures/real");
+    let root_dir = manifest_dir.join("../../../tools/dev-fixtures");
     let script_path = manifest_dir.join("../../../tools/src/dev-server.js");
 
     // If dev-fixtures does not exist or missing manifest, generate them using resolved node binary

@@ -263,7 +263,9 @@ fn record_error(store: &LocalStore, code: &str, stage: &str, detail: &str, stder
 fn resolve_manifest_urls(override_url: Option<&str>) -> ManifestUrlConfig {
     #[cfg(debug_assertions)]
     let url = {
-        let mut resolved = DEFAULT_PRODUCTION_MANIFEST_URL.to_string();
+        // In debug builds, default to the local dev fixture server's real manifest.
+        // Override with CLIPPER_MANIFEST_URL env var or the UI text field.
+        let mut resolved = "http://127.0.0.1:8080/real/manifest.json".to_string();
         if let Ok(env_url) = std::env::var("CLIPPER_MANIFEST_URL") {
             let trimmed = env_url.trim();
             if !trimmed.is_empty() {

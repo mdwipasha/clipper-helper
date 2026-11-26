@@ -122,9 +122,21 @@ export function ComponentsView({
         setStatusMessage(
           `Selesai: ${res.data.installed_count} komponen dipasang, ${res.data.skipped_count} sudah mutakhir.`
         );
+        const failed = res.data.outcomes.find((o) => !o.ok);
+        if (failed) {
+          const code = failed.error_code ?? 'E_VERIFY_FAILED';
+          setActionError({
+            code,
+            message_key: `err.${code}.body`,
+            message: `${failed.component}: ${failed.message}`,
+            detail: `${failed.component} (${failed.version}): ${failed.message}`,
+            disk_bounds: null,
+          });
+        }
         await onRefreshOverview(overrideUrl.trim() || null);
       } else {
         setActionError(res.error);
+        await onRefreshOverview(overrideUrl.trim() || null);
       }
     } finally {
       setBusy(false);
@@ -249,7 +261,10 @@ export function ComponentsView({
     actionError && actionError.code !== 'E_DISK_FULL'
       ? {
           code: actionError.code,
-          message: actionError.message,
+          message:
+            actionError.code === 'E_NET_OFFLINE' || actionError.code === 'E_NET_TIMEOUT'
+              ? t(actionError.message_key, undefined, locale)
+              : actionError.message,
           redactedDetail: actionError.detail,
           actions: [
             {
@@ -322,9 +337,7 @@ export function ComponentsView({
             <div className="font-semibold text-slate-100">
               {t('components.offlineTitle', undefined, locale)}
             </div>
-            <div className="text-slate-300">
-              {manifestError?.message ?? t('components.offlineBody', undefined, locale)}
-            </div>
+            <div className="text-slate-300">{t('components.offlineBody', undefined, locale)}</div>
           </div>
           <button
             type="button"
