@@ -52,7 +52,8 @@ pub fn init_logging() {
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .events(tauri_specta::collect_events![
-            commands::ComponentInstallProgressEvent
+            commands::ComponentInstallProgressEvent,
+            commands::ProbeProgressEvent
         ])
         .commands(tauri_specta::collect_commands![
             commands::get_app_info,
@@ -74,6 +75,10 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_webview_error,
             commands::generate_diagnostics_report,
             commands::save_diagnostics_report_file,
+            commands::probe_youtube_url,
+            commands::cancel_youtube_probe,
+            commands::list_recent_projects,
+            commands::delete_project,
             commands::open_logs_folder,
             dev_commands::dev_get_system_info,
             dev_commands::dev_reset_workspace,
@@ -113,7 +118,8 @@ pub fn export_typescript_bindings() -> Result<(), String> {
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .events(tauri_specta::collect_events![
-            commands::ComponentInstallProgressEvent
+            commands::ComponentInstallProgressEvent,
+            commands::ProbeProgressEvent
         ])
         .commands(tauri_specta::collect_commands![
             commands::get_app_info,
@@ -135,6 +141,10 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_webview_error,
             commands::generate_diagnostics_report,
             commands::save_diagnostics_report_file,
+            commands::probe_youtube_url,
+            commands::cancel_youtube_probe,
+            commands::list_recent_projects,
+            commands::delete_project,
             commands::open_logs_folder,
         ])
 }
@@ -283,6 +293,7 @@ pub fn run() {
             app.manage(in_use_registry);
             app.manage(commands::ManifestCacheState::default());
             app.manage(commands::WebViewErrorRateLimiter::default());
+            app.manage(commands::ProbeCancelRegistry::default());
 
             if let Err(err) = initialize_workspace_into_app(app.handle()) {
                 tracing::error!("Workspace initialization failed: {}", err);

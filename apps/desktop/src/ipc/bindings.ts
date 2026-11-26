@@ -257,6 +257,55 @@ export const commands = {
     }
   },
   /**
+   * Validates and probes a pasted YouTube single-video URL via supervised `yt-dlp` + `qjs`,
+   * records any failure in local `error_events` (redacted), and inserts a `probed` project
+   * record into SQLite on success.
+   */
+  async probeYoutubeUrl(
+    rawUrl: string,
+    requestId: string
+  ): Promise<Result<ProbeProjectResponse, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('probe_youtube_url', { rawUrl, requestId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Cancels an active YouTube probe identified by `request_id`.
+   */
+  async cancelYoutubeProbe(requestId: string): Promise<Result<boolean, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('cancel_youtube_probe', { requestId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists the 10 most recent projects from SQLite `projects`.
+   */
+  async listRecentProjects(): Promise<Result<ProjectRecord[], AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('list_recent_projects') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
+   */
+  async deleteProject(projectId: string): Promise<Result<boolean, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('delete_project', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Opens the workspace `logs/` directory in Windows Explorer via `tauri-plugin-opener`.
    */
   async openLogsFolder(): Promise<Result<null, AppCommandError>> {
@@ -518,8 +567,10 @@ export const commands = {
 
 export const events = __makeEvents__<{
   componentInstallProgressEvent: ComponentInstallProgressEvent;
+  probeProgressEvent: ProbeProgressEvent;
 }>({
   componentInstallProgressEvent: 'component-install-progress-event',
+  probeProgressEvent: 'probe-progress-event',
 });
 
 /** user-defined constants **/
@@ -825,6 +876,61 @@ export type ManifestOverview = {
   components: ManifestComponentItem[];
 };
 export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean };
+export type PreviewMode = 'embed' | 'timecode_only';
+/**
+ * Typed video metadata extracted from `yt-dlp -J`. Never includes format URLs.
+ */
+export type ProbeInfo = {
+  id: string;
+  title: string;
+  channel: string;
+  duration_seconds: number;
+  live_status: string | null;
+  availability: string | null;
+  playable_in_embed: boolean;
+  was_live: boolean;
+  is_live: boolean;
+  estimated_bytes_per_second: number | null;
+  has_avc1_1080p: boolean;
+  preview_mode: PreviewMode;
+};
+/**
+ * Typed progress event emitted for `generate` / `probe` operations (`<= 4/s`, 2 s heartbeat).
+ */
+export type ProbeProgressEvent = {
+  request_id: string;
+  operation: string;
+  stage: string;
+  indeterminate: boolean;
+  elapsed_ms: number;
+  heartbeat: boolean;
+};
+/**
+ * Safe metadata + persisted project record returned to the UI upon successful YouTube probe.
+ */
+export type ProbeProjectResponse = {
+  probe_info: ProbeInfo;
+  project: ProjectRecord;
+  suggested_start_seconds: number | null;
+};
+/**
+ * Persisted project summary record exposed to the Beranda / Editor workspace.
+ */
+export type ProjectRecord = {
+  id: string;
+  title: string;
+  channel: string;
+  source_provider: string;
+  source_video_id: string;
+  source_url: string;
+  duration_seconds: number;
+  live_status: string | null;
+  preview_mode: string;
+  suggested_start_seconds: number | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+};
 export type SaveReportOutcome = {
   saved_path_redacted: string;
   bytes_written: number;

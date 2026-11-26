@@ -40,12 +40,36 @@
   },
   "home": {
     "title": "Home",
-    "subtitle": "Beta fast-path shell: install required components and share redacted diagnostics reports when issues occur.",
+    "subtitle": "Paste a YouTube video link to inspect metadata before selecting clip ranges.",
     "componentsReady": "Core components are ready.",
     "componentsMissing": "Some required components are not installed yet.",
     "goComponents": "Manage Components",
     "goDiagnostics": "Open Diagnostics",
-    "goSettings": "Model & Encoder Settings"
+    "goSettings": "Model & Encoder Settings",
+    "urlLabel": "YouTube Video Link",
+    "urlPlaceholder": "https://www.youtube.com/watch?v=...",
+    "checkLinkButton": "Check link",
+    "checkingButton": "Checking link…",
+    "cancelProbe": "Cancel",
+    "elapsedSeconds": "Checking video… {seconds} s",
+    "probeCancelled": "Link check cancelled.",
+    "resultHeading": "Video Ready",
+    "channelLabel": "Channel",
+    "durationLabel": "Duration",
+    "statusLabel": "Status",
+    "statusVod": "VOD Video",
+    "statusRecordedLive": "Recorded livestream",
+    "previewModeLabel": "Preview",
+    "previewAvailable": "Preview: available",
+    "previewTimecodeOnly": "Preview: timecode only",
+    "suggestedStartLabel": "Suggested start: {time}",
+    "videoIdLabel": "Video ID",
+    "nextButton": "Next",
+    "comingSoonHint": "Coming soon",
+    "recentTitle": "Recent projects",
+    "recentEmpty": "No projects yet. Paste a YouTube link above and click Check link.",
+    "deleteProject": "Delete",
+    "retryButton": "Retry"
   },
   "components": {
     "title": "Components Manager",
@@ -160,9 +184,41 @@
       "title": "Render failed",
       "body": "FFmpeg encountered an error during rendering."
     },
+    "E_YT_URL_INVALID": {
+      "title": "Invalid YouTube link",
+      "body": "Enter a valid single YouTube video link (playlists and channel pages are not supported).",
+      "collection": "Playlists, channels, handles, and search links are not supported. Paste a single YouTube video link.",
+      "too_long": "Link exceeds the 2048-character limit. Check the pasted URL.",
+      "host": "Unsupported domain. Use a valid youtube.com or youtu.be link."
+    },
+    "E_YT_UNAVAILABLE": {
+      "title": "YouTube video unavailable",
+      "body": "This video is not available for download right now.",
+      "members_only": "This video is members-only content and cannot be downloaded without channel membership.",
+      "age_restricted": "This video is age-restricted and requires signed-in authentication, which this app does not perform.",
+      "region_blocked": "This video is unavailable in your network region/country.",
+      "private": "This video is private or restricted by the uploader.",
+      "deleted": "This video has been removed or is no longer available on YouTube.",
+      "unknown": "This video is unavailable or cannot be accessed publicly."
+    },
+    "E_YT_LIVE_NOT_ENDED": {
+      "title": "Livestream has not ended",
+      "body": "This livestream or premiere has not finished yet. Wait until the VOD finishes processing and retry.",
+      "ongoing_live": "This livestream is still ongoing. Wait until the broadcast ends before clipping.",
+      "premiere_not_started": "This premiere video has not started or finished yet. Wait until it ends and retry.",
+      "post_live": "This livestream just ended and YouTube is still processing the recording. Try again in a few minutes."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Anti-bot verification detected",
-      "body": "YouTube is requesting a bot check. Wait a few minutes or switch networks/VPN."
+      "body": "YouTube requested an anti-bot check on this network. Wait a few minutes or switch networks/VPN and retry."
+    },
+    "E_YT_RATE_LIMITED": {
+      "title": "YouTube rate limit reached",
+      "body": "YouTube temporarily rate-limited requests (HTTP 429/403). Wait a few minutes and click Retry."
+    },
+    "E_YT_EXTRACT_FAILED": {
+      "title": "Could not extract video info",
+      "body": "Could not extract metadata from this YouTube video. Try again later or open Diagnostics to copy a report."
     },
     "E_PREVIEW_CONFIG": {
       "title": "Preview configuration error",
