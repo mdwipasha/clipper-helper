@@ -535,9 +535,10 @@ fn get_cached_manifest_entry(
         .find(|c| c.component == component && version.map(|v| v == c.version).unwrap_or(true))
         .cloned()
         .ok_or_else(|| {
+            let ver_display = version.unwrap_or("(latest)");
             let msg = format!(
-                "Komponen '{}' versi {:?} tidak tersedia di manifest.",
-                component, version
+                "Komponen '{}' versi {} tidak tersedia di manifest.",
+                component, ver_display
             );
             record_error(store, "E_COMPONENT_MISSING", "manifest_lookup", &msg, "");
             AppCommandError::simple("E_COMPONENT_MISSING", msg.clone(), msg)
