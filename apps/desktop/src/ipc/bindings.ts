@@ -135,6 +135,18 @@ export const commands = {
     }
   },
   /**
+   * Clears a missing/unreachable `bootstrap.json` DataRoot override (never deleting user data)
+   * and initializes the workspace at the default local folder.
+   */
+  async useDefaultDataRoot(): Promise<Result<WorkspaceStatus, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('use_default_data_root') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Returns current settings, speech-model state, passive encoder chain status, and hardware summary.
    */
   async getSettingsOverview(): Promise<Result<SettingsOverview, AppCommandError>> {
@@ -866,6 +878,8 @@ export type WorkspaceStatus = {
   root: string | null;
   error_code: string | null;
   error_message: string | null;
+  configured_root_unreachable: boolean;
+  unreachable_root_redacted: string | null;
 };
 
 /** tauri-specta globals **/

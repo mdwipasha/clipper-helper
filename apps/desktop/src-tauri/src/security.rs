@@ -50,6 +50,11 @@ pub enum SecurityError {
     ComponentNotAllowlisted(String),
     #[error("Failed to resolve workspace root: {0}")]
     RootResolutionFailed(String),
+    #[error("Configured data root is unreachable ({target_redacted}): {reason}")]
+    ConfiguredDataRootUnreachable {
+        target_redacted: String,
+        reason: String,
+    },
 }
 
 impl SecurityError {
@@ -433,6 +438,43 @@ impl DataRoot {
         Ok(())
     }
 
+    pub fn resolve_active_with_default_root(default_root: &Path) -> Result<Self, SecurityError> {
+        if let Some(target) = Self::read_bootstrap(default_root)? {
+            match Self::validate(&target) {
+                Ok(mut dr) => {
+                    dr.is_default = false;
+                    return Ok(dr);
+                }
+                Err(e) => {
+                    return Err(SecurityError::ConfiguredDataRootUnreachable {
+                        target_redacted: redact_sensitive_text(&target.to_string_lossy()),
+                        reason: redact_sensitive_text(&e.to_string()),
+                    });
+                }
+            }
+        }
+
+        let is_od = is_onedrive_path(default_root);
+        Ok(Self {
+            path: default_root.to_path_buf(),
+            is_default: true,
+            is_onedrive: is_od,
+        })
+    }
+
+    /// Safely clears/removes `bootstrap.json` from `default_root` so the app falls back to
+    /// the default local workspace root without deleting any user data.
+    pub fn reset_bootstrap_to_default_at(default_root: &Path) -> Result<bool, SecurityError> {
+        let bootstrap_path = default_root.join("bootstrap.json");
+        if !bootstrap_path.exists() {
+            return Ok(false);
+        }
+        std::fs::remove_file(&bootstrap_path).map_err(|e| {
+            SecurityError::RootResolutionFailed(format!("Failed to clear bootstrap.json: {}", e))
+        })?;
+        Ok(true)
+    }
+
     pub fn resolve_active() -> Result<Self, SecurityError> {
         #[cfg(any(debug_assertions, test))]
         {
@@ -450,18 +492,12 @@ impl DataRoot {
         }
 
         let default_root = get_default_workspace_root()?;
-        if let Some(target) = Self::read_bootstrap(&default_root)? {
-            let mut dr = Self::validate(&target)?;
-            dr.is_default = false;
-            return Ok(dr);
-        }
+        Self::resolve_active_with_default_root(&default_root)
+    }
 
-        let is_od = is_onedrive_path(&default_root);
-        Ok(Self {
-            path: default_root,
-            is_default: true,
-            is_onedrive: is_od,
-        })
+    pub fn reset_bootstrap_to_default() -> Result<bool, SecurityError> {
+        let default_root = get_default_workspace_root()?;
+        Self::reset_bootstrap_to_default_at(&default_root)
     }
 
     pub fn check_free_space(&self, required_bytes: u64) -> Result<(), SecurityError> {
@@ -1746,6 +1782,45 @@ mod tests {
         // Read bootstrap back
         let read_back = DataRoot::read_bootstrap(&default_root).unwrap();
         assert_eq!(read_back, Some(custom_root.clone()));
+
+        let _ = fs::remove_dir_all(&test_base);
+    }
+
+    #[test]
+    fn test_missing_bootstrap_drive_returns_unreachable_and_resets_safely() {
+        let test_base =
+            std::env::temp_dir().join(format!("test_bootstrap_unreachable_{}", std::process::id()));
+        let default_root = test_base.join("default");
+        let _ = fs::remove_dir_all(&test_base);
+        fs::create_dir_all(&default_root).unwrap();
+
+        // Simulate existing local user data in default root that must NOT be deleted on reset.
+        let sentinel = default_root.join("keep_my_data.txt");
+        fs::write(&sentinel, b"important user data").unwrap();
+
+        // Point bootstrap.json to an absent drive or invalid non-existent drive letter (Z:\)
+        let absent = PathBuf::from(r"Q:\MissingClipperDrive\ClipperHelper");
+        DataRoot::write_bootstrap(&default_root, &absent).unwrap();
+
+        let err = DataRoot::resolve_active_with_default_root(&default_root)
+            .expect_err("absent drive must return ConfiguredDataRootUnreachable");
+        match err {
+            SecurityError::ConfiguredDataRootUnreachable {
+                target_redacted, ..
+            } => {
+                assert!(target_redacted.contains("MissingClipperDrive"));
+            }
+            other => panic!("Expected ConfiguredDataRootUnreachable, got {:?}", other),
+        }
+
+        // Recovery clears bootstrap.json cleanly without touching any user data files.
+        assert!(DataRoot::reset_bootstrap_to_default_at(&default_root).unwrap());
+        assert_eq!(DataRoot::read_bootstrap(&default_root).unwrap(), None);
+        assert!(sentinel.exists(), "existing user data must never be deleted");
+
+        let resolved = DataRoot::resolve_active_with_default_root(&default_root).unwrap();
+        assert!(resolved.is_default);
+        assert_eq!(resolved.path, default_root);
 
         let _ = fs::remove_dir_all(&test_base);
     }

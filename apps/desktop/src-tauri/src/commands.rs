@@ -100,7 +100,13 @@ pub struct WorkspaceStatus {
     pub root: Option<String>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub configured_root_unreachable: bool,
+    pub unreachable_root_redacted: Option<String>,
 }
+
+/// Thread-safe holder for mutable workspace initialization status (updated when recovering DataRoot).
+#[derive(Debug)]
+pub struct WorkspaceStatusState(pub Mutex<WorkspaceStatus>);
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct ManifestUrlConfig {
@@ -407,16 +413,42 @@ pub fn get_app_info() -> AppInfo {
 #[tauri::command]
 #[specta::specta]
 pub fn get_workspace_status(app: tauri::AppHandle) -> WorkspaceStatus {
-    if let Some(status) = app.try_state::<WorkspaceStatus>() {
-        (*status).clone()
-    } else {
-        WorkspaceStatus {
-            is_initialized: false,
-            root: None,
-            error_code: Some("E_APP_INIT_FAILED".to_string()),
-            error_message: Some("Workspace status uninitialized".to_string()),
+    if let Some(status_state) = app.try_state::<WorkspaceStatusState>() {
+        if let Ok(guard) = status_state.0.lock() {
+            return guard.clone();
         }
     }
+    WorkspaceStatus {
+        is_initialized: false,
+        root: None,
+        error_code: Some("E_APP_INIT_FAILED".to_string()),
+        error_message: Some("Workspace status uninitialized".to_string()),
+        configured_root_unreachable: false,
+        unreachable_root_redacted: None,
+    }
+}
+
+/// Clears a missing/unreachable `bootstrap.json` DataRoot override (never deleting user data)
+/// and initializes the workspace at the default local folder.
+#[tauri::command]
+#[specta::specta]
+pub fn use_default_data_root(app: tauri::AppHandle) -> Result<WorkspaceStatus, AppCommandError> {
+    security::DataRoot::reset_bootstrap_to_default().map_err(|e| {
+        AppCommandError::simple(
+            e.error_code(),
+            e.to_string(),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+
+    let status = crate::initialize_workspace_into_app(&app).map_err(|e| {
+        AppCommandError::simple(
+            e.error_code(),
+            e.to_string(),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+    Ok(status)
 }
 
 /// Returns current component statuses, manifest cache, disk check, and speech-model target.

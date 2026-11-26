@@ -165,5 +165,10 @@
   },
   "warning": {
     "custom_ffmpeg": "Warning: Custom FFmpeg override is active. SHA-256 integrity checks are bypassed for FFmpeg only."
+  },
+  "dataroot": {
+    "unreachableTitle": "Data folder not found — reconnect drive or use default location",
+    "unreachableBody": "The configured data location ({path}) is unreachable. Reconnect the drive and Retry, or switch to the default local location (your existing data is never deleted).",
+    "useDefault": "Use default location"
   }
 }

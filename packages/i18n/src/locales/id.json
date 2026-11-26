@@ -165,5 +165,10 @@
   },
   "warning": {
     "custom_ffmpeg": "Peringatan: FFmpeg kustom sedang aktif. Validasi integritas SHA-256 dinonaktifkan khusus untuk FFmpeg."
+  },
+  "dataroot": {
+    "unreachableTitle": "Folder data tidak ditemukan — sambungkan drive atau gunakan lokasi bawaan",
+    "unreachableBody": "Lokasi data ({path}) tidak dapat dijangkau. Sambungkan kembali drive tersebut lalu Coba Lagi, atau gunakan lokasi bawaan di drive utama (data lama kamu tidak dihapus).",
+    "useDefault": "Gunakan lokasi bawaan"
   }
 }

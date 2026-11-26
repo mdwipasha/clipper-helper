@@ -15,7 +15,7 @@ use specta::Type;
 use tauri::{Emitter, Manager};
 
 use crate::capabilities::{CapabilityReportView, CapabilityStatus};
-use crate::commands::WorkspaceStatus;
+use crate::commands::WorkspaceStatusState;
 use crate::installer::{
     self, GcOutcome, InUseRegistry, VerifyRepairOutcome, DEFAULT_KEEP_PREVIOUS_VERSIONS,
 };
@@ -187,7 +187,8 @@ fn find_fake_sidecar_binary() -> Result<PathBuf, String> {
 #[specta::specta]
 pub fn dev_get_system_info(app: tauri::AppHandle) -> Result<DevSystemInfo, String> {
     let ws_status = app
-        .try_state::<WorkspaceStatus>()
+        .try_state::<WorkspaceStatusState>()
+        .and_then(|s| s.0.lock().ok().map(|g| g.clone()))
         .ok_or_else(|| "Workspace status not available".to_string())?;
 
     if !ws_status.is_initialized {
