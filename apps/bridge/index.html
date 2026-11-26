@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <!-- Ensure strict-origin-when-cross-origin is sent to YouTube to prevent Error 153 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="clipper-bridge-protocol" content="1">
+  <meta name="clipper-bridge-version" content="1.0.0">
   <title>ClipperHelper Embed Bridge</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -14,19 +15,16 @@
       <div id="player"></div>
     </div>
 
-    <!-- Loading Overlay -->
     <div id="loading-overlay">
       <div class="spinner"></div>
-      <div class="loading-text">Memuat pemutar video...</div>
+      <div class="loading-text">Memuat pemutar video…</div>
     </div>
 
-    <!-- Error Overlay -->
     <div id="error-overlay" class="hidden">
       <div class="error-card">
-        <div class="error-icon">⚠️</div>
-        <div class="error-title" id="error-title">Video Tidak Dapat Diputar</div>
-        <div class="error-message" id="error-message">Pemilik video tidak mengizinkan pemutaran di aplikasi luar (embed dibatasi).</div>
-        <div class="error-code" id="error-code">ERROR_EMBED_RESTRICTED</div>
+        <div class="error-title" id="error-title">Pratinjau tidak tersedia</div>
+        <div class="error-message" id="error-message">Pemutaran embed dibatasi atau tidak dapat dimuat.</div>
+        <div class="error-code" id="error-code"></div>
       </div>
     </div>
   </div>
