@@ -119,9 +119,8 @@ pub fn map_reqwest_error(e: reqwest::Error) -> NetError {
         } else {
             NetError::Offline(e.to_string())
         }
-    } else if e.is_connect() {
-        NetError::Offline(e.to_string())
     } else {
+        // Connect, DNS, TLS, and transfer stream failures map cleanly to Offline.
         NetError::Offline(e.to_string())
     }
 }

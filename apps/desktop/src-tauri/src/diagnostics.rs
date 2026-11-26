@@ -327,7 +327,14 @@ fn build_ringkasan_section(
         let mut s = String::new();
         let _ = writeln!(s, "# ClipperHelper Diagnostics Report");
         let _ = writeln!(s, "## RINGKASAN");
-        let _ = writeln!(s, "{}", cap_list_line(&format!("- ID Laporan: {}", report_id), MAX_REPORT_LIST_LINE_CHARS));
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- ID Laporan: {}", report_id),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
         let _ = writeln!(
             s,
             "{}",
@@ -455,11 +462,7 @@ fn build_ringkasan_section(
         if top_errors.is_empty() {
             let _ = writeln!(s, "- 5 Error Terakhir: tidak ada");
         } else {
-            let _ = writeln!(
-                s,
-                "- 5 Error Terakhir ({} kejadian):",
-                recent_errors.len()
-            );
+            let _ = writeln!(s, "- 5 Error Terakhir ({} kejadian):", recent_errors.len());
             for err in top_errors {
                 let ts_label = if err.count > 1 {
                     format!(
@@ -667,7 +670,11 @@ fn assemble_detail_section(
                 cap_list_line(
                     &format!(
                         "- {}.{} [{}]: median {:.3} unit/s ({} sampel)",
-                        m.stage, m.variant, m.device_profile, m.median_rate_units_per_sec, m.sample_count
+                        m.stage,
+                        m.variant,
+                        m.device_profile,
+                        m.median_rate_units_per_sec,
+                        m.sample_count
                     ),
                     MAX_REPORT_LIST_LINE_CHARS
                 )
@@ -902,7 +909,7 @@ pub fn build_diagnostics_report(
         .list_error_events(None, 200)
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.stage != "app_lifecycle")
+        .filter(|e| e.stage != "app_lifecycle" && e.code != "app_lifecycle/unclean_shutdown")
         .collect();
     let all_errors_clip: Vec<ErrorEventRow> = all_errors_file.iter().take(30).cloned().collect();
     let safe_settings = store.export_safe_settings_allowlist().unwrap_or_default();
@@ -1253,10 +1260,14 @@ mod tests {
 
         // ISO-8601 UTC + GiB labels + WebView2/locale/timezone + grouped count + reason ref
         assert!(bundle.preview_text.contains("16.00 GiB"));
-        assert!(bundle.preview_text.contains("WebView2: 130.0.2849.46 | Locale: id-ID | Zona Waktu: UTC+07:00"));
+        assert!(bundle
+            .preview_text
+            .contains("WebView2: 130.0.2849.46 | Locale: id-ID | Zona Waktu: UTC+07:00"));
         assert!(bundle.preview_text.contains("×3 ("));
         assert!(bundle.preview_text.contains("[R1]"));
-        assert!(bundle.preview_text.contains("### Referensi Alasan Panjang / Berulang"));
+        assert!(bundle
+            .preview_text
+            .contains("### Referensi Alasan Panjang / Berulang"));
 
         // Every list line respects <= 300 chars cap
         for line in bundle.preview_text.lines() {

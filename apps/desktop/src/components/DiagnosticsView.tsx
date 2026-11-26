@@ -266,7 +266,13 @@ export function DiagnosticsView({
       <div className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-white">
-            {t('diagnostics.recentErrorsTitle', undefined, locale)} ({errors.length})
+            {t('diagnostics.recentErrorsTitle', undefined, locale)} (
+            {
+              errors.filter(
+                (e) => e.stage !== 'app_lifecycle' && e.code !== 'app_lifecycle/unclean_shutdown'
+              ).length
+            }
+            )
           </h3>
           <div className="flex items-center gap-2 text-xs">
             <label htmlFor="error-code-filter" className="text-slate-400">

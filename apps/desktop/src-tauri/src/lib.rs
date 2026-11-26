@@ -180,6 +180,7 @@ pub fn initialize_workspace_into_app(
     }
     let app_ver = env!("CARGO_PKG_VERSION").to_string();
     crash::install_panic_hook(logs_dir.clone(), app_ver.clone());
+    crash::install_shutdown_handlers(logs_dir.clone(), app_ver.clone());
     let crash_status = crash::begin_session(&logs_dir, &app_ver);
     if crash_status.unclean_shutdown_detected {
         tracing::warn!("Previous session ended unexpectedly; crash recovery banner active");
@@ -189,10 +190,10 @@ pub fn initialize_workspace_into_app(
             .map(|c| c.message_redacted.clone())
             .unwrap_or_else(|| "Unclean shutdown detected at startup".to_string());
         let _ = store.record_error_event(store::NewErrorEvent {
-            code: "E_UNKNOWN".to_string(),
+            code: "app_lifecycle/unclean_shutdown".to_string(),
             stage: "app_lifecycle".to_string(),
             job_id: None,
-            message_key: "err.E_UNKNOWN.body".to_string(),
+            message_key: "crash.bannerText".to_string(),
             detail: detail_msg,
             stderr_tail: crash_status
                 .crash_record
@@ -302,7 +303,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 use tauri::Manager;
                 if let Some(ws) = app_handle.try_state::<WorkspaceState>() {
                     crash::mark_clean_shutdown(&ws.root.join("logs"));
