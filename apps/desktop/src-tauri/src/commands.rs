@@ -71,6 +71,21 @@ impl AppCommandError {
         }
     }
 
+    fn with_message_key(
+        code: &str,
+        message_key: impl Into<String>,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.to_string(),
+            message_key: message_key.into(),
+            message: message.into(),
+            detail: detail.into(),
+            disk_bounds: None,
+        }
+    }
+
     fn disk_full(message: String, available_bytes: u64, required_bytes: u64) -> Self {
         Self {
             code: "E_DISK_FULL".to_string(),
@@ -254,11 +269,29 @@ fn error_key_for_code(code: &str) -> String {
 }
 
 fn record_error(store: &LocalStore, code: &str, stage: &str, detail: &str, stderr_tail: &str) {
+    record_error_with_key(
+        store,
+        code,
+        &error_key_for_code(code),
+        stage,
+        detail,
+        stderr_tail,
+    );
+}
+
+fn record_error_with_key(
+    store: &LocalStore,
+    code: &str,
+    message_key: &str,
+    stage: &str,
+    detail: &str,
+    stderr_tail: &str,
+) {
     let _ = store.record_error_event(NewErrorEvent {
         code: code.to_string(),
         stage: stage.to_string(),
         job_id: None,
-        message_key: error_key_for_code(code),
+        message_key: message_key.to_string(),
         detail: detail.to_string(),
         stderr_tail: stderr_tail.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -534,9 +567,10 @@ pub async fn fetch_components_manifest(
     .await
     .map_err(|e| {
         let code = e.error_code();
+        let msg_key = e.message_key();
         let redacted = security::redact_sensitive_text(&e.to_string());
-        record_error(&store, code, "manifest_fetch", &redacted, "");
-        AppCommandError::simple(code, redacted.clone(), redacted)
+        record_error_with_key(&store, code, msg_key, "manifest_fetch", &redacted, "");
+        AppCommandError::with_message_key(code, msg_key, redacted.clone(), redacted)
     })?;
 
     if let Some(cache) = app.try_state::<ManifestCacheState>() {
@@ -730,9 +764,15 @@ async fn install_single_entry(
         }
         Err(err) => {
             let code = err.error_code();
+            let msg_key = err.message_key();
             let redacted = security::redact_sensitive_text(&err.to_string());
-            record_error(store, code, "install", &redacted, "");
-            Err(AppCommandError::simple(code, redacted.clone(), redacted))
+            record_error_with_key(store, code, &msg_key, "install", &redacted, "");
+            Err(AppCommandError::with_message_key(
+                code,
+                msg_key,
+                redacted.clone(),
+                redacted,
+            ))
         }
     }
 }
@@ -914,9 +954,10 @@ pub async fn repair_component(
 
     res.map_err(|e| {
         let code = e.error_code();
+        let msg_key = e.message_key();
         let redacted = security::redact_sensitive_text(&e.to_string());
-        record_error(&store, code, "repair", &redacted, "");
-        AppCommandError::simple(code, redacted.clone(), redacted)
+        record_error_with_key(&store, code, &msg_key, "repair", &redacted, "");
+        AppCommandError::with_message_key(code, msg_key, redacted.clone(), redacted)
     })
 }
 

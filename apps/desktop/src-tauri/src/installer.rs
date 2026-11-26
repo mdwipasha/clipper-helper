@@ -162,6 +162,13 @@ impl InstallError {
             _ => "E_VERIFY_FAILED",
         }
     }
+
+    pub fn message_key(&self) -> String {
+        match self {
+            InstallError::Network(ne) => ne.message_key().to_string(),
+            _ => format!("err.{}.body", self.error_code()),
+        }
+    }
 }
 
 /// Process-local reference tracker for component versions currently executing in child sidecars.

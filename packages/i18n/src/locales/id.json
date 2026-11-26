@@ -142,6 +142,14 @@
       "title": "Rollback manifest ditolak",
       "body": "Urutan manifest komponen lebih lama daripada versi yang terakhir diterima. Pembaruan ditolak."
     },
+    "E_SERVER_UNAVAILABLE": {
+      "title": "Server tidak tersedia",
+      "body": "Server komponen sedang bermasalah atau mengembalikan respons error. Coba lagi beberapa saat lagi.",
+      "not_found": "Berkas tidak ada di server. Coba muat ulang daftar komponen atau laporkan ke pengembang.",
+      "auth": "Akses ke berkas di server ditolak. Periksa pembaruan aplikasi atau coba lagi nanti.",
+      "rate_limited": "Terlalu banyak permintaan ke server. Tunggu beberapa menit lalu coba lagi.",
+      "server_error": "Server pembaruan sedang mengalami gangguan sementara. Silakan coba lagi beberapa saat lagi."
+    },
     "E_ENCODER_UNAVAILABLE": {
       "title": "Encoder video tidak tersedia",
       "body": "Semua encoder (NVENC, QSV, AMF, Media Foundation) gagal. Perbarui driver GPU atau pasang Media Feature Pack untuk Windows N/KN."

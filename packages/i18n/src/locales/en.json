@@ -142,6 +142,14 @@
       "title": "Manifest sequence rollback rejected",
       "body": "The component manifest sequence is older than the last accepted sequence. Update rejected."
     },
+    "E_SERVER_UNAVAILABLE": {
+      "title": "Server unavailable",
+      "body": "The component server returned an error response. Please try again later.",
+      "not_found": "File not found on server. Retry fetching components or report this issue.",
+      "auth": "Access denied by server. Check for app updates or try again later.",
+      "rate_limited": "Server rate limit reached. Wait a few minutes and try again.",
+      "server_error": "The server encountered a temporary error. Please try again shortly."
+    },
     "E_ENCODER_UNAVAILABLE": {
       "title": "Video encoder unavailable",
       "body": "All tested encoders (NVENC, QSV, AMF, Media Foundation) failed. Update GPU driver or install Media Feature Pack for Windows N/KN."

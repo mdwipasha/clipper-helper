@@ -814,3 +814,113 @@ async fn test_fetch_manifest_wrong_key_unknown_kid_schema_and_stale() {
     assert!(matches!(err_stale, NetError::ManifestStale { .. }));
     assert_eq!(err_stale.error_code(), "E_MANIFEST_STALE");
 }
+
+async fn spawn_fixed_status_server(status_line: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind status server");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // Handle up to 4 attempts (artifact download retries 5xx up to 3 times).
+        for _ in 0..4 {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let resp = format!(
+                "HTTP/1.1 {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                status_line
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    format!("http://127.0.0.1:{}", port)
+}
+
+#[tokio::test]
+async fn test_http_error_statuses_map_to_server_unavailable_with_distinct_keys() {
+    let cases = [
+        (
+            404u16,
+            "404 Not Found",
+            "err.E_SERVER_UNAVAILABLE.not_found",
+        ),
+        (410u16, "410 Gone", "err.E_SERVER_UNAVAILABLE.not_found"),
+        (401u16, "401 Unauthorized", "err.E_SERVER_UNAVAILABLE.auth"),
+        (403u16, "403 Forbidden", "err.E_SERVER_UNAVAILABLE.auth"),
+        (
+            429u16,
+            "429 Too Many Requests",
+            "err.E_SERVER_UNAVAILABLE.rate_limited",
+        ),
+        (
+            500u16,
+            "500 Internal Server Error",
+            "err.E_SERVER_UNAVAILABLE.server_error",
+        ),
+        (
+            503u16,
+            "503 Service Unavailable",
+            "err.E_SERVER_UNAVAILABLE.server_error",
+        ),
+    ];
+
+    for (expected_status, status_line, expected_key) in cases {
+        let dir = TempDir::new().expect("temp dir");
+        let db = LocalStore::open(&dir.path().join("http_map.db")).expect("store");
+
+        // 1. Manifest fetch HTTP status classification
+        let manifest_base = spawn_fixed_status_server(status_line).await;
+        let m_err = fetch_and_verify_manifest(
+            &format!("{}/manifest.json", manifest_base),
+            &format!("{}/manifest.json.sig", manifest_base),
+            "0.1.0",
+            &db,
+            None,
+        )
+        .await
+        .expect_err("manifest non-2xx HTTP status must fail");
+
+        assert_eq!(m_err.error_code(), "E_SERVER_UNAVAILABLE");
+        assert_eq!(m_err.message_key(), expected_key);
+        assert!(
+            m_err.to_string().contains(&expected_status.to_string()),
+            "detail should preserve HTTP status {}: {}",
+            expected_status,
+            m_err
+        );
+
+        // 2. Artifact download HTTP status classification
+        let artifact_base = spawn_fixed_status_server(status_line).await;
+        let entry = ComponentManifestEntry {
+            component: "yt-dlp".into(),
+            version: "2026.10.26".into(),
+            platform: "windows-x86_64".into(),
+            url: format!("{}/yt-dlp.exe", artifact_base),
+            mirrors: vec![],
+            size_bytes: 1024,
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
+            archive: "none".into(),
+            files: vec![],
+            min_app_version: "0.1.0".into(),
+            max_app_version: None,
+            rollout_percent: 100,
+        };
+        let a_err =
+            download_and_verify_component(&entry, &dir.path().join("yt-dlp.exe"), |_| {}, None)
+                .await
+                .expect_err("artifact non-2xx HTTP status must fail");
+
+        assert_eq!(a_err.error_code(), "E_SERVER_UNAVAILABLE");
+        assert_eq!(a_err.message_key(), expected_key);
+        assert!(
+            a_err.to_string().contains(&expected_status.to_string()),
+            "artifact error detail should preserve HTTP status {}: {}",
+            expected_status,
+            a_err
+        );
+    }
+}
