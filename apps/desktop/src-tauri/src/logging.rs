@@ -26,6 +26,7 @@ pub const LOG_MAX_SINGLE_FILE_BYTES: u64 = 4 * 1024 * 1024; // Rotate every 4 MB
 pub const REPORT_MAX_LOG_LINES: usize = 80;
 pub const DEBUG_LOG_FILTER_ENV: &str = "CLIPPER_LOG";
 
+#[cfg(debug_assertions)]
 fn parse_level_filter(raw: &str) -> Option<LevelFilter> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "trace" => Some(LevelFilter::TRACE),
@@ -43,7 +44,7 @@ fn parse_level_filter(raw: &str) -> Option<LevelFilter> {
 /// - `warn` for dependencies (`hyper`, `hyper_util`, `reqwest`, `tao`, `wry`, `tokio`, default)
 /// - `TRACE` / `DEBUG` enabled ONLY via `CLIPPER_LOG` env var in debug builds.
 pub fn build_log_targets(debug_override_env: Option<&str>) -> Targets {
-    let mut targets = Targets::new()
+    let targets = Targets::new()
         .with_default(LevelFilter::WARN)
         .with_target("hyper", LevelFilter::WARN)
         .with_target("hyper_util", LevelFilter::WARN)
@@ -55,27 +56,31 @@ pub fn build_log_targets(debug_override_env: Option<&str>) -> Targets {
         .with_target("clipper_helper_desktop", LevelFilter::INFO);
 
     #[cfg(debug_assertions)]
-    if let Some(raw) = debug_override_env {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if let Some(lvl) = parse_level_filter(trimmed) {
-                targets = targets
-                    .with_target("clipper_helper_desktop_lib", lvl)
-                    .with_target("clipper_helper_desktop", lvl);
-            } else {
-                for part in trimmed.split(',') {
-                    let p = part.trim();
-                    if let Some((k, v)) = p.split_once('=') {
-                        if let Some(lvl) = parse_level_filter(v) {
-                            targets = targets.with_target(k.trim().to_string(), lvl);
+    let targets = {
+        let mut targets = targets;
+        if let Some(raw) = debug_override_env {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                if let Some(lvl) = parse_level_filter(trimmed) {
+                    targets = targets
+                        .with_target("clipper_helper_desktop_lib", lvl)
+                        .with_target("clipper_helper_desktop", lvl);
+                } else {
+                    for part in trimmed.split(',') {
+                        let p = part.trim();
+                        if let Some((k, v)) = p.split_once('=') {
+                            if let Some(lvl) = parse_level_filter(v) {
+                                targets = targets.with_target(k.trim().to_string(), lvl);
+                            }
+                        } else if let Some(lvl) = parse_level_filter(p) {
+                            targets = targets.with_default(lvl);
                         }
-                    } else if let Some(lvl) = parse_level_filter(p) {
-                        targets = targets.with_default(lvl);
                     }
                 }
             }
         }
-    }
+        targets
+    };
 
     #[cfg(not(debug_assertions))]
     let _ = debug_override_env;
