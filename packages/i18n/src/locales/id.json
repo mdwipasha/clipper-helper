@@ -5,6 +5,12 @@
     "version": "Versi {version}",
     "tagline": "Ubah VOD livestream menjadi klip vertikal siap kampanye dalam hitungan menit."
   },
+  "nav": {
+    "home": "Beranda",
+    "components": "Komponen",
+    "diagnostics": "Diagnostik",
+    "settings": "Pengaturan"
+  },
   "stage": {
     "probe": "Memeriksa link video…",
     "download": "Mengunduh potongan video",
@@ -19,7 +25,87 @@
     "verify": "Memeriksa hasil",
     "finalize": "Menyimpan file"
   },
+  "errorBanner": {
+    "copyDetail": "Salin detail error",
+    "copiedDetail": "Tersalin",
+    "openDiagnostics": "Buka Diagnostik"
+  },
+  "crash": {
+    "bannerText": "Aplikasi sebelumnya berhenti tiba-tiba — Salin laporan",
+    "copyReport": "Salin laporan",
+    "openDiagnostics": "Buka Diagnostik",
+    "dismiss": "Tutup"
+  },
+  "home": {
+    "title": "Beranda",
+    "subtitle": "Jalur cepat beta lokal: pasang komponen yang dibutuhkan lalu laporkan kendala lewat tab Diagnostik.",
+    "componentsReady": "Komponen inti siap digunakan.",
+    "componentsMissing": "Beberapa komponen wajib belum terpasang.",
+    "goComponents": "Kelola Komponen",
+    "goDiagnostics": "Buka Diagnostik",
+    "goSettings": "Pengaturan Model & Encoder"
+  },
+  "components": {
+    "title": "Manajer Komponen",
+    "subtitle": "Unduh dan verifikasi mesin pemrosesan lokal (yt-dlp, qjs, FFmpeg, Whisper, dan model suara).",
+    "installAll": "Pasang semua",
+    "installing": "Memasang…",
+    "retry": "Coba Lagi",
+    "repair": "Perbaiki",
+    "retryVerification": "Uji ulang",
+    "verify": "Verifikasi",
+    "detail": "Detail",
+    "hideDetail": "Tutup Detail",
+    "offlineTitle": "Server komponen belum terjangkau",
+    "offlineBody": "Tidak dapat memuat daftar pembaruan (mode offline atau URL manifest belum aktif). Kamu tetap bisa memeriksa komponen lokal.",
+    "statusInstalled": "Siap dipakai",
+    "statusMissing": "Belum dipasang",
+    "statusQuarantined": "Dikarantina",
+    "statusModelVerified": "Hash terverifikasi",
+    "diskInsufficientTitle": "Ruang penyimpanan tidak mencukupi",
+    "diskInsufficientBody": "Dibutuhkan {required} ruang kosong (1.5× ukuran komponen + 1 GB buffer), tersisa {available}.",
+    "chooseAnotherLocation": "Pilih lokasi data lain",
+    "restartWarning": "Lokasi data baru ({path}) tersimpan di bootstrap.json dan berlaku setelah aplikasi dimulai ulang. Data lama tidak dipindahkan otomatis.",
+    "oneDriveWarning": "Peringatan: Folder berada di dalam OneDrive. Sinkronisasi cloud dapat mengunci file render."
+  },
+  "diagnostics": {
+    "title": "Diagnostik & Laporkan Masalah",
+    "subtitle": "Semua data disaring di perangkat ini (tanpa username, email, token, URL lengkap). Tidak ada yang dikirim otomatis.",
+    "whatDoingLabel": "Apa yang sedang kamu lakukan?",
+    "whatDoingPlaceholder": "Contoh: Baru menekan Pasang semua di tab Komponen lalu muncul error…",
+    "includeVideoIdLabel": "Sertakan ID video (hanya ID 11 karakter, tanpa URL atau query)",
+    "previewTitle": "Pratinjau Laporan ({sizeKb} KB / 100 KB maks clipboard · ID {reportId})",
+    "truncationNotice": "Laporan melebihi batas ~100 KB untuk clipboard; detail & baris log terlama telah dipotong otomatis.",
+    "copyReport": "Salin laporan",
+    "copiedReport": "Laporan Tersalin",
+    "saveTxt": "Simpan sebagai file .txt",
+    "savedTxt": "Tersimpan ke {path}",
+    "openLogsFolder": "Buka folder log",
+    "recentErrorsTitle": "Riwayat Error Terbaru",
+    "filterCodeLabel": "Filter kode",
+    "filterAll": "Semua kode",
+    "emptyErrors": "Belum ada error tercatat. Log bersih.",
+    "copySingleError": "Salin"
+  },
+  "settings": {
+    "title": "Pengaturan",
+    "subtitle": "Konfigurasi bahasa, model transkripsi suara, dan pemilihan encoder video aman tanpa benchmark awal.",
+    "languageLabel": "Bahasa Tampilan",
+    "speechTitle": "Model Suara (Whisper)",
+    "speechAuto": "Otomatis (Disarankan sistem: {model})",
+    "speechDowngradeTitle": "Saran Model Lebih Ringan",
+    "speechDowngradeBody": "Transkripsi dengan small-q5_1 berjalan lebih lambat dari 1.5× real-time dua kali berturut-turut. Pertimbangkan beralih ke base (tidak diubah otomatis).",
+    "switchToBase": "Beralih ke base",
+    "dismiss": "Abaikan",
+    "encoderTitle": "Encoder Video (Lazy Chain)",
+    "encoderUntested": "Belum diuji — akan memilih otomatis saat export pertama (NVENC → QSV → AMF → MF).",
+    "dataLocationTitle": "Lokasi Data Aplikasi"
+  },
   "err": {
+    "E_APP_INIT_FAILED": {
+      "title": "Gagal menginisialisasi ruang kerja",
+      "body": "Folder data lokal tidak dapat dibuat atau diakses. Periksa izin tulis dan ruang penyimpanan."
+    },
     "E_NET_OFFLINE": {
       "title": "Koneksi terputus",
       "body": "Periksa koneksi internet kamu dan coba lagi."
@@ -30,7 +116,7 @@
     },
     "E_DISK_LOW": {
       "title": "Ruang penyimpanan hampir penuh",
-      "body": "Ruang disk tersisa menipis. Kosongkan ruang atau bersihkan cache."
+      "body": "Ruang disk tersisa menipis. Kosongkan ruang atau pilih lokasi data lain."
     },
     "E_DISK_FULL": {
       "title": "Ruang disk tidak mencukupi",
@@ -56,6 +142,14 @@
       "title": "Rollback manifest ditolak",
       "body": "Urutan manifest komponen lebih lama daripada versi yang terakhir diterima. Pembaruan ditolak."
     },
+    "E_ENCODER_UNAVAILABLE": {
+      "title": "Encoder video tidak tersedia",
+      "body": "Semua encoder (NVENC, QSV, AMF, Media Foundation) gagal. Perbarui driver GPU atau pasang Media Feature Pack untuk Windows N/KN."
+    },
+    "E_RENDER_FAILED": {
+      "title": "Gagal merender video",
+      "body": "FFmpeg mengalami kesalahan saat merender video."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Verifikasi anti-bot terdeteksi",
       "body": "YouTube meminta verifikasi 'bukan bot'. Tunggu beberapa menit atau ganti jaringan/VPN."
@@ -66,7 +160,7 @@
     },
     "E_UNKNOWN": {
       "title": "Terjadi kesalahan",
-      "body": "Terjadi kendala tak terduga. Silakan coba lagi."
+      "body": "Terjadi kendala tak terduga. Silakan coba lagi atau buka tab Diagnostik untuk menyalin laporan."
     }
   },
   "warning": {

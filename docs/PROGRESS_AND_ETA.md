@@ -168,7 +168,7 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_COMPONENT_MISSING` | Required sidecar/model missing or hash mismatch | yes | Repair (re-download) |
 | `E_MODEL_DOWNLOAD_FAILED` | Speech model download failed | yes | Retry (resumes) |
 | `E_TRANSCRIBE_FAILED` / `E_TRANSCRIBE_OOM` | Speech step failed / out of memory | yes | Switch to smaller model · Retry |
-| `E_ENCODER_UNAVAILABLE` | No working video encoder found after trying the fallback chain (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`) | yes (manual) | Update GPU driver · Install Media Feature Pack (Windows N/KN) · Export diagnostics |
+| `E_ENCODER_UNAVAILABLE` | No working video encoder found after trying the lazy chain (`h264_nvenc` → `h264_qsv` → `h264_amf` → `h264_mf`) or runtime fallback exhausted | yes (manual) | Update GPU driver · Install Media Feature Pack (Windows N/KN) · Export diagnostics |
 | `E_RENDER_FAILED` | FFmpeg error | yes | Retry (free) · Export diagnostics |
 | `E_VERIFY_FAILED` | Output failed post-render checks | yes | Review checklist · Retry |
 | `E_AUTH_EXPIRED` | Session expired | yes | Sign in again |
@@ -197,6 +197,10 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
    - HTTP 403 / 429 during download → silently re-probe once; if retry fails → `E_YT_RATE_LIMITED`
 3. **Fallback:**
    - Any unrecognized extractor error → `E_YT_EXTRACT_FAILED`, saving raw output strictly to redacted local logs (never in user-facing UI or network telemetry).
+
+### 8.2 Core Error Store & Diagnostics Capture
+- Every typed core error (`E_*`) and rate-limited WebView JS error is recorded locally in SQLite table `error_events` (30-day retention, max 500 newest rows), scrubbed by the shared redaction layer before storage.
+- Users inspect recent errors, filter by `E_*` code, copy single error details from any shared error banner (`Salin detail error`), or generate a copy-pasteable local diagnostics report in **Diagnostik** (zero automatic network uploads).
 
 ## 9. Testing the progress system
 

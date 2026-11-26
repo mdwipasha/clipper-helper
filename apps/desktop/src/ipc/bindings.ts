@@ -18,6 +18,244 @@ export const commands = {
     return await TAURI_INVOKE('get_workspace_status');
   },
   /**
+   * Returns current component statuses, manifest cache, disk check, and speech-model target.
+   */
+  async getComponentsOverview(
+    overrideManifestUrl: string | null
+  ): Promise<Result<ComponentsOverview, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_components_overview', { overrideManifestUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches and cryptographically verifies the component manifest from config URL (debug override allowed).
+   */
+  async fetchComponentsManifest(
+    overrideUrl: string | null
+  ): Promise<Result<ManifestOverview, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('fetch_components_manifest', { overrideUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Installs one component/model from the currently cached verified manifest.
+   */
+  async installComponent(
+    component: string,
+    version: string | null
+  ): Promise<Result<ComponentActionOutcome, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('install_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Installs all missing/outdated required components & active speech model ("Pasang semua")
+   * after verifying `sum(sizes) * 1.5 + 1 GB` free disk space.
+   */
+  async installAllRequiredComponents(): Promise<Result<BatchInstallOutcome, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('install_all_required_components') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Repairs a missing or quarantined component by re-downloading & verifying from the manifest.
+   */
+  async repairComponent(
+    component: string,
+    version: string | null
+  ): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('repair_component', { component, version }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Re-runs capability verification for an already-extracted quarantined binary version.
+   */
+  async retryQuarantinedComponent(
+    component: string,
+    version: string
+  ): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('retry_quarantined_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Runs full SHA-256 + capability verification on the currently active component version.
+   */
+  async verifyComponent(component: string): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('verify_component', { component }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Validates a user-selected directory via `DataRoot::validate` and writes `bootstrap.json`.
+   * Applies on next app restart; performs NO automatic data migration.
+   */
+  async selectCustomDataRoot(
+    folderPath: string
+  ): Promise<Result<DataRootChangeOutcome, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('select_custom_data_root', { folderPath }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns current settings, speech-model state, passive encoder chain status, and hardware summary.
+   */
+  async getSettingsOverview(): Promise<Result<SettingsOverview, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_settings_overview') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Persists non-sensitive settings updates (language, speech model preference, banner dismissal).
+   */
+  async updateSettings(patch: SettingsPatch): Promise<Result<SettingsOverview, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('update_settings', { patch }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns whether the previous run exited cleanly or crashed.
+   */
+  async getCrashRecoveryStatus(): Promise<CrashRecoveryStatus> {
+    return await TAURI_INVOKE('get_crash_recovery_status');
+  },
+  /**
+   * Dismisses the crash-recovery banner for the current session and archives the crash marker file.
+   */
+  async dismissCrashRecovery(): Promise<Result<null, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('dismiss_crash_recovery') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists recent redacted error events stored in SQLite (`error_events`), newest first.
+   */
+  async listErrorEvents(
+    codeFilter: string | null,
+    limit: number | null
+  ): Promise<Result<ErrorEventRow[], AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('list_error_events', { codeFilter, limit }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Records an unhandled WebView / React JS error into `error_events` (rate-limited & size-capped).
+   */
+  async recordWebviewError(
+    source: string,
+    message: string,
+    stack: string | null
+  ): Promise<Result<boolean, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('record_webview_error', { source, message, stack }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Generates a redacted plain-text/Markdown diagnostics report completely locally.
+   */
+  async generateDiagnosticsReport(
+    userNote: string,
+    includeVideoIds: boolean
+  ): Promise<Result<DiagnosticsReportBundle, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('generate_diagnostics_report', { userNote, includeVideoIds }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Saves the full (`<= 1 MB`) redacted diagnostics report to a user-chosen `.txt` file.
+   */
+  async saveDiagnosticsReportFile(
+    destPath: string,
+    userNote: string,
+    includeVideoIds: boolean
+  ): Promise<Result<SaveReportOutcome, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_diagnostics_report_file', {
+          destPath,
+          userNote,
+          includeVideoIds,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Opens the workspace `logs/` directory in Windows Explorer via `tauri-plugin-opener`.
+   */
+  async openLogsFolder(): Promise<Result<null, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('open_logs_folder') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Returns internal system information for the dev panel.
    */
   async devGetSystemInfo(): Promise<Result<DevSystemInfo, string>> {
@@ -266,14 +504,32 @@ export const commands = {
 
 /** user-defined events **/
 
+export const events = __makeEvents__<{
+  componentInstallProgressEvent: ComponentInstallProgressEvent;
+}>({
+  componentInstallProgressEvent: 'component-install-progress-event',
+});
+
 /** user-defined constants **/
 
 /** user-defined types **/
 
+export type AppCommandError = {
+  code: string;
+  message_key: string;
+  message: string;
+  detail: string;
+  disk_bounds: DiskSpaceBounds | null;
+};
 /**
  * Application metadata returned to the frontend.
  */
 export type AppInfo = { name: string; version: string; platform: string };
+export type BatchInstallOutcome = {
+  installed_count: number;
+  skipped_count: number;
+  outcomes: ComponentActionOutcome[];
+};
 /**
  * UI/IPC-safe capability report projection avoiding raw `u64` BigInt in TypeScript bindings.
  */
@@ -289,10 +545,37 @@ export type CapabilityReportView = {
   ffmpeg: FfmpegCapabilities | null;
 };
 export type CapabilityStatus = 'pass' | 'warn' | 'fail';
+export type ComponentActionOutcome = {
+  ok: boolean;
+  component: string;
+  version: string;
+  already_installed: boolean;
+  quarantined: boolean;
+  rolled_back_to: string | null;
+  error_code: string | null;
+  message: string;
+  capability_report: CapabilityReportView | null;
+};
 export type ComponentDiagnosticsSnapshot = {
   custom_ffmpeg: CustomFfmpegStatus;
   components: ComponentStateSummary[];
   pending_deferred_deletes: number;
+};
+export type ComponentInstallProgressEvent = {
+  job_id: string;
+  component: string;
+  stage: string;
+  completed_items: number;
+  total_items: number;
+  item_completed_bytes: number;
+  item_total_bytes: number;
+  item_percent: number;
+  rate_bps: number;
+  item_eta_seconds: number | null;
+  overall_percent: number;
+  overall_eta_seconds: number | null;
+  overall_eta_low_seconds: number | null;
+  overall_eta_high_seconds: number | null;
 };
 export type ComponentMissingAdvice = {
   code: string;
@@ -323,6 +606,27 @@ export type ComponentVersionView = {
   quarantine_reason: string | null;
   capability_report: CapabilityReportView | null;
 };
+export type ComponentsOverview = {
+  diagnostics: ComponentDiagnosticsSnapshot;
+  required_components: string[];
+  manifest: ManifestOverview | null;
+  manifest_url_config: ManifestUrlConfig;
+  disk_space: DiskSpaceStatus;
+  speech_model: SpeechModelState;
+};
+export type CrashRecord = {
+  timestamp: number;
+  app_version: string;
+  location: string | null;
+  message_redacted: string;
+  backtrace_redacted: string;
+};
+export type CrashRecoveryStatus = {
+  unclean_shutdown_detected: boolean;
+  previous_started_at: number | null;
+  crash_record: CrashRecord | null;
+  banner_dismissed: boolean;
+};
 export type CustomFfmpegStatus = {
   enabled: boolean;
   configured_path: string | null;
@@ -333,6 +637,11 @@ export type CustomFfmpegStatus = {
   file_present: boolean;
   fallback_active: boolean;
   capability_report: CapabilityReportView | null;
+};
+export type DataRootChangeOutcome = {
+  new_root_redacted: string;
+  is_onedrive: boolean;
+  requires_restart: boolean;
 };
 export type DevCommandError = { code: string; message: string };
 export type DevFixtureServerStatus = {
@@ -387,6 +696,65 @@ export type DevSystemInfo = {
   platform: string;
   arch: string;
 };
+export type DiagnosticsReportBundle = {
+  report_id: string;
+  ringkasan_bytes: number;
+  preview_text: string;
+  preview_bytes: number;
+  preview_truncated: boolean;
+  full_text: string;
+  full_bytes: number;
+  full_truncated: boolean;
+  error_count: number;
+};
+export type DiskSpaceBounds = { available_bytes: number; required_bytes: number };
+export type DiskSpaceStatus = {
+  available_bytes: number;
+  required_bytes: number;
+  sufficient: boolean;
+  data_root_redacted: string;
+  is_default_data_root: boolean;
+  is_onedrive: boolean;
+};
+export type EncoderFailureKind =
+  | 'encoder_not_found'
+  | 'driver_unsupported_or_init_error'
+  | 'media_foundation_or_profile_error'
+  | 'hardware_unavailable'
+  | 'unknown';
+export type EncoderFallbackEntry = {
+  from: string;
+  to: string | null;
+  reason_kind: EncoderFailureKind;
+  summary: string;
+};
+/**
+ * Passive snapshot shown in Pengaturan & Diagnostik before any export has probed FFmpeg.
+ */
+export type EncoderStatusSnapshot = {
+  chain_order: string[];
+  cached_encoder: string | null;
+  cached_fingerprint: string | null;
+  current_fingerprint: string;
+  fingerprint_matches: boolean;
+  is_windows_n_kn: boolean;
+  fallback_history: EncoderFallbackEntry[];
+};
+/**
+ * Persisted structured core error event row in SQLite `error_events` table.
+ */
+export type ErrorEventRow = {
+  id: number;
+  ts: number;
+  code: string;
+  stage: string;
+  job_id: string | null;
+  message_key: string;
+  detail_redacted: string;
+  stderr_tail_redacted: string;
+  app_version: string;
+  component_versions_json: string;
+};
 export type FfmpegCapabilities = {
   ffmpeg_version: string;
   ffprobe_version: string;
@@ -411,6 +779,75 @@ export type GcOutcome = {
   deferred_versions: string[];
   skipped_in_use: string[];
   kept_versions: string[];
+};
+export type GpuAdapterInfo = { name: string; driver_version: string | null; vendor: string | null };
+export type HardwareProfile = {
+  cpu_model: string;
+  physical_cores: number;
+  logical_cores: number;
+  ram_bytes: number | null;
+  windows_product: string;
+  windows_display_version: string | null;
+  windows_build: string;
+  is_windows_n_kn: boolean;
+  ac_power: boolean | null;
+  power_plan: string;
+  gpus: GpuAdapterInfo[];
+  fingerprint: string;
+};
+export type ManifestComponentItem = {
+  component: string;
+  version: string;
+  archive: string;
+  size_bytes: number;
+  is_model: boolean;
+  is_current_installed: boolean;
+};
+export type ManifestOverview = {
+  sequence: number;
+  channel: string;
+  generated_at: string;
+  components: ManifestComponentItem[];
+};
+export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean };
+export type SaveReportOutcome = {
+  saved_path_redacted: string;
+  bytes_written: number;
+  truncated: boolean;
+};
+export type SettingsOverview = {
+  language: string;
+  speech_state: SpeechModelState;
+  encoder_status: EncoderStatusSnapshot;
+  hardware: HardwareProfile;
+  data_root_redacted: string;
+  is_default_data_root: boolean;
+  is_onedrive: boolean;
+};
+export type SettingsPatch = {
+  language: string | null;
+  /**
+   * When `Some("auto")` resets user override to automatic RAM default;
+   * otherwise selects an explicit model (`tiny`/`base`/`small-q5_1`/`small`/`medium`).
+   */
+  speech_model_selection: string | null;
+  dismiss_speech_downgrade: boolean | null;
+};
+export type SpeechModel = 'tiny' | 'base' | 'small-q5_1' | 'small' | 'medium';
+export type SpeechModelOptionInfo = {
+  id: string;
+  manifest_component: string;
+  min_ram_gb: number;
+  speed_tier: string;
+};
+export type SpeechModelState = {
+  active_model: SpeechModel;
+  recommended_model: SpeechModel;
+  is_user_override: boolean;
+  downgrade_suggested: boolean;
+  suggested_lighter_model: SpeechModel | null;
+  consecutive_slow_runs: number;
+  options: SpeechModelOptionInfo[];
 };
 export type VerifyRepairOutcome = {
   component: string;

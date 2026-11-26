@@ -1,19 +1,24 @@
 pub mod archive;
 pub mod capabilities;
 pub mod commands;
+pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
+pub mod diagnostics;
+pub mod encoder;
 pub mod eta;
 pub mod hardware;
 pub mod installer;
 pub mod jobs;
 pub mod license;
+pub mod logging;
 pub mod manifest;
 pub mod net;
 pub mod render;
 pub mod resolver;
 pub mod security;
 pub mod sidecars;
+pub mod speech;
 pub mod store;
 pub mod updater;
 
@@ -36,33 +41,55 @@ pub fn init_logging() {
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(RedactionLayer)
+        .with(logging::RotatingFileLogLayer)
         .try_init();
 }
 
 #[cfg(debug_assertions)]
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
-    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
-        commands::get_app_info,
-        commands::get_workspace_status,
-        dev_commands::dev_get_system_info,
-        dev_commands::dev_reset_workspace,
-        dev_commands::dev_run_fake_sidecar,
-        dev_commands::dev_start_fixture_server,
-        dev_commands::dev_get_fixture_server_status,
-        dev_commands::dev_stop_fixture_server,
-        dev_commands::dev_fetch_manifest,
-        dev_commands::dev_download_component,
-        dev_commands::dev_install_component,
-        dev_commands::dev_get_component_diagnostics,
-        dev_commands::dev_rollback_component,
-        dev_commands::dev_gc_component,
-        dev_commands::dev_verify_component,
-        dev_commands::dev_retry_quarantined_component,
-        dev_commands::dev_repair_component,
-        dev_commands::dev_reset_manifest_sequence_floor,
-        dev_commands::dev_set_custom_ffmpeg,
-        dev_commands::dev_clear_custom_ffmpeg,
-    ])
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .events(tauri_specta::collect_events![
+            commands::ComponentInstallProgressEvent
+        ])
+        .commands(tauri_specta::collect_commands![
+            commands::get_app_info,
+            commands::get_workspace_status,
+            commands::get_components_overview,
+            commands::fetch_components_manifest,
+            commands::install_component,
+            commands::install_all_required_components,
+            commands::repair_component,
+            commands::retry_quarantined_component,
+            commands::verify_component,
+            commands::select_custom_data_root,
+            commands::get_settings_overview,
+            commands::update_settings,
+            commands::get_crash_recovery_status,
+            commands::dismiss_crash_recovery,
+            commands::list_error_events,
+            commands::record_webview_error,
+            commands::generate_diagnostics_report,
+            commands::save_diagnostics_report_file,
+            commands::open_logs_folder,
+            dev_commands::dev_get_system_info,
+            dev_commands::dev_reset_workspace,
+            dev_commands::dev_run_fake_sidecar,
+            dev_commands::dev_start_fixture_server,
+            dev_commands::dev_get_fixture_server_status,
+            dev_commands::dev_stop_fixture_server,
+            dev_commands::dev_fetch_manifest,
+            dev_commands::dev_download_component,
+            dev_commands::dev_install_component,
+            dev_commands::dev_get_component_diagnostics,
+            dev_commands::dev_rollback_component,
+            dev_commands::dev_gc_component,
+            dev_commands::dev_verify_component,
+            dev_commands::dev_retry_quarantined_component,
+            dev_commands::dev_repair_component,
+            dev_commands::dev_reset_manifest_sequence_floor,
+            dev_commands::dev_set_custom_ffmpeg,
+            dev_commands::dev_clear_custom_ffmpeg,
+        ])
 }
 
 #[cfg(debug_assertions)]
@@ -80,10 +107,31 @@ pub fn export_typescript_bindings() -> Result<(), String> {
 
 #[cfg(not(debug_assertions))]
 pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
-    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
-        commands::get_app_info,
-        commands::get_workspace_status,
-    ])
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .events(tauri_specta::collect_events![
+            commands::ComponentInstallProgressEvent
+        ])
+        .commands(tauri_specta::collect_commands![
+            commands::get_app_info,
+            commands::get_workspace_status,
+            commands::get_components_overview,
+            commands::fetch_components_manifest,
+            commands::install_component,
+            commands::install_all_required_components,
+            commands::repair_component,
+            commands::retry_quarantined_component,
+            commands::verify_component,
+            commands::select_custom_data_root,
+            commands::get_settings_overview,
+            commands::update_settings,
+            commands::get_crash_recovery_status,
+            commands::dismiss_crash_recovery,
+            commands::list_error_events,
+            commands::record_webview_error,
+            commands::generate_diagnostics_report,
+            commands::save_diagnostics_report_file,
+            commands::open_logs_folder,
+        ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -113,6 +161,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             use tauri::Manager;
@@ -161,9 +210,41 @@ pub fn run() {
 
             let in_use_registry = installer::InUseRegistry::new();
             app.manage(in_use_registry);
+            app.manage(commands::ManifestCacheState::default());
+            app.manage(commands::WebViewErrorRateLimiter::default());
 
             match init_res {
                 Ok((root, store, rec)) => {
+                    let logs_dir = root.join("logs");
+                    if let Err(e) = logging::activate_file_logging(&logs_dir) {
+                        tracing::warn!("Failed to activate rotating file logs: {}", e);
+                    }
+                    let app_ver = env!("CARGO_PKG_VERSION").to_string();
+                    crash::install_panic_hook(logs_dir.clone(), app_ver.clone());
+                    let crash_status = crash::begin_session(&logs_dir, &app_ver);
+                    if crash_status.unclean_shutdown_detected {
+                        tracing::warn!("Previous session ended unexpectedly; crash recovery banner active");
+                        let detail_msg = crash_status
+                            .crash_record
+                            .as_ref()
+                            .map(|c| c.message_redacted.clone())
+                            .unwrap_or_else(|| "Unclean shutdown detected at startup".to_string());
+                        let _ = store.record_error_event(store::NewErrorEvent {
+                            code: "E_UNKNOWN".to_string(),
+                            stage: "app_lifecycle".to_string(),
+                            job_id: None,
+                            message_key: "err.E_UNKNOWN.body".to_string(),
+                            detail: detail_msg,
+                            stderr_tail: crash_status
+                                .crash_record
+                                .as_ref()
+                                .map(|c| c.backtrace_redacted.clone())
+                                .unwrap_or_default(),
+                            app_version: app_ver,
+                            component_versions_json: "{}".to_string(),
+                        });
+                    }
+                    let crash_state = std::sync::Mutex::new(crash_status);
                     tracing::info!(
                         "Workspace initialized at {} (reconciled: rebuilt={}, staging_cleaned={}, deferred_retried={})",
                         root.display(),
@@ -174,6 +255,7 @@ pub fn run() {
                     app.manage(WorkspaceState { root: root.clone() });
                     app.manage(store);
                     app.manage(rec);
+                    app.manage(crash_state);
                     app.manage(commands::WorkspaceStatus {
                         is_initialized: true,
                         root: Some(root.to_string_lossy().to_string()),
@@ -196,6 +278,15 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(ws) = app_handle.try_state::<WorkspaceState>() {
+                    crash::mark_clean_shutdown(&ws.root.join("logs"));
+                }
+                logging::flush_file_logging();
+            }
+        });
 }

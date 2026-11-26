@@ -92,7 +92,47 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static USER_PROFILE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)[A-Z]:[/\\]Users[/\\]([^/\\]+)").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(?i)[A-Z]:[/\\]Users[/\\]([^/\\\s]+)").expect("valid regex"));
+
+static URL_FRAGMENT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(https?://[^\s#]+)#[^\s]+").expect("valid regex"));
+
+static KEY_VALUE_SECRET_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(token|access_token|refresh_token|id_token|api_key|apikey|secret|password|passwd|license_key|service_role_key)\s*([:=])\s*([^\s,;'&\]\)]+)",
+    )
+    .expect("valid regex")
+});
+
+static IPV4_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
+    )
+    .expect("valid regex")
+});
+
+static IPV6_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b|::1\b").expect("valid regex")
+});
+
+static GUID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+        .expect("valid regex")
+});
+
+static SERIAL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(MachineGuid|SerialNumber|VolumeSerial|ProductId|BIOSSerial|MotherboardSerial)\s*([:=])\s*([A-Za-z0-9._-]+)",
+    )
+    .expect("valid regex")
+});
+
+static LICENSE_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:(?:LIC|LICENSE|KEY)-[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+|CH-[A-Z0-9]{4,}-[A-Z0-9]{4,}-[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})*)\b",
+    )
+    .expect("valid regex")
+});
 
 /// Returns the hardcoded default workspace root directory `%LOCALAPPDATA%\ClipperHelper\` (or `ClipperHelper-Dev` in debug builds).
 pub fn get_default_workspace_root() -> Result<PathBuf, SecurityError> {
@@ -984,33 +1024,135 @@ pub fn get_free_disk_space(_path: &Path) -> Result<u64, SecurityError> {
     Ok(100 * 1024 * 1024 * 1024) // 100 GB mock for non-Windows
 }
 
-/// Redacts sensitive tokens, query strings, email addresses, and Windows usernames.
-pub fn redact_sensitive_text(input: &str) -> String {
+fn is_generic_windows_account_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "user" | "admin" | "administrator" | "guest" | "system" | "owner" | "default" | "public"
+    )
+}
+
+fn redact_single_username(text: &str, username: &str) -> String {
+    let trimmed = username.trim();
+    if trimmed.len() < 3 {
+        return text.to_string();
+    }
+    let escaped = regex::escape(trimmed);
+    // Always redact path-delimited occurrences even for common names like "User".
+    let path_pattern = format!(r"(?i)([/\\]){}([/\\]|$|\s)", escaped);
+    let mut out = match Regex::new(&path_pattern) {
+        Ok(re) => re.replace_all(text, "${1}[REDACTED_USER]${2}").to_string(),
+        Err(_) => text.to_string(),
+    };
+    if !is_generic_windows_account_name(trimmed) {
+        let word_pattern = format!(r"(?i)\b{}\b", escaped);
+        if let Ok(re) = Regex::new(&word_pattern) {
+            out = re.replace_all(&out, "[REDACTED_USER]").to_string();
+        }
+    }
+    out
+}
+
+/// Redacts sensitive tokens, secrets, query strings, URL fragments, email addresses,
+/// IP addresses, machine GUIDs/serials, license keys, and Windows profile paths/usernames
+/// (plus any explicitly supplied extra usernames).
+pub fn redact_with_extra_usernames(input: &str, extra_usernames: &[&str]) -> String {
     let mut text = input.to_string();
 
-    // 1. Redact JWT tokens
-    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
-
-    // 2. Redact Bearer authorization headers
+    // 1. Redact Bearer authorization headers BEFORE JWT replacement so `Bearer <jwt>`
+    // strips the `Bearer` prefix cleanly even when followed by `[REDACTED_TOKEN]`
     text = BEARER_REGEX
-        .replace_all(&text, "Bearer [REDACTED_TOKEN]")
+        .replace_all(&text, "Auth [REDACTED_TOKEN]")
         .to_string();
 
-    // 3. Redact URL query strings
+    // 2. Redact standalone JWT tokens
+    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
+
+    // 3. Redact URL query strings and URL fragments (#...)
     text = QUERY_STRING_REGEX
         .replace_all(&text, "?[REDACTED_QUERY]")
         .to_string();
+    text = URL_FRAGMENT_REGEX
+        .replace_all(&text, "${1}#[REDACTED_FRAGMENT]")
+        .to_string();
 
-    // 4. Redact emails
+    // 4. Redact remaining key-value secrets (removes literal `token=` / `secret=` markers too)
+    text = KEY_VALUE_SECRET_REGEX
+        .replace_all(&text, "[REDACTED_SECRET]")
+        .to_string();
+
+    // 5. Redact emails
     text = EMAIL_REGEX
         .replace_all(&text, "[REDACTED_EMAIL]")
         .to_string();
 
-    // 5. Redact Windows username in paths (C:\Users\<username> -> %USERPROFILE%)
+    // 6. Redact Windows username in paths (C:\Users\<username> -> %USERPROFILE%)
     text = USER_PROFILE_REGEX
         .replace_all(&text, "%USERPROFILE%")
         .to_string();
 
+    // 7. Redact active Windows OS username & any caller-supplied usernames
+    if let Ok(os_user) = std::env::var("USERNAME") {
+        text = redact_single_username(&text, &os_user);
+    }
+    for u in extra_usernames {
+        text = redact_single_username(&text, u);
+    }
+
+    // 8. Redact license keys before GUID check (if formatted similarly) and GUIDs/serials
+    text = LICENSE_KEY_REGEX
+        .replace_all(&text, "[REDACTED_LICENSE]")
+        .to_string();
+    text = SERIAL_REGEX
+        .replace_all(&text, "${1}${2}[REDACTED_SERIAL]")
+        .to_string();
+    text = GUID_REGEX.replace_all(&text, "[REDACTED_GUID]").to_string();
+
+    // 9. Redact IPv4 and IPv6 addresses
+    text = IPV4_REGEX.replace_all(&text, "[REDACTED_IP]").to_string();
+    text = IPV6_REGEX.replace_all(&text, "[REDACTED_IP]").to_string();
+
+    text
+}
+
+/// Redacts sensitive tokens, query strings, fragments, emails, IPs, GUIDs/serials,
+/// license keys, and Windows usernames/profile paths.
+pub fn redact_sensitive_text(input: &str) -> String {
+    redact_with_extra_usernames(input, &[])
+}
+
+/// Redacts unstructured secrets, tokens, emails, GUIDs, paths, and usernames while preserving
+/// 4-segment hardware driver / OS build version strings (used for final report envelope pass).
+pub fn redact_report_envelope(input: &str) -> String {
+    let mut text = input.to_string();
+    text = BEARER_REGEX
+        .replace_all(&text, "Auth [REDACTED_TOKEN]")
+        .to_string();
+    text = JWT_REGEX.replace_all(&text, "[REDACTED_TOKEN]").to_string();
+    text = QUERY_STRING_REGEX
+        .replace_all(&text, "?[REDACTED_QUERY]")
+        .to_string();
+    text = URL_FRAGMENT_REGEX
+        .replace_all(&text, "${1}#[REDACTED_FRAGMENT]")
+        .to_string();
+    text = KEY_VALUE_SECRET_REGEX
+        .replace_all(&text, "[REDACTED_SECRET]")
+        .to_string();
+    text = EMAIL_REGEX
+        .replace_all(&text, "[REDACTED_EMAIL]")
+        .to_string();
+    text = USER_PROFILE_REGEX
+        .replace_all(&text, "%USERPROFILE%")
+        .to_string();
+    if let Ok(os_user) = std::env::var("USERNAME") {
+        text = redact_single_username(&text, &os_user);
+    }
+    text = LICENSE_KEY_REGEX
+        .replace_all(&text, "[REDACTED_LICENSE]")
+        .to_string();
+    text = SERIAL_REGEX
+        .replace_all(&text, "${1}${2}[REDACTED_SERIAL]")
+        .to_string();
+    text = GUID_REGEX.replace_all(&text, "[REDACTED_GUID]").to_string();
     text
 }
 
@@ -1234,6 +1376,7 @@ mod tests {
             "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozGzptqJ";
         let redacted = redact_sensitive_text(jwt);
         assert!(!redacted.contains("eyJhbGci"));
+        assert!(!redacted.contains("Bearer"));
         assert!(redacted.contains("[REDACTED_TOKEN]"));
 
         // Query string
@@ -1256,6 +1399,46 @@ mod tests {
         let redacted_path = redact_sensitive_text(win_path);
         assert!(!redacted_path.contains("MyUsername"));
         assert!(redacted_path.contains("%USERPROFILE%"));
+
+        // Golden comprehensive dirty input test (M1.1d-lite Part 4e)
+        let dirty = concat!(
+            r"User budi.clipper logged in via https://app.example.com/callback?token=abc&code=xyz#access_token=secrettok ",
+            r"from 192.168.1.45 (v6 2001:0db8:85a3:0000:0000:8a2e:0370:7334) ",
+            r"path=D:\temp\budi.clipper\clip.mp4 ",
+            r"MachineGuid=12345678-1234-1234-1234-123456789abc ",
+            r"SerialNumber=SN99887766 ",
+            r"license=CH-ABCD-EFGH-IJKL ",
+            r"api_key=super_secret_key_99 ",
+            r"email=budi.clipper@example.co.id ",
+            r"version=0.1.0"
+        );
+        let clean = redact_with_extra_usernames(dirty, &["budi.clipper"]);
+        for forbidden in [
+            "budi.clipper",
+            "secret",
+            "code=xyz",
+            "access_token",
+            "192.168.1.45",
+            "2001:0db8",
+            "12345678-1234-1234-1234-123456789abc",
+            "SN99887766",
+            "CH-ABCD-EFGH-IJKL",
+            "super_secret_key_99",
+            "@",
+        ] {
+            assert!(
+                !clean.contains(forbidden),
+                "Redacted output still contained '{}': {}",
+                forbidden,
+                clean
+            );
+        }
+        // Keep harmless 3-part app version intact and keep report ID CH-XXXX-XXXX intact
+        assert!(clean.contains("version=0.1.0"));
+        assert_eq!(
+            redact_sensitive_text("Report ID CH-7A9C-41F2"),
+            "Report ID CH-7A9C-41F2"
+        );
     }
 
     #[test]
