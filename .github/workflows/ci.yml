@@ -60,7 +60,7 @@ jobs:
           cargo audit --file apps\desktop\src-tauri\Cargo.lock > audit-reports\cargo-audit.txt 2>&1 || exit 0
 
       - name: Upload Audit Reports Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audit-reports
           path: audit-reports/
@@ -195,7 +195,7 @@ jobs:
           Write-Host "Release binary verified: strict isolation confirmed (zero dev commands present)."
 
       - name: Upload Desktop Binary Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clipper-helper-desktop-binary
           path: apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe
