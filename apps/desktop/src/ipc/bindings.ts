@@ -802,6 +802,9 @@ export type HardwareProfile = {
   windows_display_version: string | null;
   windows_build: string;
   is_windows_n_kn: boolean;
+  webview2_version: string | null;
+  system_locale: string;
+  timezone: string;
   ac_power: boolean | null;
   power_plan: string;
   gpus: GpuAdapterInfo[];

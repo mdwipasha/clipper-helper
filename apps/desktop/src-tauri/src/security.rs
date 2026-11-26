@@ -1014,9 +1014,9 @@ pub fn resolve_model_path_with_root(root: &Path, file: &str) -> Result<PathBuf, 
     Ok(target)
 }
 
-/// Returns the free disk space available in bytes at the specified path.
+/// Returns `(drive_letter, free_bytes, total_bytes)` at the specified path.
 #[cfg(windows)]
-pub fn get_free_disk_space(path: &Path) -> Result<u64, SecurityError> {
+pub fn get_disk_space_summary(path: &Path) -> Result<(Option<String>, u64, u64), SecurityError> {
     use std::os::windows::ffi::OsStrExt;
 
     let mut current = path;
@@ -1027,6 +1027,16 @@ pub fn get_free_disk_space(path: &Path) -> Result<u64, SecurityError> {
             break;
         }
     }
+
+    let drive_letter = {
+        let s = current.to_string_lossy();
+        let bytes = s.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            Some(format!("{}:", (bytes[0] as char).to_ascii_uppercase()))
+        } else {
+            None
+        }
+    };
 
     let mut wide: Vec<u16> = current.as_os_str().encode_wide().collect();
     wide.push(0);
@@ -1052,12 +1062,17 @@ pub fn get_free_disk_space(path: &Path) -> Result<u64, SecurityError> {
         )));
     }
 
-    Ok(free_bytes_available)
+    Ok((drive_letter, free_bytes_available, total_bytes))
 }
 
 #[cfg(not(windows))]
-pub fn get_free_disk_space(_path: &Path) -> Result<u64, SecurityError> {
-    Ok(100 * 1024 * 1024 * 1024) // 100 GB mock for non-Windows
+pub fn get_disk_space_summary(_path: &Path) -> Result<(Option<String>, u64, u64), SecurityError> {
+    Ok((None, 100 * 1024 * 1024 * 1024, 500 * 1024 * 1024 * 1024))
+}
+
+/// Returns the free disk space available in bytes at the specified path.
+pub fn get_free_disk_space(path: &Path) -> Result<u64, SecurityError> {
+    get_disk_space_summary(path).map(|(_, free, _)| free)
 }
 
 fn is_generic_windows_account_name(name: &str) -> bool {
@@ -1816,7 +1831,10 @@ mod tests {
         // Recovery clears bootstrap.json cleanly without touching any user data files.
         assert!(DataRoot::reset_bootstrap_to_default_at(&default_root).unwrap());
         assert_eq!(DataRoot::read_bootstrap(&default_root).unwrap(), None);
-        assert!(sentinel.exists(), "existing user data must never be deleted");
+        assert!(
+            sentinel.exists(),
+            "existing user data must never be deleted"
+        );
 
         let resolved = DataRoot::resolve_active_with_default_root(&default_root).unwrap();
         assert!(resolved.is_default);

@@ -48,7 +48,7 @@ function CapabilityDetailsDrawer({
             {report.ffmpeg.ffprobe_version}
           </div>
           <div>
-            {t('components.detail', undefined, locale)} Encoders in build:{' '}
+            {t('components.detail', undefined, locale)} encoders_in_build:{' '}
             {report.ffmpeg.hardware_encoders_available.length > 0
               ? report.ffmpeg.hardware_encoders_available.join(', ')
               : 'none'}
