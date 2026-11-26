@@ -150,6 +150,18 @@ describe('Security Baseline Guard', () => {
     );
     expect(diagnosticsSrc).toMatch(/save\(\{[\s\S]*extensions:\s*\['txt'\]/);
     expect(diagnosticsSrc).not.toMatch(/\bopen\s*\(/);
+
+    // Defense-in-depth: verify frontend openUrl calls strictly use validated YouTube watch URL builder
+    const openerUsers = uiFiles.filter((f) =>
+      fs.readFileSync(f, 'utf8').includes('@tauri-apps/plugin-opener')
+    );
+    expect(openerUsers.map((f) => path.basename(f))).toEqual(['RangePickerView.tsx']);
+    const rangePickerSrc = fs.readFileSync(
+      path.join(srcRoot, 'components/RangePickerView.tsx'),
+      'utf8'
+    );
+    expect(rangePickerSrc).toContain('buildAllowedYouTubeWatchUrl(');
+    expect(rangePickerSrc).toMatch(/openUrl\(watchUrl\)/);
   });
 
   it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {
