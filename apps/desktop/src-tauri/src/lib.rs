@@ -97,6 +97,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::cancel_job,
             commands::retry_job,
             commands::delete_project_download_data,
+            commands::get_project_media,
+            commands::save_composition,
             dev_commands::dev_get_system_info,
             dev_commands::dev_reset_workspace,
             dev_commands::dev_run_fake_sidecar,
@@ -162,6 +164,8 @@ pub fn export_typescript_bindings() -> Result<(), String> {
             commands::cancel_job,
             commands::retry_job,
             commands::delete_project_download_data,
+            commands::get_project_media,
+            commands::save_composition,
         ]);
     let bindings_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
@@ -247,6 +251,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::cancel_job,
             commands::retry_job,
             commands::delete_project_download_data,
+            commands::get_project_media,
+            commands::save_composition,
         ])
 }
 
@@ -344,6 +350,16 @@ pub fn initialize_workspace_into_app(
     app.manage(store);
     app.manage(rec);
     app.manage(crash_state);
+
+    // Narrow runtime asset protocol directories strictly to workspace cache/ and projects/
+    // (covering custom DataRoot locations without ever exposing root, db, or logs/).
+    let cache_dir = root.join("cache");
+    let projects_dir = root.join("projects");
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let _ = std::fs::create_dir_all(&projects_dir);
+    let asset_scope = app.asset_protocol_scope();
+    let _ = asset_scope.allow_directory(&cache_dir, true);
+    let _ = asset_scope.allow_directory(&projects_dir, true);
 
     let ok_status = commands::WorkspaceStatus {
         is_initialized: true,

@@ -46,6 +46,14 @@ describe('Security Baseline Guard', () => {
     const frameSrcSources = frameSrcMatch![1]!.trim().split(/\s+/);
     expect(frameSrcSources).toEqual(['https://clipper-bridge.vercel.app']);
     expect(csp).not.toMatch(/frame-src[^;]*\*/);
+
+    // media-src must allow self + asset protocol strictly without wildcards
+    const mediaSrcMatch = csp.match(/media-src\s+([^;]+)/);
+    expect(mediaSrcMatch, 'media-src directive must be present').toBeTruthy();
+    const mediaSrcSources = mediaSrcMatch![1]!.trim().split(/\s+/);
+    expect(mediaSrcSources).toContain("'self'");
+    expect(mediaSrcSources).toContain('asset:');
+    expect(csp).not.toMatch(/media-src[^;]*\*/);
   });
 
   it('asserts devtools are disabled in release configuration', () => {
@@ -58,7 +66,7 @@ describe('Security Baseline Guard', () => {
     expect(conf.build?.devtools, 'build.devtools must not be enabled').not.toBe(true);
   });
 
-  it('asserts asset protocol scope is restricted strictly to the workspace directory', () => {
+  it('asserts asset protocol scope is restricted strictly to cache and projects dirs', () => {
     const content = fs.readFileSync(tauriConfPath, 'utf8');
     const conf = JSON.parse(content);
 
@@ -66,9 +74,17 @@ describe('Security Baseline Guard', () => {
     expect(assetProtocol, 'assetProtocol configuration must exist').toBeDefined();
     expect(assetProtocol.enable).toBe(true);
     expect(Array.isArray(assetProtocol.scope)).toBe(true);
+    expect(assetProtocol.scope).toEqual([
+      '$LOCALAPPDATA/ClipperHelper/cache/**',
+      '$LOCALAPPDATA/ClipperHelper/projects/**',
+      '$LOCALAPPDATA/ClipperHelper-Dev/cache/**',
+      '$LOCALAPPDATA/ClipperHelper-Dev/projects/**',
+    ]);
 
     for (const entry of assetProtocol.scope) {
-      expect(entry).toMatch(/^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper(-Dev)?[/\\]/);
+      expect(entry).toMatch(
+        /^(\$LOCALAPPDATA|%LOCALAPPDATA%)[/\\]ClipperHelper(-Dev)?[/\\](cache|projects)[/\\]\*\*$/
+      );
       expect(entry).not.toContain('..');
     }
   });

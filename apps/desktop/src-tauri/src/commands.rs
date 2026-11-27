@@ -20,13 +20,17 @@ use tauri_specta::Event;
 use tokio_util::sync::CancellationToken;
 
 use crate::capabilities::CapabilityReportView;
+use crate::composition::{
+    fps_to_rational, parse_and_validate_composition_for_save, write_project_composition_file,
+    CompositionV1,
+};
 use crate::crash::{self, CrashRecoveryStatus};
 use crate::diagnostics::{
     self, DiagnosticsReportBundle, DiagnosticsReportOptions, REQUIRED_DISK_MIN_BUFFER_BYTES,
 };
 use crate::download::{
-    compute_download_cache_key, compute_download_window, ProbeHandleCache,
-    DEFAULT_RANGE_HANDLE_SECONDS,
+    compute_download_cache_key, compute_download_window, probe_rational_fps_with_ffprobe,
+    ProbeHandleCache, DEFAULT_RANGE_HANDLE_SECONDS,
 };
 use crate::encoder::{self, EncoderStatusSnapshot};
 use crate::eta::EtaEstimator;
@@ -2044,6 +2048,315 @@ pub fn retry_job(app: tauri::AppHandle, job_id: String) -> Result<JobRecord, App
     Ok(job)
 }
 
+/// Metadata and validated workspace-relative playable paths returned to Editor v1.
+/// Never exposes arbitrary/unvalidated OS paths or accepts raw paths from the frontend.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct ProjectMediaInfo {
+    pub project_id: String,
+    pub playable_rel_path: Option<String>,
+    pub source_rel_path: String,
+    pub proxy_rel_path: Option<String>,
+    pub using_proxy: bool,
+    pub media_missing: bool,
+    pub proxy_missing: bool,
+    pub fps: f64,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub width: u32,
+    pub height: u32,
+    pub duration_ms: u32,
+    pub absolute_start_ms: u32,
+    pub handle_before_ms: u32,
+    pub handle_after_ms: u32,
+    pub composition_json: String,
+    pub composition_hash: Option<String>,
+    pub max_clip_seconds: u32,
+}
+
+/// Authoritative save response after canonicalizing and hashing `CompositionV1` in Rust.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct SaveCompositionOutcome {
+    pub project: ProjectRecord,
+    pub composition_json: String,
+    pub composition_hash: String,
+}
+
+fn load_project_composition_string(
+    ws_root: &Path,
+    store: &LocalStore,
+    project: &ProjectRecord,
+) -> Result<String, AppCommandError> {
+    if let Ok(Some(db_json)) = ProjectRepo::new(store).get_composition_json(&project.id) {
+        if !db_json.trim().is_empty() {
+            return Ok(db_json);
+        }
+    }
+    let rel_file = format!("projects/{}/composition.json", project.id);
+    if let Ok(abs_file) = security::resolve_workspace_path_with_root(ws_root, &rel_file) {
+        if abs_file.is_file() {
+            if let Ok(disk_json) = std::fs::read_to_string(&abs_file) {
+                if !disk_json.trim().is_empty() {
+                    return Ok(disk_json);
+                }
+            }
+        }
+    }
+    Err(AppCommandError::simple(
+        "E_TEMPLATE_INVALID",
+        "Proyek belum memiliki data komposisi media. Unduh ulang rentang klip terlebih dahulu."
+            .to_string(),
+        "No stored composition JSON for project".to_string(),
+    ))
+}
+
+async fn resolve_project_media_inner(
+    ws_root: &Path,
+    store: &LocalStore,
+    in_use: &InUseRegistry,
+    project_id: &str,
+    max_clip_seconds: u32,
+) -> Result<ProjectMediaInfo, AppCommandError> {
+    let project = ProjectRepo::new(store)
+        .get(project_id)
+        .map_err(|e| AppCommandError::simple("E_UNKNOWN", e.to_string(), e.to_string()))?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan.".to_string(),
+                "Project not found for get_project_media".to_string(),
+            )
+        })?;
+
+    let comp_json = load_project_composition_string(ws_root, store, &project)?;
+    let comp: CompositionV1 = serde_json::from_str(&comp_json).map_err(|e| {
+        AppCommandError::simple(
+            "E_TEMPLATE_INVALID",
+            "Data komposisi proyek tidak dapat dibaca.".to_string(),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+
+    let src = comp.sources.first().ok_or_else(|| {
+        AppCommandError::simple(
+            "E_TEMPLATE_INVALID",
+            "Proyek tidak memiliki sumber media.".to_string(),
+            "Composition sources empty".to_string(),
+        )
+    })?;
+
+    // Strict workspace path validation via single Rust resolver (rejects .., drive letters, symlink escapes)
+    let source_abs =
+        security::resolve_workspace_path_with_root(ws_root, &src.path).map_err(|e| {
+            AppCommandError::simple(
+                "E_TEMPLATE_INVALID",
+                "Path sumber media tidak berada dalam workspace aplikasi.".to_string(),
+                security::redact_sensitive_text(&e.to_string()),
+            )
+        })?;
+    let source_exists = source_abs.is_file();
+
+    let mut proxy_exists = false;
+    let proxy_rel_path = src.preview_path.clone();
+    let proxy_abs_opt = if let Some(ref proxy_rel) = proxy_rel_path {
+        let abs = security::resolve_workspace_path_with_root(ws_root, proxy_rel).map_err(|e| {
+            AppCommandError::simple(
+                "E_TEMPLATE_INVALID",
+                "Path pratinjau media tidak valid.".to_string(),
+                security::redact_sensitive_text(&e.to_string()),
+            )
+        })?;
+        proxy_exists = abs.is_file();
+        Some(abs)
+    } else {
+        None
+    };
+
+    let using_proxy = proxy_rel_path.is_some();
+    let proxy_missing = using_proxy && !proxy_exists;
+    let media_missing = !source_exists;
+
+    let (playable_rel_path, playable_abs_opt) = if using_proxy {
+        if proxy_exists {
+            (proxy_rel_path.clone(), proxy_abs_opt)
+        } else {
+            (None, None)
+        }
+    } else if source_exists {
+        (Some(src.path.clone()), Some(source_abs))
+    } else {
+        (None, None)
+    };
+
+    let (mut fps_num, mut fps_den) = fps_to_rational(src.fps);
+    if let Some(playable_abs) = playable_abs_opt {
+        let resolver = ComponentResolver::new(ws_root.to_path_buf(), store.clone(), in_use.clone());
+        if let Ok(ffprobe_res) = resolver.resolve_executable("ffmpeg", "ffprobe.exe") {
+            if let Some((probed_n, probed_d)) =
+                probe_rational_fps_with_ffprobe(&ffprobe_res.path, ws_root, &playable_abs).await
+            {
+                fps_num = probed_n;
+                fps_den = probed_d;
+            }
+        }
+    }
+
+    let handle_before_ms = project
+        .range_start_ms
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|s| (s.round() as u32).saturating_sub(src.absolute_start_ms))
+        .unwrap_or(0)
+        .min(src.duration_ms);
+    let abs_end_ms = src.absolute_start_ms.saturating_add(src.duration_ms);
+    let handle_after_ms = project
+        .range_end_ms
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|e| abs_end_ms.saturating_sub(e.round() as u32))
+        .unwrap_or(0)
+        .min(src.duration_ms);
+
+    Ok(ProjectMediaInfo {
+        project_id: project.id,
+        playable_rel_path,
+        source_rel_path: src.path.clone(),
+        proxy_rel_path,
+        using_proxy,
+        media_missing,
+        proxy_missing,
+        fps: src.fps,
+        fps_num,
+        fps_den,
+        width: src.width,
+        height: src.height,
+        duration_ms: src.duration_ms,
+        absolute_start_ms: src.absolute_start_ms,
+        handle_before_ms,
+        handle_after_ms,
+        composition_json: comp_json,
+        composition_hash: project.composition_hash,
+        max_clip_seconds,
+    })
+}
+
+fn save_composition_inner(
+    ws_root: &Path,
+    store: &LocalStore,
+    project_id: &str,
+    composition_json: &str,
+    max_clip_seconds: u32,
+) -> Result<SaveCompositionOutcome, AppCommandError> {
+    let existing = ProjectRepo::new(store)
+        .get(project_id)
+        .map_err(|e| AppCommandError::simple("E_UNKNOWN", e.to_string(), e.to_string()))?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan.".to_string(),
+                "Project not found for save_composition".to_string(),
+            )
+        })?;
+
+    let (parsed_new, canonical_json, comp_hash) =
+        parse_and_validate_composition_for_save(&existing.id, composition_json, max_clip_seconds)
+            .map_err(|e| {
+            let code = e.code();
+            let detail = security::redact_sensitive_text(&e.detail());
+            AppCommandError::simple(code, e.to_string(), detail)
+        })?;
+
+    // Verify stored source paths cannot be rewritten to arbitrary files outside project's media
+    let prev_json = load_project_composition_string(ws_root, store, &existing)?;
+    let prev_comp: CompositionV1 = serde_json::from_str(&prev_json).map_err(|e| {
+        AppCommandError::simple(
+            "E_TEMPLATE_INVALID",
+            "Komposisi awal proyek rusak.".to_string(),
+            e.to_string(),
+        )
+    })?;
+    if parsed_new.sources != prev_comp.sources {
+        return Err(AppCommandError::simple(
+            "E_TEMPLATE_INVALID",
+            "Daftar sumber media proyek tidak boleh diubah dari editor.".to_string(),
+            "Composition sources differ from server-stored sources".to_string(),
+        ));
+    }
+
+    for src in &parsed_new.sources {
+        security::resolve_workspace_path_with_root(ws_root, &src.path).map_err(|e| {
+            AppCommandError::simple(
+                "E_TEMPLATE_INVALID",
+                "Path sumber media tidak valid.".to_string(),
+                security::redact_sensitive_text(&e.to_string()),
+            )
+        })?;
+        if let Some(ref p) = src.preview_path {
+            security::resolve_workspace_path_with_root(ws_root, p).map_err(|e| {
+                AppCommandError::simple(
+                    "E_TEMPLATE_INVALID",
+                    "Path pratinjau media tidak valid.".to_string(),
+                    security::redact_sensitive_text(&e.to_string()),
+                )
+            })?;
+        }
+    }
+
+    write_project_composition_file(ws_root, &existing.id, &canonical_json).map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple("E_DISK_FULL", "Gagal menyimpan file komposisi proyek.", msg)
+    })?;
+
+    let updated = ProjectRepo::new(store)
+        .save_composition(&existing.id, &canonical_json, &comp_hash, "edited")
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?;
+
+    Ok(SaveCompositionOutcome {
+        project: updated,
+        composition_json: canonical_json,
+        composition_hash: comp_hash,
+    })
+}
+
+/// Returns validated workspace-relative playable source/proxy paths & metadata for Editor v1.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_project_media(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<ProjectMediaInfo, AppCommandError> {
+    let (ws_root, store, in_use) = deps_from_app(&app)?;
+    let cfg = get_preview_config();
+    resolve_project_media_inner(
+        &ws_root,
+        &store,
+        &in_use,
+        &project_id,
+        cfg.max_range_seconds,
+    )
+    .await
+}
+
+/// Validates and authoritatively persists an edited `CompositionV1` JSON payload (`status = 'edited'`),
+/// recomputing canonical JSON and SHA-256 `comp_hash` in Rust.
+#[tauri::command]
+#[specta::specta]
+pub fn save_composition(
+    app: tauri::AppHandle,
+    project_id: String,
+    composition_json: String,
+) -> Result<SaveCompositionOutcome, AppCommandError> {
+    let (ws_root, store, _) = deps_from_app(&app)?;
+    let cfg = get_preview_config();
+    save_composition_inner(
+        &ws_root,
+        &store,
+        &project_id,
+        &composition_json,
+        cfg.max_range_seconds,
+    )
+}
+
 /// Deletes cached source/proxy artifact files and composition payload for `project_id` while
 /// preserving the project metadata and saved range (`Hapus data unduhan`).
 #[tauri::command]
@@ -2106,6 +2419,7 @@ pub fn delete_project_download_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::url_intake;
 
     #[test]
     fn test_get_app_info() {
@@ -2185,5 +2499,246 @@ mod tests {
         missing.range_end_ms = None;
         let err_missing = validated_project_range_ms(&missing, 300).unwrap_err();
         assert_eq!(err_missing.code, "E_RANGE_INVALID");
+    }
+
+    fn seed_editor_project(
+        ws_root: &Path,
+        store: &LocalStore,
+        source_rel: &str,
+        proxy_rel: Option<&str>,
+    ) -> (ProjectRecord, CompositionV1) {
+        let parsed =
+            url_intake::parse_youtube_url("https://www.youtube.com/watch?v=aqz-KE-bpKQ").unwrap();
+        let info = ProbeInfo {
+            id: "aqz-KE-bpKQ".to_string(),
+            title: "Big Buck Bunny".to_string(),
+            channel: "Blender".to_string(),
+            duration_seconds: 600,
+            live_status: Some("not_live".to_string()),
+            availability: Some("public".to_string()),
+            playable_in_embed: true,
+            was_live: false,
+            is_live: false,
+            estimated_bytes_per_second: Some(1_000_000.0),
+            has_avc1_1080p: true,
+            preview_mode: probe::PreviewMode::Embed,
+        };
+        let repo = ProjectRepo::new(store);
+        let proj = repo.create_from_probe(&parsed, &info).unwrap();
+        let proj = repo.update_range(&proj.id, 15_000, 75_000).unwrap();
+
+        let comp: CompositionV1 = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "id": proj.id,
+            "canvas": { "width": 1080, "height": 1920, "fps": 60 },
+            "sources": [{
+                "id": "src-1",
+                "provider": "youtube",
+                "videoId": "aqz-KE-bpKQ",
+                "path": source_rel,
+                "previewPath": proxy_rel,
+                "absoluteStartMs": 10_000,
+                "durationMs": 70_000,
+                "width": 1920,
+                "height": 1080,
+                "fps": 59.94
+            }],
+            "timeline": [{
+                "id": "seg-1",
+                "sourceId": "src-1",
+                "inMs": 5_000,
+                "outMs": 65_000
+            }],
+            "layout": {
+                "mode": "fill",
+                "crop": { "x": 0.341797, "y": 0.0, "w": 0.316406, "h": 1.0 }
+            },
+            "captions": {
+                "enabled": false,
+                "status": "none",
+                "language": "id",
+                "words": [],
+                "edits": [],
+                "style": {
+                    "fontFamily": "Montserrat",
+                    "fontSizePct": 5.0,
+                    "weight": 700,
+                    "color": "#FFFFFF",
+                    "outlineColor": "#000000",
+                    "outlinePx": 2.0,
+                    "shadow": true,
+                    "positionAnchor": "bottom",
+                    "offsetYPct": 14.0,
+                    "maxWordsPerLine": 5,
+                    "maxLines": 2,
+                    "animation": "phrase",
+                    "highlightColor": "#FACC15",
+                    "uppercase": false
+                }
+            },
+            "overlays": [],
+            "audio": {
+                "gainDb": 0.0,
+                "normalize": { "enabled": false, "targetLufs": -14.0 }
+            },
+            "template": null,
+            "export": { "preset": "standard", "audioKbps": 192 }
+        }))
+        .unwrap();
+
+        let (canonical, hash) = crate::composition::canonicalize_and_hash(&comp).unwrap();
+        write_project_composition_file(ws_root, &proj.id, &canonical).unwrap();
+        let saved = repo
+            .save_composition(&proj.id, &canonical, &hash, "downloaded")
+            .unwrap();
+        (saved, comp)
+    }
+
+    #[tokio::test]
+    async fn test_get_project_media_relative_paths_proxy_and_missing_states() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = security::ensure_workspace_with_root(tmp.path()).unwrap();
+        let store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        let in_use = InUseRegistry::new();
+
+        let src_rel = "cache/source_demo.mp4";
+        let proxy_rel = "cache/proxies/proxy_demo.mp4";
+        std::fs::create_dir_all(ws.join("cache").join("proxies")).unwrap();
+        std::fs::write(ws.join(src_rel), b"ORIG").unwrap();
+        std::fs::write(ws.join(proxy_rel), b"PROXY").unwrap();
+
+        let (proj, _) = seed_editor_project(&ws, &store, src_rel, Some(proxy_rel));
+        let info = resolve_project_media_inner(&ws, &store, &in_use, &proj.id, 300)
+            .await
+            .unwrap();
+
+        assert_eq!(info.playable_rel_path.as_deref(), Some(proxy_rel));
+        assert!(info.using_proxy);
+        assert!(!info.media_missing);
+        assert!(!info.proxy_missing);
+        assert_eq!(info.fps_num, 60_000);
+        assert_eq!(info.fps_den, 1001);
+        assert_eq!(info.handle_before_ms, 5_000);
+        assert_eq!(info.handle_after_ms, 5_000);
+        assert!(!info.playable_rel_path.as_deref().unwrap().contains(':'));
+
+        // Missing proxy case -> flags proxy_missing cleanly
+        std::fs::remove_file(ws.join(proxy_rel)).unwrap();
+        let info_no_proxy = resolve_project_media_inner(&ws, &store, &in_use, &proj.id, 300)
+            .await
+            .unwrap();
+        assert!(info_no_proxy.proxy_missing);
+        assert!(info_no_proxy.playable_rel_path.is_none());
+
+        // Missing source cache -> flags media_missing cleanly
+        std::fs::remove_file(ws.join(src_rel)).unwrap();
+        let info_no_src = resolve_project_media_inner(&ws, &store, &in_use, &proj.id, 300)
+            .await
+            .unwrap();
+        assert!(info_no_src.media_missing);
+    }
+
+    #[test]
+    fn test_save_composition_validates_rejects_bad_inputs_and_persists_edited_hash() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = security::ensure_workspace_with_root(tmp.path()).unwrap();
+        let store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        let src_rel = "cache/source_demo.mp4";
+        std::fs::create_dir_all(ws.join("cache")).unwrap();
+        std::fs::write(ws.join(src_rel), b"ORIG").unwrap();
+
+        let (proj, mut comp) = seed_editor_project(&ws, &store, src_rel, None);
+        let orig_hash = proj.composition_hash.clone().unwrap();
+
+        // Malformed JSON rejected
+        let err_bad_json =
+            save_composition_inner(&ws, &store, &proj.id, "{not json", 300).unwrap_err();
+        assert_eq!(err_bad_json.code, "E_TEMPLATE_INVALID");
+
+        // Oversize > 1 MB rejected
+        let huge = " ".repeat(crate::composition::MAX_COMPOSITION_JSON_BYTES + 10);
+        let err_huge = save_composition_inner(&ws, &store, &proj.id, &huge, 300).unwrap_err();
+        assert_eq!(err_huge.code, "E_TEMPLATE_INVALID");
+
+        // Negative / out-of-frame crop rejected
+        let mut bad_crop = comp.clone();
+        bad_crop.layout = crate::composition::CompositionLayout::Fill {
+            crop: crate::composition::Rect {
+                x: -0.1,
+                y: 0.0,
+                w: 0.5,
+                h: 1.0,
+            },
+        };
+        let err_crop = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&bad_crop).unwrap(),
+            300,
+        )
+        .unwrap_err();
+        assert_eq!(err_crop.code, "E_TEMPLATE_INVALID");
+
+        // Total duration > max_clip_seconds rejected cleanly with E_RANGE_TOO_LONG
+        let mut over_cap = comp.clone();
+        over_cap.timeline[0].in_ms = 0;
+        over_cap.timeline[0].out_ms = 65_000;
+        let err_cap = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&over_cap).unwrap(),
+            60,
+        )
+        .unwrap_err();
+        assert_eq!(err_cap.code, "E_RANGE_TOO_LONG");
+
+        // Less than 1 frame rejected cleanly with E_RANGE_INVALID
+        let mut sub_frame = comp.clone();
+        sub_frame.timeline[0].in_ms = 5_000;
+        sub_frame.timeline[0].out_ms = 5_005;
+        let err_frame = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&sub_frame).unwrap(),
+            300,
+        )
+        .unwrap_err();
+        assert_eq!(err_frame.code, "E_RANGE_INVALID");
+
+        // Tampered source path rejected
+        let mut forged_src = comp.clone();
+        forged_src.sources[0].path = "cache/other.mp4".to_string();
+        let err_src = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&forged_src).unwrap(),
+            300,
+        )
+        .unwrap_err();
+        assert_eq!(err_src.code, "E_TEMPLATE_INVALID");
+
+        // Valid edit -> recomputes hash, updates status='edited', and survives crash/reopen
+        comp.timeline[0].in_ms = 6_000;
+        comp.timeline[0].out_ms = 40_000;
+        let out = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&comp).unwrap(),
+            300,
+        )
+        .unwrap();
+        assert_eq!(out.project.status, "edited");
+        assert_ne!(out.composition_hash, orig_hash);
+
+        let store_reopened = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        let loaded = load_project_composition_string(&ws, &store_reopened, &out.project).unwrap();
+        let loaded_comp: CompositionV1 = serde_json::from_str(&loaded).unwrap();
+        assert_eq!(loaded_comp.timeline[0].in_ms, 6_000);
+        assert_eq!(loaded_comp.timeline[0].out_ms, 40_000);
     }
 }

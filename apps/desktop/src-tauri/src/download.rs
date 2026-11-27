@@ -487,6 +487,56 @@ pub async fn verify_media_with_ffprobe_with_env(
     validate_ffprobe_output(&result.stdout, size_on_disk, expected_duration_secs)
 }
 
+fn parse_rational_pair(raw: Option<&str>) -> Option<(u32, u32)> {
+    let s = raw?.trim();
+    if let Some((num_s, den_s)) = s.split_once('/') {
+        let num: u32 = num_s.parse().ok()?;
+        let den: u32 = den_s.parse().ok()?;
+        if num > 0 && den > 0 {
+            return Some((num, den));
+        }
+    }
+    None
+}
+
+/// Runs a lightweight `ffprobe` video-stream check to obtain exact rational FPS (`60000/1001` vs `60/1`).
+pub async fn probe_rational_fps_with_ffprobe(
+    ffprobe_bin: &Path,
+    ws_root: &Path,
+    media_path: &Path,
+) -> Option<(u32, u32)> {
+    let env = SidecarEnv::for_component("ffmpeg", ws_root);
+    env.ensure_writable_dirs().ok()?;
+    let args = vec![
+        "-v".to_string(),
+        "quiet".to_string(),
+        "-select_streams".to_string(),
+        "v:0".to_string(),
+        "-print_format".to_string(),
+        "json".to_string(),
+        "-show_streams".to_string(),
+        media_path.to_string_lossy().to_string(),
+    ];
+    let spec = SidecarSpec::new(ffprobe_bin.to_path_buf(), args)
+        .with_component_env(&env)
+        .ok()?
+        .timeout(Duration::from_secs(10))
+        .max_total_bytes(512 * 1024);
+
+    let res = SidecarSupervisor::new()
+        .run_to_completion(&spec, None)
+        .await
+        .ok()?;
+    let parsed: FfprobeRawOutput = serde_json::from_slice(&res.stdout).ok()?;
+    let video = parsed
+        .streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"))
+        .or_else(|| parsed.streams.first())?;
+    parse_rational_pair(video.avg_frame_rate.as_deref())
+        .or_else(|| parse_rational_pair(video.r_frame_rate.as_deref()))
+}
+
 /// Classifies yt-dlp / FFmpeg download stderr into typed `DownloadError` taxonomy (Part 2h).
 pub fn classify_download_sidecar_failure(err: SidecarError) -> DownloadError {
     match err {
