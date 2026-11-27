@@ -369,6 +369,25 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Opens a stored project's canonical YouTube watch URL in the user's system browser.
+   * Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
+   * from the stored, validated `source_video_id`.
+   */
+  async openVideoInBrowser(
+    projectId: string,
+    startSeconds: number | null
+  ): Promise<Result<string, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('open_video_in_browser', { projectId, startSeconds }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/

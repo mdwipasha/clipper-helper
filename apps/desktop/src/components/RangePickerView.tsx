@@ -1,11 +1,9 @@
 import { SupportedLocale, t } from '@clipper-helper/i18n';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppCommandError, commands, PreviewConfigResponse, ProjectRecord } from '../ipc/bindings';
 import { BridgeFallbackInfo, BridgePreviewState } from '../utils/bridgeClient';
 import { formatDurationHms } from '../utils/format';
 import {
-  buildAllowedYouTubeWatchUrl,
   estimateDownloadSeconds,
   formatEstimateMinutes,
   formatTimecodeInput,
@@ -254,8 +252,7 @@ export function RangePickerView({
   };
 
   const handleOpenInBrowser = async () => {
-    const watchUrl = buildAllowedYouTubeWatchUrl(project.source_video_id, parsedStart ?? 0);
-    await openUrl(watchUrl).catch(() => undefined);
+    await commands.openVideoInBrowser(project.id, parsedStart ?? 0).catch(() => undefined);
   };
 
   const updateTimelineFromPointer = (clientX: number) => {

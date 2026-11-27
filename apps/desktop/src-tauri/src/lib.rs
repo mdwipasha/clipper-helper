@@ -84,6 +84,7 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
             dev_commands::dev_get_system_info,
             dev_commands::dev_reset_workspace,
             dev_commands::dev_run_fake_sidecar,
@@ -141,6 +142,7 @@ pub fn export_typescript_bindings() -> Result<(), String> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
         ]);
     let bindings_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
@@ -218,6 +220,7 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
         ])
 }
 

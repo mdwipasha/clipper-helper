@@ -1393,6 +1393,87 @@ pub fn open_logs_folder(app: tauri::AppHandle) -> Result<(), AppCommandError> {
         })
 }
 
+/// Builds a strictly validated YouTube watch URL (`https://www.youtube.com/watch?v=<id>&t=<n>s`)
+/// from a stored project's provider and 11-char video ID.
+pub fn build_youtube_watch_url_from_stored(
+    provider: &str,
+    video_id: &str,
+    start_seconds: Option<f64>,
+) -> Result<String, AppCommandError> {
+    if provider != "youtube" {
+        return Err(AppCommandError::simple(
+            "E_YT_URL_INVALID",
+            "Tautan eksternal hanya didukung untuk sumber YouTube.".to_string(),
+            format!("Unsupported provider for browser open: {}", provider),
+        ));
+    }
+    let valid_id = video_id.len() == 11
+        && video_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !valid_id {
+        return Err(AppCommandError::simple(
+            "E_YT_URL_INVALID",
+            "ID video YouTube tersimpan tidak valid.".to_string(),
+            "Invalid stored YouTube video ID".to_string(),
+        ));
+    }
+    match start_seconds {
+        Some(secs) if secs.is_finite() && secs >= 0.0 => {
+            let clamped = (secs.floor() as u64).min(86_400);
+            Ok(format!(
+                "https://www.youtube.com/watch?v={}&t={}s",
+                video_id, clamped
+            ))
+        }
+        _ => Ok(format!("https://www.youtube.com/watch?v={}", video_id)),
+    }
+}
+
+/// Opens a stored project's canonical YouTube watch URL in the user's system browser.
+/// Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
+/// from the stored, validated `source_video_id`.
+#[tauri::command]
+#[specta::specta]
+pub fn open_video_in_browser(
+    app: tauri::AppHandle,
+    project_id: String,
+    start_seconds: Option<f64>,
+) -> Result<String, AppCommandError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let (_, store, _) = deps_from_app(&app)?;
+    let project = ProjectRepo::new(&store)
+        .get(&project_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan.".to_string(),
+                "Project not found for open_video_in_browser".to_string(),
+            )
+        })?;
+
+    let url = build_youtube_watch_url_from_stored(
+        &project.source_provider,
+        &project.source_video_id,
+        start_seconds,
+    )?;
+
+    app.opener().open_url(&url, None::<&str>).map_err(|e| {
+        AppCommandError::simple(
+            "E_UNKNOWN",
+            format!("Gagal membuka video di browser: {}", e),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+
+    Ok(url)
+}
+
 struct ProbeTokenCleanup {
     registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
     request_id: String,
@@ -1655,6 +1736,31 @@ mod tests {
         assert_eq!(
             compute_preinstall_required_bytes(sum),
             (150 * 1024 * 1024u64) + (1024 * 1024 * 1024u64)
+        );
+    }
+
+    #[test]
+    fn test_build_youtube_watch_url_from_stored_validates_id_and_clamps_time() {
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(125.9)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=125s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(0.0)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=0s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(999_999.0)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=86400s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", None).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ"
+        );
+        assert!(build_youtube_watch_url_from_stored("local_file", "WufkeDaJisQ", None).is_err());
+        assert!(build_youtube_watch_url_from_stored("youtube", "bad-id!", None).is_err());
+        assert!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ&evil=1", None).is_err()
         );
     }
 }

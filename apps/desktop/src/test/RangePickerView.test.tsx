@@ -1,7 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { RangePickerView } from '../components/RangePickerView';
 import { commands, PreviewConfigResponse, ProjectRecord } from '../ipc/bindings';
 import {
@@ -17,10 +16,6 @@ import {
   validateClipRange,
 } from '../utils/timecode';
 
-vi.mock('@tauri-apps/plugin-opener', () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../ipc/bindings', async () => {
   const actual = await vi.importActual<typeof import('../ipc/bindings')>('../ipc/bindings');
   return {
@@ -28,6 +23,10 @@ vi.mock('../ipc/bindings', async () => {
     commands: {
       ...actual.commands,
       updateProjectRange: vi.fn(),
+      openVideoInBrowser: vi.fn().mockResolvedValue({
+        status: 'ok',
+        data: 'https://www.youtube.com/watch?v=9s6imDGjy08&t=120s',
+      }),
       recordPreviewEvent: vi.fn().mockResolvedValue({
         status: 'ok',
         data: { embed_disabled_count: 0, fallback_count: 0, config_error_count: 0 },
@@ -427,7 +426,7 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     expect(screen.queryByTestId('preview-error-banner')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Buka video di browser' }));
-    expect(openUrl).toHaveBeenCalledWith('https://www.youtube.com/watch?v=9s6imDGjy08&t=120');
+    expect(commands.openVideoInBrowser).toHaveBeenCalledWith(proj.id, 120);
   });
 
   it('distinguishes owner-restricted 101/150 (no error banner) from config error 153 (E_PREVIEW_CONFIG banner)', async () => {

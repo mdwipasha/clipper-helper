@@ -92,10 +92,6 @@ describe('Security Baseline Guard', () => {
           { path: '$LOCALDATA/ClipperHelper-Dev/logs' },
         ],
       },
-      {
-        identifier: 'opener:allow-open-url',
-        allow: [{ url: 'https://www.youtube.com/watch?v=*' }],
-      },
       'dialog:allow-open',
       'dialog:allow-save',
     ]);
@@ -106,12 +102,8 @@ describe('Security Baseline Guard', () => {
       expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
       expect(permName).not.toBe('dialog:default');
       expect(permName).not.toBe('opener:default');
-      expect(permName).not.toMatch(/opener:allow-(default-urls|reveal-item-in-dir)/);
+      expect(permName).not.toMatch(/opener:allow-(default-urls|open-url|reveal-item-in-dir)/);
       expect(permName).not.toMatch(/dev_/);
-      if (permName === 'opener:allow-open-url') {
-        expect(typeof perm).toBe('object');
-        expect(perm.allow).toEqual([{ url: 'https://www.youtube.com/watch?v=*' }]);
-      }
     }
 
     // Defense-in-depth: verify frontend dialog plugin calls are strictly directory-open and .txt-save only.
@@ -151,17 +143,16 @@ describe('Security Baseline Guard', () => {
     expect(diagnosticsSrc).toMatch(/save\(\{[\s\S]*extensions:\s*\['txt'\]/);
     expect(diagnosticsSrc).not.toMatch(/\bopen\s*\(/);
 
-    // Defense-in-depth: verify frontend openUrl calls strictly use validated YouTube watch URL builder
+    // Defense-in-depth: frontend must NEVER import @tauri-apps/plugin-opener (external URLs open strictly via Rust open_video_in_browser)
     const openerUsers = uiFiles.filter((f) =>
       fs.readFileSync(f, 'utf8').includes('@tauri-apps/plugin-opener')
     );
-    expect(openerUsers.map((f) => path.basename(f))).toEqual(['RangePickerView.tsx']);
+    expect(openerUsers).toEqual([]);
     const rangePickerSrc = fs.readFileSync(
       path.join(srcRoot, 'components/RangePickerView.tsx'),
       'utf8'
     );
-    expect(rangePickerSrc).toContain('buildAllowedYouTubeWatchUrl(');
-    expect(rangePickerSrc).toMatch(/openUrl\(watchUrl\)/);
+    expect(rangePickerSrc).toContain('commands.openVideoInBrowser(');
   });
 
   it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {
@@ -175,7 +166,7 @@ describe('Security Baseline Guard', () => {
 
     // Production commands must appear in release builder without any dev_ commands
     expect(libContent).toMatch(
-      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status[\s\S]*?commands::install_all_required_components[\s\S]*?commands::generate_diagnostics_report[\s\S]*?commands::open_logs_folder\s*,?\s*\]\)/
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?commands::get_app_info[\s\S]*?commands::get_workspace_status[\s\S]*?commands::install_all_required_components[\s\S]*?commands::generate_diagnostics_report[\s\S]*?commands::open_logs_folder[\s\S]*?commands::open_video_in_browser[\s\S]*?\]\)/
     );
     expect(libContent).not.toMatch(/#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?dev_/);
 
