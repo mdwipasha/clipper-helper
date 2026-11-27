@@ -15,6 +15,7 @@ pub mod logging;
 pub mod manifest;
 pub mod net;
 pub mod probe;
+pub mod progress_parser;
 pub mod render;
 pub mod resolver;
 pub mod security;
