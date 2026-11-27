@@ -5,6 +5,7 @@ pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
 pub mod diagnostics;
+pub mod download;
 pub mod encoder;
 pub mod eta;
 pub mod hardware;
