@@ -219,10 +219,40 @@ fn handle_ffmpeg_proxy(args: &[String]) {
     write_dummy_media(&out_path);
 }
 
+fn handle_ffmpeg_thumbnails(args: &[String]) {
+    let scenario =
+        env::var("CLIPPER_FAKE_THUMBS_SCENARIO").unwrap_or_else(|_| "success".to_string());
+    if scenario == "fail" {
+        eprintln!("Error opening thumbnail output");
+        std::process::exit(1);
+    }
+    let pattern = args.last().cloned().unwrap_or_default();
+    let parent = PathBuf::from(&pattern)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&parent);
+
+    let mut out = std::io::stdout().lock();
+    for (idx, us) in [2_000_000u64, 4_000_000, 6_000_000, 8_000_000, 10_000_000]
+        .iter()
+        .enumerate()
+    {
+        let _ = writeln!(out, "out_time_us={}", us);
+        let _ = writeln!(out, "progress=continue");
+        let _ = out.flush();
+        let file = parent.join(format!("thumb_{:04}.jpg", idx + 1));
+        let _ = std::fs::write(file, b"\xFF\xD8\xFF\xE0FAKE_JPEG_FRAME");
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    let _ = writeln!(out, "progress=end");
+    let _ = out.flush();
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Production-flag dispatch for M1.4 tests using real CLI argument arrays:
+    // Production-flag dispatch for M1.4/M1.5 tests using real CLI argument arrays:
     if args.iter().any(|a| a == "-J") {
         handle_ytdlp_probe(&args);
         return;
@@ -233,6 +263,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "-show_streams") {
         handle_ffprobe(&args);
+        return;
+    }
+    if args.iter().any(|a| a.contains("thumb_%04d.jpg")) {
+        handle_ffmpeg_thumbnails(&args);
         return;
     }
     if args.iter().any(|a| a == "pipe:1") {

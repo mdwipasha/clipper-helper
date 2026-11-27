@@ -26,6 +26,7 @@ pub mod security;
 pub mod sidecars;
 pub mod speech;
 pub mod store;
+pub mod thumbnails;
 pub mod updater;
 pub mod url_intake;
 
@@ -59,6 +60,7 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
             commands::ProbeProgressEvent,
+            commands::ThumbnailProgressEvent,
             jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
@@ -99,6 +101,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::delete_project_download_data,
             commands::get_project_media,
             commands::save_composition,
+            commands::generate_project_thumbnails,
+            commands::cancel_project_thumbnails,
             dev_commands::dev_get_system_info,
             dev_commands::dev_reset_workspace,
             dev_commands::dev_run_fake_sidecar,
@@ -126,6 +130,7 @@ pub fn export_typescript_bindings() -> Result<(), String> {
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
             commands::ProbeProgressEvent,
+            commands::ThumbnailProgressEvent,
             jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
@@ -166,6 +171,8 @@ pub fn export_typescript_bindings() -> Result<(), String> {
             commands::delete_project_download_data,
             commands::get_project_media,
             commands::save_composition,
+            commands::generate_project_thumbnails,
+            commands::cancel_project_thumbnails,
         ]);
     let bindings_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
@@ -213,6 +220,7 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
             commands::ProbeProgressEvent,
+            commands::ThumbnailProgressEvent,
             jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
@@ -253,6 +261,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::delete_project_download_data,
             commands::get_project_media,
             commands::save_composition,
+            commands::generate_project_thumbnails,
+            commands::cancel_project_thumbnails,
         ])
 }
 
@@ -412,6 +422,7 @@ pub fn run() {
             app.manage(commands::ManifestCacheState::default());
             app.manage(commands::WebViewErrorRateLimiter::default());
             app.manage(commands::ProbeCancelRegistry::default());
+            app.manage(commands::ThumbnailCancelRegistry::default());
             app.manage(jobs::JobCoordinator::default());
             app.manage(download::ProbeHandleCache::default());
 

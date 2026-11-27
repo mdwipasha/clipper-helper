@@ -49,6 +49,7 @@ use crate::store::{
     ArtifactRepo, ErrorEventRow, JobRecord, JobRepo, LocalStore, NewErrorEvent,
     PreviewCountersSnapshot, ProjectRecord, ProjectRepo,
 };
+use crate::thumbnails::{self, ThumbnailError, ThumbnailManifest};
 use crate::WorkspaceState;
 
 pub const DEFAULT_PRODUCTION_MANIFEST_URL: &str =
@@ -65,6 +66,20 @@ pub struct WebViewErrorRateLimiter(pub Arc<Mutex<VecDeque<Instant>>>);
 /// Managed state tracking in-flight YouTube probe cancellation tokens by `request_id`.
 #[derive(Default, Clone)]
 pub struct ProbeCancelRegistry(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
+
+/// Managed state tracking in-flight background thumbnail extraction tokens by `project_id`.
+#[derive(Default, Clone)]
+pub struct ThumbnailCancelRegistry(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
+
+/// Typed progress event emitted while generating timeline filmstrip thumbnails.
+#[derive(Serialize, Deserialize, Type, Event, Debug, Clone)]
+pub struct ThumbnailProgressEvent {
+    pub project_id: String,
+    pub percent: f64,
+    pub eta_seconds: Option<f64>,
+    pub done_secs: f64,
+    pub total_secs: f64,
+}
 
 /// Typed progress event emitted for `generate` / `probe` operations (`<= 4/s`, 2 s heartbeat).
 #[derive(Serialize, Deserialize, Type, Event, Debug, Clone)]
@@ -2355,6 +2370,102 @@ pub fn save_composition(
         &composition_json,
         cfg.max_range_seconds,
     )
+}
+
+/// Generates (or returns cached) 2 s timeline filmstrip thumbnails for `project_id` via `ffmpeg`.
+#[tauri::command]
+#[specta::specta]
+pub async fn generate_project_thumbnails(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<ThumbnailManifest, AppCommandError> {
+    let (ws_root, store, in_use) = deps_from_app(&app)?;
+    let cfg = get_preview_config();
+    let media = resolve_project_media_inner(
+        &ws_root,
+        &store,
+        &in_use,
+        &project_id,
+        cfg.max_range_seconds,
+    )
+    .await?;
+
+    let target_rel = media.playable_rel_path.ok_or_else(|| {
+        AppCommandError::simple(
+            "E_UNKNOWN",
+            "Media video tidak tersedia untuk membuat thumbnail timeline.".to_string(),
+            "Playable media missing for thumbnail extraction".to_string(),
+        )
+    })?;
+
+    let registry = app
+        .try_state::<ThumbnailCancelRegistry>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+    let token = CancellationToken::new();
+    if let Ok(mut guard) = registry.lock() {
+        if let Some(prev) = guard.insert(project_id.clone(), token.clone()) {
+            prev.cancel();
+        }
+    }
+
+    let resolver = ComponentResolver::new(ws_root.clone(), store.clone(), in_use);
+    let app_emit = app.clone();
+    let pid_emit = project_id.clone();
+
+    let res = thumbnails::run_thumbnails_stage(
+        &ws_root,
+        &resolver,
+        &target_rel,
+        media.duration_ms,
+        &[],
+        &token,
+        move |p| {
+            let _ = ThumbnailProgressEvent {
+                project_id: pid_emit.clone(),
+                percent: p.percent,
+                eta_seconds: p.eta_seconds,
+                done_secs: p.done_secs,
+                total_secs: p.total_secs,
+            }
+            .emit(&app_emit);
+        },
+    )
+    .await;
+
+    if let Ok(mut guard) = registry.lock() {
+        guard.remove(&project_id);
+    }
+
+    res.map_err(|err| {
+        let code = err.error_code();
+        let detail = security::redact_sensitive_text(&err.to_string());
+        if !matches!(err, ThumbnailError::Cancelled) {
+            record_error(&store, code, "thumbnails", &detail, "");
+        }
+        AppCommandError::simple(code, detail.clone(), detail)
+    })
+}
+
+/// Cancels an active background filmstrip thumbnail extraction for `project_id`.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_project_thumbnails(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<bool, AppCommandError> {
+    let Some(reg) = app.try_state::<ThumbnailCancelRegistry>() else {
+        return Ok(false);
+    };
+    let Ok(guard) = reg.0.lock() else {
+        return Ok(false);
+    };
+    if let Some(tok) = guard.get(&project_id) {
+        tok.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 /// Deletes cached source/proxy artifact files and composition payload for `project_id` while
