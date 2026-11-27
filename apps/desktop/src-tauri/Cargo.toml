@@ -45,7 +45,7 @@ uuid = { version = "=1.18.1", features = ["v4"] }
 url = "=2.5.9"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.59.0", features = [
+windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
