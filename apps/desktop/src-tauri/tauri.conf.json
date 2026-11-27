@@ -12,11 +12,16 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com; frame-src https://clipper-bridge.vercel.app; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' asset:",
+      "csp": "default-src 'self'; connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com; frame-src https://clipper-bridge.vercel.app; img-src 'self' asset: http://asset.localhost https://asset.localhost data:; media-src 'self' asset: http://asset.localhost https://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' asset: http://asset.localhost https://asset.localhost",
       "capabilities": ["default"],
       "assetProtocol": {
         "enable": true,
-        "scope": ["$LOCALAPPDATA/ClipperHelper/**", "$LOCALAPPDATA/ClipperHelper-Dev/**"]
+        "scope": [
+          "$LOCALAPPDATA/ClipperHelper/cache/**",
+          "$LOCALAPPDATA/ClipperHelper/projects/**",
+          "$LOCALAPPDATA/ClipperHelper-Dev/cache/**",
+          "$LOCALAPPDATA/ClipperHelper-Dev/projects/**"
+        ]
       }
     },
     "windows": [

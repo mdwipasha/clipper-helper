@@ -434,6 +434,14 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
       range_start_ms: 10_000,
       range_end_ms: 70_000,
     });
+    const pEdited = buildSampleProject({
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      title: 'Klip Diedit',
+      status: 'edited',
+      range_start_ms: 10_000,
+      range_end_ms: 70_000,
+      composition_hash: 'b'.repeat(64),
+    });
     const jobs = [
       {
         id: 'job-int-1',
@@ -453,7 +461,7 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
     ];
     vi.mocked(commands.listRecentProjects).mockResolvedValue({
       status: 'ok',
-      data: [pDownloaded, pInterrupted],
+      data: [pDownloaded, pEdited, pInterrupted],
     });
     vi.mocked(commands.deleteProjectDownloadData).mockResolvedValue({
       status: 'ok',
@@ -482,6 +490,7 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
       expect(screen.getByTestId(`project-status-badge-${pDownloaded.id}`)).toHaveTextContent(
         'Siap diedit'
       );
+      expect(screen.getByTestId(`project-status-badge-${pEdited.id}`)).toHaveTextContent('Diedit');
       expect(screen.getByTestId(`project-status-badge-${pInterrupted.id}`)).toHaveTextContent(
         'Terhenti'
       );

@@ -71,13 +71,13 @@ Campaign marketplace / discovery; submitting or tracking posts; live capture; so
 ### Editor
 | ID | Pri | Requirement |
 |----|-----|-------------|
-| FR-EDIT-1 | M | Trim with in/out handles, frame-level nudge, looped playback. |
-| FR-EDIT-2 | M | Layouts: **fill** (draggable crop), **blur-fit**, **split** (two regions, e.g. gameplay + facecam). Live preview. |
+| FR-EDIT-1 | M | Trim with in/out handles, frame-level nudge, looped playback. **M1.5: implemented** — trim handles, ±frame/±1 s nudge, I/O keyboard shortcuts, looped playback. |
+| FR-EDIT-2 | M | Layouts: **fill** (draggable crop), **blur-fit**, **split** (two regions, e.g. gameplay + facecam). Live preview. **M1.5: fill mode implemented** — 9:16 draggable crop with pan/zoom and overview canvas; blur_fit/split deferred. |
 | FR-EDIT-3 | M | Captions from trimmed clip: trigger "Buat caption" (separate free local operation) or auto-prompt on opening Captions tab; edit text/timing, style from template with overrides, language switch. Animation modes: 'none', 'phrase' (line-level reveal), 'word_highlight', 'pop'. Per-word animations ('word_highlight' and 'pop') require words with timingSource 'dtw'; when words lack 'dtw', both render as 'phrase'. |
 | FR-EDIT-4 | M | Logo/watermark overlay (position, size, opacity) and fixed text overlay. |
 | FR-EDIT-5 | S | Cut out a middle section; remove silences. |
 | FR-EDIT-6 | S | Audio gain + loudness normalization. |
-| FR-EDIT-7 | M | Undo/redo, autosave, crash recovery. |
+| FR-EDIT-7 | M | Undo/redo, autosave, crash recovery. **M1.5: implemented** — command-pattern undo/redo (200-step stack), debounced autosave (1 s), on-blur/close save, crash recovery via last-saved composition, unsaved-changes guard. |
 | FR-EDIT-8 | C | Face-aware auto reframe (local ONNX) — post-MVP. |
 
 ### Captions

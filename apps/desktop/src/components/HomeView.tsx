@@ -410,14 +410,16 @@ export function HomeView({
               const isInterrupted = latestJob?.status === 'interrupted';
               const badgeKey = isInterrupted
                 ? 'homeStatus.interrupted'
-                : proj.status === 'downloaded'
-                  ? 'homeStatus.downloaded'
-                  : proj.status === 'ranged'
-                    ? 'homeStatus.ranged'
-                    : 'homeStatus.probed';
+                : proj.status === 'edited'
+                  ? 'homeStatus.edited'
+                  : proj.status === 'downloaded'
+                    ? 'homeStatus.downloaded'
+                    : proj.status === 'ranged'
+                      ? 'homeStatus.ranged'
+                      : 'homeStatus.probed';
               const badgeTone = isInterrupted
                 ? 'bg-amber-950/70 text-amber-300 border-amber-700'
-                : proj.status === 'downloaded'
+                : proj.status === 'downloaded' || proj.status === 'edited'
                   ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700'
                   : proj.status === 'ranged'
                     ? 'bg-indigo-950/70 text-indigo-300 border-indigo-700'
@@ -474,7 +476,7 @@ export function HomeView({
                         </button>
                       )}
 
-                      {proj.status === 'downloaded' && (
+                      {(proj.status === 'downloaded' || proj.status === 'edited') && (
                         <button
                           type="button"
                           data-testid={`delete-download-data-${proj.id}`}

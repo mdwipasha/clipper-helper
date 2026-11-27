@@ -463,6 +463,62 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Returns validated workspace-relative playable source/proxy paths & metadata for Editor v1.
+   */
+  async getProjectMedia(projectId: string): Promise<Result<ProjectMediaInfo, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_project_media', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Validates and authoritatively persists an edited `CompositionV1` JSON payload (`status = 'edited'`),
+   * recomputing canonical JSON and SHA-256 `comp_hash` in Rust.
+   */
+  async saveComposition(
+    projectId: string,
+    compositionJson: string
+  ): Promise<Result<SaveCompositionOutcome, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_composition', { projectId, compositionJson }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Generates (or returns cached) 2 s timeline filmstrip thumbnails for `project_id` via `ffmpeg`.
+   */
+  async generateProjectThumbnails(
+    projectId: string
+  ): Promise<Result<ThumbnailManifest, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('generate_project_thumbnails', { projectId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Cancels an active background filmstrip thumbnail extraction for `project_id`.
+   */
+  async cancelProjectThumbnails(projectId: string): Promise<Result<boolean, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('cancel_project_thumbnails', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -471,10 +527,12 @@ export const events = __makeEvents__<{
   componentInstallProgressEvent: ComponentInstallProgressEvent;
   jobEventPayload: JobEventPayload;
   probeProgressEvent: ProbeProgressEvent;
+  thumbnailProgressEvent: ThumbnailProgressEvent;
 }>({
   componentInstallProgressEvent: 'component-install-progress-event',
   jobEventPayload: 'job-event-payload',
   probeProgressEvent: 'probe-progress-event',
+  thumbnailProgressEvent: 'thumbnail-progress-event',
 });
 
 /** user-defined constants **/
@@ -847,6 +905,31 @@ export type ProbeProjectResponse = {
   suggested_start_seconds: number | null;
 };
 /**
+ * Metadata and validated workspace-relative playable paths returned to Editor v1.
+ * Never exposes arbitrary/unvalidated OS paths or accepts raw paths from the frontend.
+ */
+export type ProjectMediaInfo = {
+  project_id: string;
+  playable_rel_path: string | null;
+  source_rel_path: string;
+  proxy_rel_path: string | null;
+  using_proxy: boolean;
+  media_missing: boolean;
+  proxy_missing: boolean;
+  fps: number;
+  fps_num: number;
+  fps_den: number;
+  width: number;
+  height: number;
+  duration_ms: number;
+  absolute_start_ms: number;
+  handle_before_ms: number;
+  handle_after_ms: number;
+  composition_json: string;
+  composition_hash: string | null;
+  max_clip_seconds: number;
+};
+/**
  * Persisted project summary record exposed to the Beranda / Editor workspace.
  */
 export type ProjectRecord = {
@@ -866,6 +949,14 @@ export type ProjectRecord = {
   composition_hash: string | null;
   created_at: number;
   updated_at: number;
+};
+/**
+ * Authoritative save response after canonicalizing and hashing `CompositionV1` in Rust.
+ */
+export type SaveCompositionOutcome = {
+  project: ProjectRecord;
+  composition_json: string;
+  composition_hash: string;
 };
 export type SaveReportOutcome = {
   saved_path_redacted: string;
@@ -905,6 +996,25 @@ export type SpeechModelState = {
   suggested_lighter_model: SpeechModel | null;
   consecutive_slow_runs: number;
   options: SpeechModelOptionInfo[];
+};
+export type ThumbnailManifest = {
+  cache_key: string;
+  source_rel_path: string;
+  interval_secs: number;
+  width_px: number;
+  duration_ms: number;
+  frame_rel_paths: string[];
+  total_bytes: number;
+};
+/**
+ * Typed progress event emitted while generating timeline filmstrip thumbnails.
+ */
+export type ThumbnailProgressEvent = {
+  project_id: string;
+  percent: number;
+  eta_seconds: number | null;
+  done_secs: number;
+  total_secs: number;
 };
 export type VerifyRepairOutcome = {
   component: string;

@@ -25,6 +25,9 @@ vi.mock('../ipc/bindings', async () => {
       jobEventPayload: {
         listen: vi.fn().mockResolvedValue(() => undefined),
       },
+      thumbnailProgressEvent: {
+        listen: vi.fn().mockResolvedValue(() => undefined),
+      },
     },
     commands: {
       ...actual.commands,
@@ -38,6 +41,9 @@ vi.mock('../ipc/bindings', async () => {
       listRecentProjects: vi.fn().mockResolvedValue({ status: 'ok', data: [] }),
       listJobs: vi.fn().mockResolvedValue({ status: 'ok', data: [] }),
       getProject: vi.fn(),
+      getProjectMedia: vi.fn(),
+      generateProjectThumbnails: vi.fn(),
+      cancelProjectThumbnails: vi.fn().mockResolvedValue({ status: 'ok', data: true }),
       cancelJob: vi.fn(),
       retryJob: vi.fn(),
       startGenerateJob: vi.fn(),
@@ -254,5 +260,92 @@ describe('App startup DataRoot recovery', () => {
       expect(commands.getProject).toHaveBeenCalledWith('proj-chip-1');
     });
     expect(await screen.findByTestId('range-picker-view')).toHaveTextContent('Chip Target Project');
+  });
+
+  it('opens EditorView directly when selecting a downloaded/edited project from Proyek terakhir', async () => {
+    const user = userEvent.setup();
+    vi.mocked(commands.getAppInfo).mockResolvedValue({
+      name: 'ClipperHelper',
+      version: '0.1.0',
+      platform: 'windows',
+    });
+    vi.mocked(commands.getCrashRecoveryStatus).mockResolvedValue({
+      unclean_shutdown_detected: false,
+      previous_started_at: null,
+      crash_record: null,
+      banner_dismissed: false,
+    });
+    vi.mocked(commands.getWorkspaceStatus).mockResolvedValue({
+      is_initialized: true,
+      root: 'C:\\DataRoot\\ClipperHelper',
+      error_code: null,
+      error_message: null,
+      configured_root_unreachable: false,
+      unreachable_root_redacted: null,
+    });
+    vi.mocked(commands.getComponentsOverview).mockResolvedValue({
+      status: 'ok',
+      data: null as never,
+    });
+    vi.mocked(commands.getSettingsOverview).mockResolvedValue({
+      status: 'ok',
+      data: null as never,
+    });
+    vi.mocked(commands.fetchComponentsManifest).mockResolvedValue({
+      status: 'ok',
+      data: null as never,
+    });
+    vi.mocked(commands.listRecentProjects).mockResolvedValue({
+      status: 'ok',
+      data: [
+        {
+          id: 'proj-edited-1',
+          title: 'Siap Diedit Dari Beranda',
+          channel: 'Ch',
+          source_provider: 'youtube',
+          source_video_id: 'aqz-KE-bpKQ',
+          source_url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+          duration_seconds: 120,
+          live_status: 'not_live',
+          preview_mode: 'timecode_only',
+          suggested_start_seconds: null,
+          range_start_ms: 10_000,
+          range_end_ms: 40_000,
+          status: 'edited',
+          composition_hash: 'abc123',
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+        },
+      ],
+    });
+    vi.mocked(commands.getProjectMedia).mockResolvedValue({
+      status: 'ok',
+      data: {
+        project_id: 'proj-edited-1',
+        playable_rel_path: null,
+        source_rel_path: 'cache/youtube/aqz-KE-bpKQ/src.mp4',
+        proxy_rel_path: null,
+        using_proxy: false,
+        media_missing: true,
+        proxy_missing: false,
+        fps: 60,
+        fps_num: 60,
+        fps_den: 1,
+        width: 1920,
+        height: 1080,
+        duration_ms: 30_000,
+        absolute_start_ms: 5_000,
+        handle_before_ms: 5_000,
+        handle_after_ms: 5_000,
+        composition_json: '{}',
+        composition_hash: 'abc123',
+        max_clip_seconds: 180,
+      },
+    });
+
+    render(<App />);
+    const itemBtn = await screen.findByRole('button', { name: /Siap Diedit Dari Beranda/ });
+    await user.click(itemBtn);
+    expect(await screen.findByTestId('editor-view')).toHaveTextContent('Siap Diedit Dari Beranda');
   });
 });

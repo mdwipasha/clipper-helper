@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ComponentsView } from './components/ComponentsView';
 import { DevPanel } from './components/DevPanel';
 import { DiagnosticsView } from './components/DiagnosticsView';
+import { EditorView } from './components/EditorView';
 import { ErrorBanner } from './components/ErrorBanner';
 import { HomeView, NavTab } from './components/HomeView';
 import { RangePickerView } from './components/RangePickerView';
@@ -42,6 +43,7 @@ const DEFAULT_PREVIEW_CONFIG: PreviewConfigResponse = {
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [selectedProject, setSelectedProject] = useState<ProjectRecord | null>(null);
+  const [projectViewMode, setProjectViewMode] = useState<'range' | 'editor'>('range');
   const [previewConfig, setPreviewConfig] = useState<PreviewConfigResponse>(DEFAULT_PREVIEW_CONFIG);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [wsStatus, setWsStatus] = useState<WorkspaceStatus | null>(null);
@@ -195,6 +197,9 @@ export function App() {
     const res = await commands.getProject(projectId).catch(() => null);
     if (res && res.status === 'ok' && res.data) {
       setSelectedProject(res.data);
+      setProjectViewMode(
+        res.data.status === 'downloaded' || res.data.status === 'edited' ? 'editor' : 'range'
+      );
     }
   }, []);
 
@@ -468,13 +473,16 @@ export function App() {
               onOpenProject={(proj) => {
                 setJobActionError(null);
                 setSelectedProject(proj);
+                setProjectViewMode(
+                  proj.status === 'downloaded' || proj.status === 'edited' ? 'editor' : 'range'
+                );
               }}
               onRetryJob={async (jobId) => {
                 await handleRetryJob(jobId);
               }}
             />
           )}
-          {activeTab === 'home' && selectedProject && (
+          {activeTab === 'home' && selectedProject && projectViewMode === 'range' && (
             <RangePickerView
               locale={locale}
               project={selectedProject}
@@ -485,6 +493,7 @@ export function App() {
               onBackHome={() => {
                 setJobActionError(null);
                 setSelectedProject(null);
+                setProjectViewMode('range');
               }}
               onOpenDiagnostics={() => setActiveTab('diagnostics')}
               onOpenComponents={() => setActiveTab('components')}
@@ -492,6 +501,26 @@ export function App() {
               onStartGenerate={handleStartGenerate}
               onCancelJob={handleCancelJob}
               onRetryJob={handleRetryJob}
+              onOpenEditor={() => setProjectViewMode('editor')}
+            />
+          )}
+          {activeTab === 'home' && selectedProject && projectViewMode === 'editor' && (
+            <EditorView
+              locale={locale}
+              project={selectedProject}
+              workspaceRoot={wsStatus?.root ?? null}
+              onBackHome={() => {
+                setJobActionError(null);
+                setSelectedProject(null);
+                setProjectViewMode('range');
+              }}
+              onChangeRange={(updated) => {
+                if (updated) setSelectedProject(updated);
+                setProjectViewMode('range');
+              }}
+              onOpenDiagnostics={() => setActiveTab('diagnostics')}
+              onProjectUpdated={(updated) => setSelectedProject(updated)}
+              onStartGenerate={handleStartGenerate}
             />
           )}
           {activeTab === 'components' && (

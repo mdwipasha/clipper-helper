@@ -429,6 +429,8 @@ interface Composition {
 ```
 Absolute VOD segments sent to the server = `timeline[i]` mapped through `sources[].absoluteStartMs + inMs/outMs`.
 
+**Editor v1 writes:** `timeline[0].inMs/outMs` (trim), `layout.crop` (fill mode, normalized `Rect`), and sets project `status = 'edited'`. The Rust `save_composition` command validates the composition against the shared schema (segment bounds, crop inside frame, minimum/maximum clip length), recomputes `comp_hash` (canonical JSON SHA-256, authoritative), writes atomically (temp + rename), and returns the hash.
+
 ### Source Transcripts & Derived Words
 
 Transcripts live in **SOURCE time** as a cached workspace artifact (kind `transcript`):

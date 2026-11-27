@@ -84,3 +84,41 @@ export function formatRateDisplay(
   }
   return `${formatDecimalLocale(rate.value, 1, locale)} ${rate.unit}`;
 }
+
+function formatCompactDurationRange(
+  lowRoundedSeconds: number,
+  highRoundedSeconds: number,
+  locale: SupportedLocale
+): string {
+  if (lowRoundedSeconds < 60 && highRoundedSeconds < 60) {
+    return `${lowRoundedSeconds}–${highRoundedSeconds} ${locale === 'id' ? 'dtk' : 's'}`;
+  }
+  return `${formatShortDurationUnit(lowRoundedSeconds, locale)}–${formatShortDurationUnit(
+    highRoundedSeconds,
+    locale
+  )}`;
+}
+
+/**
+ * Formats pre-download range-picker estimate using `PROGRESS_AND_ETA §5` rounding rules:
+ * e.g. `"sekitar 35 dtk (30–45 dtk)"`.
+ */
+export function formatDownloadEstimateSummary(
+  estimateSeconds: number,
+  locale: SupportedLocale
+): string {
+  const pointSec = Number.isFinite(estimateSeconds) && estimateSeconds > 0 ? estimateSeconds : 10;
+  const lowRaw = Math.max(1, pointSec * 0.85);
+  const highRaw = Math.max(lowRaw, pointSec * 1.3);
+
+  const pointText =
+    pointSec < 10
+      ? t('job.etaFewSeconds', undefined, locale)
+      : formatShortDurationUnit(roundDisplaySeconds(pointSec), locale);
+
+  const lowRounded = roundDisplaySeconds(lowRaw);
+  const highRounded = Math.max(lowRounded, roundDisplaySeconds(highRaw));
+  const rangeText = formatCompactDurationRange(lowRounded, highRounded, locale);
+
+  return t('range.downloadEstimateFormatted', { point: pointText, range: rangeText }, locale);
+}

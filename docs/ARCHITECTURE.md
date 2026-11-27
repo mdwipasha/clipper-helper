@@ -209,6 +209,8 @@ Details in SECURITY §5 and DATA_MODEL §5. The credit is consumed (or the entit
   - **Disk space guard:** Before rendering, Rust checks `required_bytes = 1.5 × estimated_output_bytes + 500 MB headroom`. If free disk space is insufficient, raises `E_DISK_LOW` without invoking FFmpeg.
   - **Temp file handling & cleanup:** Output writes to `%LOCALAPPDATA%\...\cache\<job_id>.mp4.tmp` with `-f mp4`. On cancel, crash, or error, the supervisor process terminates FFmpeg via Windows Job Object (`kill-on-close`) and immediately deletes partial `.tmp` artifacts.
 - **Preview parity:** UI preview applies the same crop/scale math from the shared module and renders ASS with the same libass-based renderer. **Golden tests** compare composition → FFmpeg-args snapshots and ffprobe metadata of a short fixture render.
+- **Editor v1 CSS transform parity:** `cropRectToCssTransform` in `apps/desktop/src/editor/cropMath.ts` maps a normalized `Rect` (`{x, y, w, h}` in 0..1 of the source frame) to CSS `width%/height%/translate%` that positions the same pixel sub-region as `crop=iw*w:ih*h:iw*x:ih*y,scale=1080:1920` in FFmpeg. The pure functions in `cropMath.ts` are shared between the preview and the future render builder (Rust) to maintain exact parity.
+- **HTTP Range seeking:** Tauri 2.12.7 asset protocol supports `206 Partial Content` natively (verified in `protocol/asset.rs`), enabling frame-accurate scrubbing in the editor without custom range handling.
 - **Post-render verification checklist (`verify_export.py`):**
   1. Container faststart: binary inspection verifies `moov` atom precedes `mdat` atom.
   2. Video stream: codec `h264`, dimensions exactly `1080×1920`, framerate `30 fps` (or 60 fps per template), pixel format `yuv420p`, color tags `bt709 tv`.

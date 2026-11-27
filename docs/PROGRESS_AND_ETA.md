@@ -42,7 +42,7 @@ Free local operation. Triggered after trimming: transcribes ONLY the trimmed seg
 | `finalize` | Menyimpan file | indeterminate | 3% |
 
 ### 2.4 Others
-`model_download` (bytes), `component_update` (bytes per component), `app_update` (bytes), `first_run_benchmark` (steps: CPU probe, encoder test, speech test — "Menyiapkan aplikasi untuk laptop kamu", ≈10–30 s with step list).
+`model_download` (bytes), `component_update` (bytes per component), `app_update` (bytes), `first_run_benchmark` (steps: CPU probe, encoder test, speech test — "Menyiapkan aplikasi untuk laptop kamu", ≈10–30 s with step list), `thumbnails` (FFmpeg filmstrip extraction: 160 px wide thumbnails every 2 s over the source file, cached under `cache/thumbs/<source_hash>/` with a manifest; cancel via `ThumbnailCancelRegistry`; progress via `ThumbnailProgressEvent` { percent, thumbnailCount }; cap by total count/file size; runs as a background operation outside the job queue).
 
 ## 3. Event contract (Rust → UI)
 

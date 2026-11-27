@@ -11,6 +11,8 @@ use crate::download::DownloadStageOutcome;
 use crate::security;
 use crate::store::ProjectRecord;
 
+pub const MAX_COMPOSITION_JSON_BYTES: usize = 1_048_576;
+
 #[derive(Error, Debug)]
 pub enum CompositionError {
     #[error("Invalid composition schema field: {0}")]
@@ -18,6 +20,64 @@ pub enum CompositionError {
 
     #[error("Failed to serialize or persist composition: {0}")]
     Io(String),
+}
+
+#[derive(Error, Debug)]
+pub enum CompositionSaveError {
+    #[error("{message_id}")]
+    InvalidSchema {
+        code: &'static str,
+        message_id: String,
+        detail: String,
+    },
+    #[error("{message_id}")]
+    InvalidRange {
+        code: &'static str,
+        message_id: String,
+        detail: String,
+    },
+    #[error("IO error saving composition: {0}")]
+    Io(String),
+}
+
+impl CompositionSaveError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            CompositionSaveError::InvalidSchema { code, .. }
+            | CompositionSaveError::InvalidRange { code, .. } => code,
+            CompositionSaveError::Io(_) => "E_UNKNOWN",
+        }
+    }
+
+    pub fn detail(&self) -> String {
+        match self {
+            CompositionSaveError::InvalidSchema { detail, .. }
+            | CompositionSaveError::InvalidRange { detail, .. } => detail.clone(),
+            CompositionSaveError::Io(s) => s.clone(),
+        }
+    }
+}
+
+/// Converts floating-point FPS (e.g. `59.94`, `29.97`, `60.0`) to a canonical rational pair `(num, den)`.
+pub fn fps_to_rational(fps: f64) -> (u32, u32) {
+    if !fps.is_finite() || fps <= 0.0 {
+        return (30, 1);
+    }
+    if (fps - 59.94005994).abs() < 0.02 {
+        return (60_000, 1001);
+    }
+    if (fps - 29.97002997).abs() < 0.02 {
+        return (30_000, 1001);
+    }
+    if (fps - 23.97602398).abs() < 0.02 {
+        return (24_000, 1001);
+    }
+    let rounded = fps.round();
+    if (fps - rounded).abs() < 0.01 && (1.0..=240.0).contains(&rounded) {
+        return (rounded as u32, 1);
+    }
+    let num = (fps * 1000.0).round().clamp(1000.0, 240_000.0) as u32;
+    (num, 1000)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -319,6 +379,10 @@ fn validate_rect(r: &Rect) -> bool {
     [r.x, r.y, r.w, r.h]
         .iter()
         .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0)
+        && r.w > 0.0
+        && r.h > 0.0
+        && (r.x + r.w) <= 1.0 + 1e-4
+        && (r.y + r.h) <= 1.0 + 1e-4
 }
 
 fn validate_hex_color(raw: &str) -> bool {
@@ -516,6 +580,106 @@ pub fn write_project_composition_file(
     }
     std::fs::rename(&tmp_path, &abs_path).map_err(|e| CompositionError::Io(e.to_string()))?;
     Ok(rel_path)
+}
+
+/// Validates untrusted composition JSON from the editor UI against schema + clip limits,
+/// recomputes canonical JSON and SHA-256 `comp_hash` authoritatively.
+pub fn parse_and_validate_composition_for_save(
+    expected_project_id: &str,
+    raw_json: &str,
+    max_clip_seconds: u32,
+) -> Result<(CompositionV1, String, String), CompositionSaveError> {
+    if raw_json.len() > MAX_COMPOSITION_JSON_BYTES {
+        return Err(CompositionSaveError::InvalidSchema {
+            code: "E_TEMPLATE_INVALID",
+            message_id: "Data komposisi melebihi batas ukuran maksimum (1 MB).".to_string(),
+            detail: format!(
+                "composition JSON exceeds {} bytes",
+                MAX_COMPOSITION_JSON_BYTES
+            ),
+        });
+    }
+
+    let comp: CompositionV1 =
+        serde_json::from_str(raw_json).map_err(|e| CompositionSaveError::InvalidSchema {
+            code: "E_TEMPLATE_INVALID",
+            message_id: "Format data komposisi tidak valid.".to_string(),
+            detail: format!("Invalid composition JSON: {}", e),
+        })?;
+
+    if comp.id != expected_project_id {
+        return Err(CompositionSaveError::InvalidSchema {
+            code: "E_TEMPLATE_INVALID",
+            message_id: "ID proyek pada komposisi tidak sesuai.".to_string(),
+            detail: format!(
+                "Composition id '{}' does not match project '{}'",
+                comp.id, expected_project_id
+            ),
+        });
+    }
+
+    validate_composition(&comp).map_err(|e| match e {
+        CompositionError::ValidationFailed(msg) => {
+            if msg.contains("timeline segment") {
+                CompositionSaveError::InvalidRange {
+                    code: "E_RANGE_INVALID",
+                    message_id: "Batas rentang trim tidak valid untuk durasi video sumber."
+                        .to_string(),
+                    detail: msg,
+                }
+            } else {
+                CompositionSaveError::InvalidSchema {
+                    code: "E_TEMPLATE_INVALID",
+                    message_id: "Pengaturan crop atau skema komposisi tidak valid.".to_string(),
+                    detail: msg,
+                }
+            }
+        }
+        CompositionError::Io(msg) => CompositionSaveError::Io(msg),
+    })?;
+
+    let mut total_ms: u64 = 0;
+    for seg in &comp.timeline {
+        let src = comp
+            .sources
+            .iter()
+            .find(|s| s.id == seg.source_id)
+            .ok_or_else(|| CompositionSaveError::InvalidSchema {
+                code: "E_TEMPLATE_INVALID",
+                message_id: "Sumber video pada timeline tidak ditemukan.".to_string(),
+                detail: format!("Unknown source '{}'", seg.source_id),
+            })?;
+        let one_frame_ms = (1000.0 / src.fps).floor().max(1.0) as u32;
+        let seg_dur_ms = seg.out_ms.saturating_sub(seg.in_ms);
+        if seg_dur_ms < one_frame_ms {
+            return Err(CompositionSaveError::InvalidRange {
+                code: "E_RANGE_INVALID",
+                message_id: "Durasi segmen klip minimal 1 frame.".to_string(),
+                detail: format!(
+                    "Segment duration {} ms < 1 frame ({} ms)",
+                    seg_dur_ms, one_frame_ms
+                ),
+            });
+        }
+        total_ms = total_ms.saturating_add(seg_dur_ms as u64);
+    }
+
+    let max_clip_ms = (max_clip_seconds as u64).saturating_mul(1000);
+    if total_ms > max_clip_ms {
+        return Err(CompositionSaveError::InvalidRange {
+            code: "E_RANGE_TOO_LONG",
+            message_id: format!(
+                "Durasi total klip ({:.1} detik) melebihi batas maksimum {} detik.",
+                total_ms as f64 / 1000.0,
+                max_clip_seconds
+            ),
+            detail: format!("Total duration {} ms > {} ms limit", total_ms, max_clip_ms),
+        });
+    }
+
+    let (canonical_json, hash) =
+        canonicalize_and_hash(&comp).map_err(|e| CompositionSaveError::Io(e.to_string()))?;
+    Ok((comp, canonical_json, hash))
 }
 
 #[cfg(test)]

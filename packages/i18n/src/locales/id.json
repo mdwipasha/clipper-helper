@@ -246,6 +246,10 @@
       "title": "Proses lain sedang berjalan",
       "body": "Saat ini hanya satu proses unduh/konversi yang dapat berjalan pada satu waktu. Tunggu selesai atau batalkan proses aktif."
     },
+    "E_TEMPLATE_INVALID": {
+      "title": "Komposisi tidak valid",
+      "body": "Data edit komposisi tidak memenuhi aturan validasi atau batas durasi klip."
+    },
     "E_UNKNOWN": {
       "title": "Terjadi kesalahan",
       "body": "Terjadi kendala tak terduga. Silakan coba lagi atau buka tab Diagnostik untuk menyalin laporan."
@@ -273,6 +277,7 @@
     "setEndHere": "Set akhir di sini",
     "clipDurationLabel": "Durasi klip terpilih",
     "downloadEstimate": "Perkiraan unduh: ~{minutes} menit (±{seconds} dtk)",
+    "downloadEstimateFormatted": "Perkiraan unduh: sekitar {point} ({range})",
     "timecodeOnlyBanner": "Pratinjau tidak tersedia untuk video ini",
     "timecodeOnlyOwnerHint": "Pemilik video membatasi pemutaran embed. Kamu tetap dapat mengatur timecode secara manual.",
     "timecodeOnlyTimeoutHint": "Pemutar pratinjau tidak merespons dalam 6 detik. Beralih ke mode timecode-only.",
@@ -295,7 +300,8 @@
       "probe": "Memeriksa sumber",
       "download": "Mengunduh klip",
       "preparePreview": "Menyiapkan pratinjau",
-      "build": "Menyusun proyek"
+      "build": "Menyusun proyek",
+      "thumbnails": "Menyiapkan filmstrip"
     },
     "preparingDownload": "Menyiapkan unduhan…",
     "stepOf": "Tahap {current} dari {total}",
@@ -333,11 +339,94 @@
     "probed": "Baru diperiksa",
     "ranged": "Rentang siap",
     "downloaded": "Siap diedit",
+    "edited": "Diedit",
     "interrupted": "Terhenti",
     "deleteDownloaded": "Hapus data unduhan",
     "deleteDownloadedConfirm": "Hapus file media & komposisi hasil unduhan untuk proyek ini? Metadata dan rentang klip proyek tetap dipertahankan.",
     "deleteDownloadedConfirmAction": "Ya, hapus data unduhan",
     "cancelAction": "Batal",
     "retryInterrupted": "Ulangi"
+  },
+  "editor": {
+    "title": "Editor Klip",
+    "backHome": "Kembali ke Beranda",
+    "changeRange": "Ubah rentang",
+    "undo": "Urungkan",
+    "redo": "Ulangi",
+    "exportButton": "Ekspor",
+    "exportComingSoon": "Segera hadir",
+    "proxyBadge": "Mode proxy pratinjau",
+    "originalBadge": "Media asli",
+    "loadingMedia": "Memuat media editor…",
+    "saveStatus": {
+      "saved": "Tersimpan",
+      "saving": "Menyimpan…",
+      "dirty": "Belum disimpan…",
+      "error": "Gagal menyimpan"
+    },
+    "unsavedGuard": {
+      "title": "Perubahan belum tersimpan",
+      "body": "Perubahan terakhir belum berhasil disimpan ke proyek. Tunggu atau coba simpan ulang sebelum keluar.",
+      "stay": "Tetap di editor",
+      "leaveAnyway": "Keluar tetap"
+    },
+    "transport": {
+      "play": "Putar",
+      "pause": "Jeda",
+      "loopSelection": "Loop pilihan",
+      "mute": "Bisukan",
+      "unmute": "Bunyikan",
+      "rate": "Kecepatan",
+      "jumpIn": "Ke titik masuk",
+      "jumpOut": "Ke titik keluar",
+      "prevFrame": "−1 frame",
+      "nextFrame": "+1 frame",
+      "prevSecond": "−1 dtk",
+      "nextSecond": "+1 dtk",
+      "shortcutsHint": "Pintasan: Spasi = Putar/Jeda · ←/→ = 1 frame · Shift+←/→ = 1 dtk · I/O = Set Masuk/Keluar · Home/End = Lompat · Ctrl+Z / Ctrl+Shift+Z = Urungkan/Ulangi"
+    },
+    "preview": {
+      "title": "Pratinjau 9:16 (Fill)",
+      "panHint": "Seret pratinjau untuk geser crop · Scroll / slider untuk zoom",
+      "zoom": "Zoom",
+      "center": "Tengah",
+      "reset": "Reset",
+      "overviewTitle": "Bingkai sumber penuh",
+      "overviewHint": "Seret kotak untuk memposisikan crop 9:16"
+    },
+    "trim": {
+      "title": "Timeline & Potong",
+      "playheadLabel": "Posisi",
+      "inLabel": "Masuk",
+      "outLabel": "Keluar",
+      "selectedLabel": "Terpilih",
+      "totalLabel": "Total file",
+      "setIn": "Set Masuk (I)",
+      "setOut": "Set Keluar (O)",
+      "handleLegend": "Area handle (cadangan di awal & akhir)",
+      "maxWarning": "Durasi terpilih melebihi batas maksimal ({maxSeconds} dtk).",
+      "scrubAria": "Timeline posisi klip",
+      "handleInAria": "Geser titik masuk",
+      "handleOutAria": "Geser titik keluar"
+    },
+    "filmstrip": {
+      "generating": "Membuat filmstrip ({percent}%) · {eta}",
+      "preparing": "Menyiapkan filmstrip…",
+      "cancel": "Hentikan filmstrip",
+      "cancelled": "Filmstrip dihentikan.",
+      "retry": "Muat ulang filmstrip",
+      "unavailable": "Filmstrip pratinjau belum tersedia."
+    },
+    "errors": {
+      "mediaMissingTitle": "Berkas media cache tidak ditemukan",
+      "mediaMissingBody": "File video hasil unduhan untuk proyek ini sudah dihapus atau dipindahkan dari folder cache.",
+      "redownloadAction": "Unduh ulang",
+      "proxyMissingTitle": "Proxy pratinjau belum siap atau hilang",
+      "proxyMissingBody": "Sumber memakai codec non-H.264 sehingga membutuhkan proxy pratinjau MP4 untuk pemutaran lancar.",
+      "reproxyAction": "Siapkan ulang pratinjau",
+      "decodeErrorTitle": "Gagal memutar video di pratinjau",
+      "decodeErrorBody": "Pemutar WebView mengalami kendala dekode media. Detail teknis dicatat ke Diagnostik.",
+      "openDiagnostics": "Buka Diagnostik"
+    }
   }
 }

@@ -152,24 +152,30 @@ export function validateClipRange(input: RangeValidationInput): RangeValidationR
   };
 }
 
+export const DEFAULT_RANGE_HANDLE_SECONDS = 5;
+
 /**
- * Estimates initial download duration in seconds from S1 conservative priors (`range / 1.66 + 10 s`).
+ * Estimates initial download duration in seconds from S1 conservative priors
+ * including both editing handles: `(range + 2 * H) / 1.66 + 10 s`.
  */
 export function estimateDownloadSeconds(
   rangeSeconds: number,
   rtFactor = 1.66,
-  startupSeconds = 10
+  startupSeconds = 10,
+  handleSeconds = DEFAULT_RANGE_HANDLE_SECONDS
 ): number {
+  const startup = Number.isFinite(startupSeconds) && startupSeconds >= 0 ? startupSeconds : 10;
   if (
     !Number.isFinite(rangeSeconds) ||
     rangeSeconds <= 0 ||
     !Number.isFinite(rtFactor) ||
     rtFactor <= 0
   ) {
-    return Math.max(0, startupSeconds);
+    return Number(startup.toFixed(2));
   }
-  const startup = Number.isFinite(startupSeconds) && startupSeconds >= 0 ? startupSeconds : 10;
-  return Number((rangeSeconds / rtFactor + startup).toFixed(2));
+  const h = Number.isFinite(handleSeconds) && handleSeconds >= 0 ? handleSeconds : 0;
+  const effectiveSeconds = rangeSeconds + 2 * h;
+  return Number((effectiveSeconds / rtFactor + startup).toFixed(2));
 }
 
 export function formatEstimateMinutes(estimateSeconds: number): number {
