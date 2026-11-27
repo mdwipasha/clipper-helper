@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::download::{verify_media_with_ffprobe, DownloadError, VerifiedMediaInfo};
+use crate::download::{verify_media_with_ffprobe_with_env, DownloadError, VerifiedMediaInfo};
 use crate::eta::{LiveEtaConfig, LiveEtaSnapshot, LiveStageEtaTracker};
 use crate::jobs::{cleanup_job_temp_dir, job_temp_dir};
 use crate::progress_parser::FfmpegPipeProgressParser;
@@ -198,11 +198,12 @@ where
 
     // Cache hit if valid native proxy already exists
     if final_abs.is_file() {
-        if let Ok(verified) = verify_media_with_ffprobe(
+        if let Ok(verified) = verify_media_with_ffprobe_with_env(
             &ffprobe_res.path,
             ws_root,
             &final_abs,
             Some(expected_duration_secs),
+            extra_env,
             Some(cancel_token),
         )
         .await
@@ -316,11 +317,12 @@ where
         }
     }
 
-    let verified = match verify_media_with_ffprobe(
+    let verified = match verify_media_with_ffprobe_with_env(
         &ffprobe_res.path,
         ws_root,
         &tmp_proxy,
         Some(expected_duration_secs),
+        extra_env,
         Some(cancel_token),
     )
     .await
@@ -375,6 +377,7 @@ where
 mod tests {
     use super::*;
     use crate::download::tests::setup_fake_components;
+    use crate::download::verify_media_with_ffprobe;
     use crate::installer::InUseRegistry;
     use tempfile::TempDir;
 

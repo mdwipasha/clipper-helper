@@ -424,6 +424,26 @@ pub async fn verify_media_with_ffprobe(
     expected_duration_secs: Option<f64>,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<VerifiedMediaInfo, DownloadError> {
+    verify_media_with_ffprobe_with_env(
+        ffprobe_bin,
+        ws_root,
+        media_path,
+        expected_duration_secs,
+        &[],
+        cancel_token,
+    )
+    .await
+}
+
+/// Runs `ffprobe` with optional extra test environment variables.
+pub async fn verify_media_with_ffprobe_with_env(
+    ffprobe_bin: &Path,
+    ws_root: &Path,
+    media_path: &Path,
+    expected_duration_secs: Option<f64>,
+    extra_env: &[(String, String)],
+    cancel_token: Option<&CancellationToken>,
+) -> Result<VerifiedMediaInfo, DownloadError> {
     let meta = std::fs::metadata(media_path).map_err(|e| DownloadError::VerifyFailed {
         reason: "File hasil unduhan tidak ditemukan untuk verifikasi.".to_string(),
         detail: e.to_string(),
@@ -444,11 +464,14 @@ pub async fn verify_media_with_ffprobe(
         media_path.to_string_lossy().to_string(),
     ];
 
-    let spec = SidecarSpec::new(ffprobe_bin.to_path_buf(), args)
+    let mut spec = SidecarSpec::new(ffprobe_bin.to_path_buf(), args)
         .with_component_env(&env)
         .map_err(|e| DownloadError::Io(e.to_string()))?
         .timeout(Duration::from_secs(FFPROBE_TIMEOUT_SECS))
         .max_total_bytes(4 * 1024 * 1024);
+    for (k, v) in extra_env {
+        spec = spec.env(k, v);
+    }
 
     let result = SidecarSupervisor::new()
         .run_to_completion(&spec, cancel_token)
@@ -794,11 +817,12 @@ where
 
     // Cache hit fast path: verify existing cached MP4 cleanly with ffprobe
     if final_abs_path.is_file() {
-        if let Ok(verified) = verify_media_with_ffprobe(
+        if let Ok(verified) = verify_media_with_ffprobe_with_env(
             &ffprobe_res.path,
             ws_root,
             &final_abs_path,
             Some(window.requested_duration_secs()),
+            extra_sidecar_env,
             Some(cancel_token),
         )
         .await
@@ -1022,11 +1046,12 @@ where
     }
 
     // Verify downloaded file via ffprobe before moving to final cache location
-    let verified = match verify_media_with_ffprobe(
+    let verified = match verify_media_with_ffprobe_with_env(
         &ffprobe_res.path,
         ws_root,
         &tmp_output,
         Some(window.requested_duration_secs()),
+        extra_sidecar_env,
         Some(cancel_token),
     )
     .await

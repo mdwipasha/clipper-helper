@@ -148,18 +148,28 @@ fn handle_ytdlp_download(args: &[String]) {
     }
 }
 
-fn handle_ffprobe() {
+fn handle_ffprobe(args: &[String]) {
     let scenario = env::var("CLIPPER_FAKE_FFPROBE_SCENARIO").unwrap_or_else(|_| "avc1".to_string());
     let dur = env::var("CLIPPER_FAKE_FFPROBE_DURATION").unwrap_or_else(|_| "70.0".to_string());
+    let target = args.last().map(String::as_str).unwrap_or("");
+    let avc1_json = format!(
+        r#"{{"streams":[{{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"60/1","r_frame_rate":"60/1"}},{{"codec_type":"audio","codec_name":"aac","sample_rate":"48000"}}],"format":{{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"{}","size":"7340032"}}}}"#,
+        dur
+    );
+    let vp9_json = format!(
+        r#"{{"streams":[{{"codec_type":"video","codec_name":"vp9","width":1920,"height":1080,"avg_frame_rate":"60/1","r_frame_rate":"60/1"}},{{"codec_type":"audio","codec_name":"opus","sample_rate":"48000"}}],"format":{{"format_name":"matroska,webm","duration":"{}","size":"5242880"}}}}"#,
+        dur
+    );
     let json = match scenario.as_str() {
-        "avc1" => format!(
-            r#"{{"streams":[{{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"60/1","r_frame_rate":"60/1"}},{{"codec_type":"audio","codec_name":"aac","sample_rate":"48000"}}],"format":{{"format_name":"mov,mp4,m4a,3gp,3g2,mj2","duration":"{}","size":"7340032"}}}}"#,
-            dur
-        ),
-        "vp9" => format!(
-            r#"{{"streams":[{{"codec_type":"video","codec_name":"vp9","width":1920,"height":1080,"avg_frame_rate":"60/1","r_frame_rate":"60/1"}},{{"codec_type":"audio","codec_name":"opus","sample_rate":"48000"}}],"format":{{"format_name":"matroska,webm","duration":"{}","size":"5242880"}}}}"#,
-            dur
-        ),
+        "avc1" => avc1_json,
+        "vp9" => vp9_json,
+        "vp9_then_avc1" => {
+            if target.contains("proxy_") {
+                avc1_json
+            } else {
+                vp9_json
+            }
+        }
         "bad_duration" => r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"30/1"},{"codec_type":"audio","codec_name":"aac"}],"format":{"format_name":"mp4","duration":"12.0","size":"102400"}}"#.to_string(),
         "no_audio" => format!(
             r#"{{"streams":[{{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"30/1"}}],"format":{{"format_name":"mp4","duration":"{}","size":"102400"}}}}"#,
@@ -213,7 +223,7 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "-show_streams") {
-        handle_ffprobe();
+        handle_ffprobe(&args);
         return;
     }
     if args.iter().any(|a| a == "pipe:1") {
