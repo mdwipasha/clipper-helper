@@ -52,6 +52,11 @@ During beta/MVP, no telemetry or crash data is uploaded automatically over the n
 3. Click **Salin laporan** (copies `≤ 100 KB` plain text/Markdown with a `CH-XXXX-XXXX` report ID) or **Simpan sebagai file .txt** (`≤ 1 MB`), and paste it to support.
 - **Privacy & redaction:** Windows usernames/profile paths, emails, JWT/Bearer tokens, secrets/API keys, URL query strings/fragments, IP addresses, machine GUIDs/serials, and license keys are scrubbed across rotating log files (`<DataRoot>/logs/`, max 7 days / 20 MB), `error_events` (max 30 days / 500 rows), crash records, and the exported report. Video/audio content, transcripts, and full URLs are never included.
 
+### Dependency Policy
+- **Exact pins & lockfiles:** Dependencies in `package.json` and `Cargo.toml` are pinned to exact versions with `pnpm-lock.yaml` and `Cargo.lock` committed. Every new dependency requires a short PR justification and permissive licensing (`MIT`/`Apache-2.0`/`BSD`/`ISC`, never GPL sidecars without a recorded decision per `ARCHITECTURE §15`).
+- **Manual-only core upgrades:** `tauri`, `tauri-*`, `@tauri-apps/*`, `wry`, `tao`, `specta`, and `tauri-specta` are ignored by Dependabot and upgraded manually as a coordinated set so WebView2 behavior, IPC codegen, and Rust/JS Tauri parity remain intact.
+- **Dependabot cadence:** `npm`, `cargo`, and `github-actions` run monthly, grouped, with `open-pull-requests-limit: 3`.
+
 ## Read order
 
 | # | File | What it answers |
