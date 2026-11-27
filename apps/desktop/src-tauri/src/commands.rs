@@ -2149,4 +2149,41 @@ mod tests {
             build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ&evil=1", None).is_err()
         );
     }
+
+    #[test]
+    fn test_validated_project_range_ms_enforces_range_cap_and_bounds() {
+        let base = ProjectRecord {
+            id: "11111111-1111-4111-8111-111111111111".to_string(),
+            title: "T".to_string(),
+            channel: "C".to_string(),
+            source_provider: "youtube".to_string(),
+            source_video_id: "WufkeDaJisQ".to_string(),
+            source_url: "https://www.youtube.com/watch?v=WufkeDaJisQ".to_string(),
+            duration_seconds: 1200,
+            live_status: Some("not_live".to_string()),
+            preview_mode: "embed".to_string(),
+            suggested_start_seconds: None,
+            range_start_ms: Some(10_000.0),
+            range_end_ms: Some(70_000.0),
+            status: "ranged".to_string(),
+            composition_hash: None,
+            created_at: 1_700_000_000.0,
+            updated_at: 1_700_000_000.0,
+        };
+        assert_eq!(
+            validated_project_range_ms(&base, 300).unwrap(),
+            (10_000, 70_000)
+        );
+
+        let mut too_long = base.clone();
+        too_long.range_start_ms = Some(0.0);
+        too_long.range_end_ms = Some(301_000.0);
+        let err_long = validated_project_range_ms(&too_long, 300).unwrap_err();
+        assert_eq!(err_long.code, "E_RANGE_TOO_LONG");
+
+        let mut missing = base;
+        missing.range_end_ms = None;
+        let err_missing = validated_project_range_ms(&missing, 300).unwrap_err();
+        assert_eq!(err_missing.code, "E_RANGE_INVALID");
+    }
 }
