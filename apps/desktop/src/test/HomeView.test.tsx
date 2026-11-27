@@ -12,6 +12,9 @@ vi.mock('../ipc/bindings', async () => {
       probeProgressEvent: {
         listen: vi.fn().mockResolvedValue(() => undefined),
       },
+      jobEventPayload: {
+        listen: vi.fn().mockResolvedValue(() => undefined),
+      },
     },
     commands: {
       ...actual.commands,
@@ -19,6 +22,8 @@ vi.mock('../ipc/bindings', async () => {
       cancelYoutubeProbe: vi.fn(),
       listRecentProjects: vi.fn(),
       deleteProject: vi.fn(),
+      deleteProjectDownloadData: vi.fn(),
+      retryJob: vi.fn(),
     },
   };
 });
@@ -38,6 +43,7 @@ function buildSampleProject(overrides?: Partial<ProjectRecord>): ProjectRecord {
     range_start_ms: null,
     range_end_ms: null,
     status: 'probed',
+    composition_hash: null,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -409,5 +415,94 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
     expect(container.querySelector('script')).toBeNull();
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('b')).toBeNull();
+  });
+
+  it('shows status badges, interrupted Ulangi button, and Hapus data unduhan keeping project', async () => {
+    const user = userEvent.setup();
+    const pDownloaded = buildSampleProject({
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      title: 'Klip Selesai Unduh',
+      status: 'downloaded',
+      range_start_ms: 10_000,
+      range_end_ms: 70_000,
+      composition_hash: 'a'.repeat(64),
+    });
+    const pInterrupted = buildSampleProject({
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      title: 'Klip Terhenti',
+      status: 'ranged',
+      range_start_ms: 10_000,
+      range_end_ms: 70_000,
+    });
+    const jobs = [
+      {
+        id: 'job-int-1',
+        project_id: pInterrupted.id,
+        kind: 'generate',
+        status: 'interrupted',
+        stage: 'download',
+        progress_json: null,
+        error_code: null,
+        error_detail: null,
+        idempotency_key: null,
+        attempt: 1,
+        created_at: 1_700_000_000,
+        started_at: 1_700_000_001,
+        finished_at: 1_700_000_010,
+      },
+    ];
+    vi.mocked(commands.listRecentProjects).mockResolvedValue({
+      status: 'ok',
+      data: [pDownloaded, pInterrupted],
+    });
+    vi.mocked(commands.deleteProjectDownloadData).mockResolvedValue({
+      status: 'ok',
+      data: {
+        ...pDownloaded,
+        status: 'ranged',
+        composition_hash: null,
+      },
+    });
+    const onRetryJob = vi.fn().mockResolvedValue(undefined);
+    const onOpenProject = vi.fn();
+
+    render(
+      <HomeView
+        locale="id"
+        overview={null}
+        settings={null}
+        jobs={jobs}
+        onNavigate={onNavigate}
+        onOpenProject={onOpenProject}
+        onRetryJob={onRetryJob}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`project-status-badge-${pDownloaded.id}`)).toHaveTextContent(
+        'Siap diedit'
+      );
+      expect(screen.getByTestId(`project-status-badge-${pInterrupted.id}`)).toHaveTextContent(
+        'Terhenti'
+      );
+    });
+
+    await user.click(screen.getByTestId(`retry-interrupted-${pInterrupted.id}`));
+    await waitFor(() => {
+      expect(onRetryJob).toHaveBeenCalledWith('job-int-1');
+      expect(onOpenProject).toHaveBeenCalledWith(pInterrupted);
+    });
+
+    await user.click(screen.getByTestId(`delete-download-data-${pDownloaded.id}`));
+    expect(screen.getByTestId(`delete-download-confirm-${pDownloaded.id}`)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Ya, hapus data unduhan' }));
+
+    await waitFor(() => {
+      expect(commands.deleteProjectDownloadData).toHaveBeenCalledWith(pDownloaded.id);
+      expect(screen.getByTestId(`project-status-badge-${pDownloaded.id}`)).toHaveTextContent(
+        'Rentang siap'
+      );
+      expect(screen.getByText('Klip Selesai Unduh')).toBeInTheDocument();
+    });
   });
 });

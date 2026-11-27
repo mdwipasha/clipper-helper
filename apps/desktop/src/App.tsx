@@ -12,15 +12,20 @@ import {
   WebViewErrorBoundary,
 } from './components/WebViewErrorBoundary';
 import {
+  AppCommandError,
   AppInfo,
   commands,
   ComponentsOverview,
   CrashRecoveryStatus,
+  events,
+  JobEventPayload,
+  JobRecord,
   PreviewConfigResponse,
   ProjectRecord,
   SettingsOverview,
   WorkspaceStatus,
 } from './ipc/bindings';
+import { formatEtaDisplay } from './utils/etaFormat';
 import { copyTextToClipboard, formatComponentVersion } from './utils/format';
 
 const DEFAULT_PREVIEW_CONFIG: PreviewConfigResponse = {
@@ -44,6 +49,9 @@ export function App() {
   const [settings, setSettings] = useState<SettingsOverview | null>(null);
   const [crashStatus, setCrashStatus] = useState<CrashRecoveryStatus | null>(null);
   const [ipcError, setIpcError] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [jobEvents, setJobEvents] = useState<Record<string, JobEventPayload>>({});
+  const [jobActionError, setJobActionError] = useState<AppCommandError | null>(null);
 
   const locale: SupportedLocale = settings?.language === 'en' ? 'en' : 'id';
 
@@ -51,6 +59,17 @@ export function App() {
     const res = await commands.getComponentsOverview(overrideUrl ?? null);
     if (res.status === 'ok') {
       setOverview(res.data);
+    }
+  }, []);
+
+  const refreshJobs = useCallback(async () => {
+    try {
+      const res = await commands.listJobs(null, 20);
+      if (res.status === 'ok') {
+        setJobs(res.data);
+      }
+    } catch {
+      // Non-fatal during startup or test harnesses lacking job commands
     }
   }, []);
 
@@ -74,6 +93,7 @@ export function App() {
         if (ovRes.status === 'ok') setOverview(ovRes.data);
         if (setRes.status === 'ok') setSettings(setRes.data);
         if (prevCfg) setPreviewConfig(prevCfg);
+        await refreshJobs();
         // Best-effort non-blocking manifest check on startup (falls back cleanly to neutral offline state)
         const manifestRes = await commands.fetchComponentsManifest(null);
         if (manifestRes.status === 'ok') {
@@ -84,13 +104,99 @@ export function App() {
     } catch (err: unknown) {
       setIpcError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [refreshJobs]);
 
   useEffect(() => {
     const cleanup = installGlobalWebViewErrorHandlers();
     void loadInitialState();
     return cleanup;
   }, [loadInitialState]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenFn: (() => void) | null = null;
+
+    if (typeof events?.jobEventPayload?.listen === 'function') {
+      events.jobEventPayload
+        .listen((ev) => {
+          if (disposed) return;
+          const payload = ev.payload;
+          setJobEvents((prev) => ({ ...prev, [payload.jobId]: payload }));
+          const isTerminal =
+            payload.state === 'succeeded' ||
+            payload.state === 'failed' ||
+            payload.state === 'cancelled' ||
+            payload.state === 'interrupted';
+          if (isTerminal) {
+            void refreshJobs();
+            if (payload.state === 'succeeded' && selectedProject?.id === payload.projectId) {
+              void commands.getProject(payload.projectId).then((res) => {
+                if (!disposed && res.status === 'ok' && res.data) {
+                  setSelectedProject(res.data);
+                }
+              });
+            }
+          }
+        })
+        .then((fn) => {
+          if (disposed) fn();
+          else unlistenFn = fn;
+        })
+        .catch(() => undefined);
+    }
+
+    return () => {
+      disposed = true;
+      if (unlistenFn) unlistenFn();
+    };
+  }, [refreshJobs, selectedProject?.id]);
+
+  const handleStartGenerate = useCallback(
+    async (projectId: string): Promise<JobRecord | null> => {
+      setJobActionError(null);
+      const res = await commands.startGenerateJob(projectId);
+      if (res.status === 'ok') {
+        await refreshJobs();
+        return res.data;
+      }
+      setJobActionError(res.error);
+      return null;
+    },
+    [refreshJobs]
+  );
+
+  const handleCancelJob = useCallback(
+    async (jobId: string): Promise<void> => {
+      const res = await commands.cancelJob(jobId);
+      if (res.status === 'error') {
+        setJobActionError(res.error);
+      }
+      await refreshJobs();
+    },
+    [refreshJobs]
+  );
+
+  const handleRetryJob = useCallback(
+    async (jobId: string): Promise<JobRecord | null> => {
+      setJobActionError(null);
+      const res = await commands.retryJob(jobId);
+      if (res.status === 'ok') {
+        await refreshJobs();
+        return res.data;
+      }
+      setJobActionError(res.error);
+      return null;
+    },
+    [refreshJobs]
+  );
+
+  const handleOpenJobProject = useCallback(async (projectId: string) => {
+    setActiveTab('home');
+    const res = await commands.getProject(projectId).catch(() => null);
+    if (res && res.status === 'ok' && res.data) {
+      setSelectedProject(res.data);
+    }
+  }, []);
 
   const handleDismissCrash = async () => {
     const res = await commands.dismissCrashRecovery();
@@ -125,6 +231,34 @@ export function App() {
     { id: 'settings', label: t('nav.settings', undefined, locale) },
   ];
 
+  const activeJob =
+    jobs.find((j) => {
+      const st = jobEvents[j.id]?.state ?? j.status;
+      return st === 'running' || st === 'queued';
+    }) ?? null;
+  const interruptedJob = !activeJob ? (jobs.find((j) => j.status === 'interrupted') ?? null) : null;
+  const headerChipJob = activeJob ?? interruptedJob;
+  const headerChipEvent = headerChipJob ? (jobEvents[headerChipJob.id] ?? null) : null;
+  const headerChipPct = Math.round(headerChipEvent?.overall.percent ?? 0);
+  const headerChipStage = headerChipEvent?.stage.id ?? headerChipJob?.stage ?? 'download';
+  const headerChipStageLabel = t(
+    `job.stage.${headerChipStage === 'prepare_preview' ? 'preparePreview' : headerChipStage}`,
+    undefined,
+    locale
+  );
+  const headerChipEta = formatEtaDisplay(
+    headerChipEvent?.eta,
+    locale,
+    headerChipEvent?.detail?.startup === 'true'
+  );
+
+  const selectedProjectJob = selectedProject
+    ? (jobs.find((j) => j.project_id === selectedProject.id) ?? null)
+    : null;
+  const selectedProjectJobEvent = selectedProjectJob
+    ? (jobEvents[selectedProjectJob.id] ?? null)
+    : null;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="border-b border-slate-800 bg-slate-900/90 px-6 py-3">
@@ -144,30 +278,69 @@ export function App() {
             </div>
           </div>
 
-          <nav aria-label="Main navigation" className="flex flex-wrap gap-1.5">
-            {navItems.map((item) => {
-              const active = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(item.id);
-                    if (item.id === 'home') {
-                      setSelectedProject(null);
-                    }
-                  }}
-                  className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
-                    active
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                  }`}
+          <div className="flex flex-wrap items-center gap-3">
+            {headerChipJob && (
+              <button
+                type="button"
+                data-testid="global-job-activity-chip"
+                onClick={() => void handleOpenJobProject(headerChipJob.project_id)}
+                className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border transition ${
+                  headerChipJob.status === 'interrupted'
+                    ? 'bg-amber-950/70 border-amber-700 text-amber-200 hover:bg-amber-900/70'
+                    : 'bg-indigo-950/80 border-indigo-700 text-indigo-100 hover:bg-indigo-900/80'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={
+                    headerChipJob.status === 'interrupted'
+                      ? 'text-amber-300'
+                      : 'text-indigo-300 animate-pulse'
+                  }
                 >
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
+                  ●
+                </span>
+                <span>
+                  {headerChipJob.status === 'interrupted'
+                    ? t('job.activityChipInterrupted', undefined, locale)
+                    : t(
+                        'job.activityChipRunning',
+                        {
+                          stage: headerChipStageLabel,
+                          percent: headerChipPct,
+                          eta: headerChipEta,
+                        },
+                        locale
+                      )}
+                </span>
+              </button>
+            )}
+
+            <nav aria-label="Main navigation" className="flex flex-wrap gap-1.5">
+              {navItems.map((item) => {
+                const active = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      if (item.id === 'home') {
+                        setSelectedProject(null);
+                      }
+                    }}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
+                      active
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
         </div>
       </header>
 
@@ -290,8 +463,15 @@ export function App() {
               locale={locale}
               overview={overview}
               settings={settings}
+              jobs={jobs}
               onNavigate={setActiveTab}
-              onOpenProject={(proj) => setSelectedProject(proj)}
+              onOpenProject={(proj) => {
+                setJobActionError(null);
+                setSelectedProject(proj);
+              }}
+              onRetryJob={async (jobId) => {
+                await handleRetryJob(jobId);
+              }}
             />
           )}
           {activeTab === 'home' && selectedProject && (
@@ -299,9 +479,19 @@ export function App() {
               locale={locale}
               project={selectedProject}
               previewConfig={previewConfig}
-              onBackHome={() => setSelectedProject(null)}
+              projectJob={selectedProjectJob}
+              projectJobEvent={selectedProjectJobEvent}
+              busyJobError={jobActionError}
+              onBackHome={() => {
+                setJobActionError(null);
+                setSelectedProject(null);
+              }}
               onOpenDiagnostics={() => setActiveTab('diagnostics')}
+              onOpenComponents={() => setActiveTab('components')}
               onProjectUpdated={(updated) => setSelectedProject(updated)}
+              onStartGenerate={handleStartGenerate}
+              onCancelJob={handleCancelJob}
+              onRetryJob={handleRetryJob}
             />
           )}
           {activeTab === 'components' && (

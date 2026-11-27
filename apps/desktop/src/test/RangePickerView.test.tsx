@@ -50,6 +50,7 @@ function buildProject(overrides?: Partial<ProjectRecord>): ProjectRecord {
     range_start_ms: null,
     range_end_ms: null,
     status: 'probed',
+    composition_hash: null,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -393,10 +394,9 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
       expect(screen.getByTestId('range-saved-notice')).toBeInTheDocument();
     });
 
-    // "Lanjut ke unduh" remains disabled with "Segera hadir"
+    // M1.4: "Lanjut ke unduh" is enabled when range is valid
     const nextDownloadBtn = screen.getByRole('button', { name: 'Lanjut ke unduh' });
-    expect(nextDownloadBtn).toBeDisabled();
-    expect(screen.getByTestId('range-picker-view')).toHaveTextContent('Segera hadir');
+    expect(nextDownloadBtn).toBeEnabled();
   });
 
   it('switches to timecode-only on 6s bridge timeout and opens restricted YouTube URL', async () => {
@@ -512,5 +512,62 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     expect((screen.getByLabelText('Waktu akhir (HH:MM:SS)') as HTMLInputElement).value).toBe(
       '00:08:45'
     );
+  });
+
+  it('disables Lanjut ke unduh when range exceeds max_range_seconds and starts generate job when valid', async () => {
+    const user = userEvent.setup();
+    const proj = buildProject({
+      duration_seconds: 1200,
+      range_start_ms: 0,
+      range_end_ms: 60_000,
+      status: 'ranged',
+    });
+    vi.mocked(commands.updateProjectRange).mockResolvedValue({
+      status: 'ok',
+      data: proj,
+    });
+    const onStartGenerate = vi.fn().mockResolvedValue({
+      id: 'job-start-1',
+      project_id: proj.id,
+      kind: 'generate',
+      status: 'queued',
+      stage: 'probe',
+      progress_json: null,
+      error_code: null,
+      error_detail: null,
+      idempotency_key: 'k'.repeat(64),
+      attempt: 1,
+      created_at: 1_700_000_000,
+      started_at: null,
+      finished_at: null,
+    });
+
+    render(
+      <RangePickerView
+        locale="id"
+        project={proj}
+        previewConfig={buildPreviewConfig({ max_range_seconds: 300 })}
+        onBackHome={vi.fn()}
+        onOpenDiagnostics={vi.fn()}
+        onProjectUpdated={vi.fn()}
+        onStartGenerate={onStartGenerate}
+      />
+    );
+
+    const nextBtn = screen.getByTestId('next-download-button');
+    expect(nextBtn).toBeEnabled();
+
+    await user.click(nextBtn);
+    await waitFor(() => {
+      expect(onStartGenerate).toHaveBeenCalledWith(proj.id);
+    });
+    expect(screen.getByTestId('operation-panel')).toBeInTheDocument();
+
+    // Exceed max_range_seconds -> disabled with E_RANGE_TOO_LONG error
+    const endInput = screen.getByLabelText('Waktu akhir (HH:MM:SS)');
+    await user.clear(endInput);
+    await user.type(endInput, '00:10:00');
+    expect(screen.getByTestId('range-validation-error')).toHaveTextContent('E_RANGE_TOO_LONG');
+    expect(screen.getByTestId('next-download-button')).toBeDisabled();
   });
 });

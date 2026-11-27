@@ -5,6 +5,7 @@ import {
   commands,
   ComponentsOverview,
   events,
+  JobRecord,
   ProbeProjectResponse,
   ProjectRecord,
   SettingsOverview,
@@ -18,13 +19,23 @@ interface HomeViewProps {
   locale: SupportedLocale;
   overview: ComponentsOverview | null;
   settings: SettingsOverview | null;
+  jobs?: JobRecord[];
   onNavigate: (tab: NavTab) => void;
   onOpenProject?: (project: ProjectRecord) => void;
+  onRetryJob?: (jobId: string) => Promise<void>;
 }
 
 const RETRYABLE_PROBE_CODES = new Set(['E_NET_OFFLINE', 'E_NET_TIMEOUT', 'E_YT_RATE_LIMITED']);
 
-export function HomeView({ locale, overview, settings, onNavigate, onOpenProject }: HomeViewProps) {
+export function HomeView({
+  locale,
+  overview,
+  settings,
+  jobs = [],
+  onNavigate,
+  onOpenProject,
+  onRetryJob,
+}: HomeViewProps) {
   const [urlInput, setUrlInput] = useState('');
   const [isProbing, setIsProbing] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -33,6 +44,9 @@ export function HomeView({ locale, overview, settings, onNavigate, onOpenProject
   const [cancelledNotice, setCancelledNotice] = useState(false);
   const [recentProjects, setRecentProjects] = useState<ProjectRecord[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteDownloadId, setConfirmDeleteDownloadId] = useState<string | null>(null);
+  const [deletingDownloadId, setDeletingDownloadId] = useState<string | null>(null);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
 
   const activeRequestIdRef = useRef<string | null>(null);
   const timerStartRef = useRef<number | null>(null);
@@ -175,6 +189,33 @@ export function HomeView({ locale, overview, settings, onNavigate, onOpenProject
       }
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleConfirmDeleteDownload = async (projectId: string) => {
+    setDeletingDownloadId(projectId);
+    try {
+      const res = await commands.deleteProjectDownloadData(projectId);
+      if (res.status === 'ok') {
+        setRecentProjects((prev) => prev.map((p) => (p.id === projectId ? res.data : p)));
+        setConfirmDeleteDownloadId(null);
+      }
+    } finally {
+      setDeletingDownloadId(null);
+    }
+  };
+
+  const handleRetryInterruptedProject = async (proj: ProjectRecord, jobId: string) => {
+    setRetryingJobId(jobId);
+    try {
+      if (onRetryJob) {
+        await onRetryJob(jobId);
+      } else {
+        await commands.retryJob(jobId);
+      }
+      onOpenProject?.(proj);
+    } finally {
+      setRetryingJobId(null);
     }
   };
 
@@ -364,40 +405,128 @@ export function HomeView({ locale, overview, settings, onNavigate, onOpenProject
           <p className="text-xs text-slate-400">{t('home.recentEmpty', undefined, locale)}</p>
         ) : (
           <ul className="divide-y divide-slate-800">
-            {recentProjects.map((proj) => (
-              <li
-                key={proj.id}
-                data-testid={`recent-project-${proj.id}`}
-                className="py-2.5 flex items-center justify-between gap-3"
-              >
-                <button
-                  type="button"
-                  onClick={() => onOpenProject?.(proj)}
-                  className="min-w-0 flex-1 text-left space-y-0.5 hover:text-indigo-200 transition"
+            {recentProjects.map((proj) => {
+              const latestJob = jobs.find((j) => j.project_id === proj.id) ?? null;
+              const isInterrupted = latestJob?.status === 'interrupted';
+              const badgeKey = isInterrupted
+                ? 'homeStatus.interrupted'
+                : proj.status === 'downloaded'
+                  ? 'homeStatus.downloaded'
+                  : proj.status === 'ranged'
+                    ? 'homeStatus.ranged'
+                    : 'homeStatus.probed';
+              const badgeTone = isInterrupted
+                ? 'bg-amber-950/70 text-amber-300 border-amber-700'
+                : proj.status === 'downloaded'
+                  ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700'
+                  : proj.status === 'ranged'
+                    ? 'bg-indigo-950/70 text-indigo-300 border-indigo-700'
+                    : 'bg-slate-800 text-slate-300 border-slate-700';
+
+              return (
+                <li
+                  key={proj.id}
+                  data-testid={`recent-project-${proj.id}`}
+                  className="py-2.5 space-y-2"
                 >
-                  <div className="text-sm font-medium text-slate-100 truncate">{proj.title}</div>
-                  <div className="text-xs text-slate-400 flex flex-wrap gap-2">
-                    <span>{proj.channel}</span>
-                    <span>·</span>
-                    <span className="font-mono">{formatDurationHms(proj.duration_seconds)}</span>
-                    <span>·</span>
-                    <span>
-                      {proj.preview_mode === 'embed'
-                        ? t('home.previewAvailable', undefined, locale)
-                        : t('home.previewTimecodeOnly', undefined, locale)}
-                    </span>
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => onOpenProject?.(proj)}
+                      className="min-w-0 flex-1 text-left space-y-0.5 hover:text-indigo-200 transition"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium text-slate-100 truncate">
+                          {proj.title}
+                        </span>
+                        <span
+                          data-testid={`project-status-badge-${proj.id}`}
+                          className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-medium border ${badgeTone}`}
+                        >
+                          {t(badgeKey, undefined, locale)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400 flex flex-wrap gap-2">
+                        <span>{proj.channel}</span>
+                        <span>·</span>
+                        <span className="font-mono">
+                          {formatDurationHms(proj.duration_seconds)}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          {proj.preview_mode === 'embed'
+                            ? t('home.previewAvailable', undefined, locale)
+                            : t('home.previewTimecodeOnly', undefined, locale)}
+                        </span>
+                      </div>
+                    </button>
+
+                    <div className="shrink-0 flex flex-wrap items-center gap-2">
+                      {isInterrupted && latestJob && (
+                        <button
+                          type="button"
+                          data-testid={`retry-interrupted-${proj.id}`}
+                          disabled={retryingJobId === latestJob.id}
+                          onClick={() => void handleRetryInterruptedProject(proj, latestJob.id)}
+                          className="bg-amber-600 hover:bg-amber-500 text-slate-950 text-xs font-semibold px-2.5 py-1 rounded transition disabled:opacity-50"
+                        >
+                          {t('homeStatus.retryInterrupted', undefined, locale)}
+                        </button>
+                      )}
+
+                      {proj.status === 'downloaded' && (
+                        <button
+                          type="button"
+                          data-testid={`delete-download-data-${proj.id}`}
+                          disabled={deletingDownloadId === proj.id}
+                          onClick={() => setConfirmDeleteDownloadId(proj.id)}
+                          className="bg-slate-800 hover:bg-amber-900/60 border border-slate-700 hover:border-amber-700 text-slate-200 text-xs px-2.5 py-1 rounded transition disabled:opacity-50"
+                        >
+                          {t('homeStatus.deleteDownloaded', undefined, locale)}
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        disabled={deletingId === proj.id}
+                        onClick={() => void handleDeleteProject(proj.id)}
+                        className="bg-slate-800 hover:bg-rose-900/70 border border-slate-700 hover:border-rose-700 text-slate-200 text-xs px-2.5 py-1 rounded transition disabled:opacity-50"
+                      >
+                        {t('home.deleteProject', undefined, locale)}
+                      </button>
+                    </div>
                   </div>
-                </button>
-                <button
-                  type="button"
-                  disabled={deletingId === proj.id}
-                  onClick={() => void handleDeleteProject(proj.id)}
-                  className="shrink-0 bg-slate-800 hover:bg-rose-900/70 border border-slate-700 hover:border-rose-700 text-slate-200 text-xs px-2.5 py-1 rounded transition disabled:opacity-50"
-                >
-                  {t('home.deleteProject', undefined, locale)}
-                </button>
-              </li>
-            ))}
+
+                  {confirmDeleteDownloadId === proj.id && (
+                    <div
+                      data-testid={`delete-download-confirm-${proj.id}`}
+                      role="alertdialog"
+                      className="bg-amber-950/60 border border-amber-700/80 rounded-lg p-3 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <span>{t('homeStatus.deleteDownloadedConfirm', undefined, locale)}</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={deletingDownloadId === proj.id}
+                          onClick={() => void handleConfirmDeleteDownload(proj.id)}
+                          className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold px-3 py-1 rounded transition"
+                        >
+                          {t('homeStatus.deleteDownloadedConfirmAction', undefined, locale)}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingDownloadId === proj.id}
+                          onClick={() => setConfirmDeleteDownloadId(null)}
+                          className="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-100 px-3 py-1 rounded transition"
+                        >
+                          {t('homeStatus.cancelAction', undefined, locale)}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

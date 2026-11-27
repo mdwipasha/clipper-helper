@@ -4,564 +4,974 @@
 
 /** user-defined commands **/
 
-
 export const commands = {
-/**
- * Returns application metadata and current runtime platform.
- */
-async getAppInfo() : Promise<AppInfo> {
-    return await TAURI_INVOKE("get_app_info");
-},
-/**
- * Returns the workspace initialization status.
- */
-async getWorkspaceStatus() : Promise<WorkspaceStatus> {
-    return await TAURI_INVOKE("get_workspace_status");
-},
-/**
- * Returns current component statuses, manifest cache, disk check, and speech-model target.
- */
-async getComponentsOverview(overrideManifestUrl: string | null) : Promise<Result<ComponentsOverview, AppCommandError>> {
+  /**
+   * Returns application metadata and current runtime platform.
+   */
+  async getAppInfo(): Promise<AppInfo> {
+    return await TAURI_INVOKE('get_app_info');
+  },
+  /**
+   * Returns the workspace initialization status.
+   */
+  async getWorkspaceStatus(): Promise<WorkspaceStatus> {
+    return await TAURI_INVOKE('get_workspace_status');
+  },
+  /**
+   * Returns current component statuses, manifest cache, disk check, and speech-model target.
+   */
+  async getComponentsOverview(
+    overrideManifestUrl: string | null
+  ): Promise<Result<ComponentsOverview, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_components_overview", { overrideManifestUrl }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Fetches and cryptographically verifies the component manifest from config URL (debug override allowed).
- */
-async fetchComponentsManifest(overrideUrl: string | null) : Promise<Result<ManifestOverview, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_components_overview', { overrideManifestUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches and cryptographically verifies the component manifest from config URL (debug override allowed).
+   */
+  async fetchComponentsManifest(
+    overrideUrl: string | null
+  ): Promise<Result<ManifestOverview, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("fetch_components_manifest", { overrideUrl }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Installs one component/model from the currently cached verified manifest.
- */
-async installComponent(component: string, version: string | null) : Promise<Result<ComponentActionOutcome, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('fetch_components_manifest', { overrideUrl }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Installs one component/model from the currently cached verified manifest.
+   */
+  async installComponent(
+    component: string,
+    version: string | null
+  ): Promise<Result<ComponentActionOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("install_component", { component, version }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Installs all missing/outdated required components & active speech model ("Pasang semua")
- * after verifying `sum(sizes) * 1.5 + 1 GB` free disk space.
- */
-async installAllRequiredComponents() : Promise<Result<BatchInstallOutcome, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('install_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Installs all missing/outdated required components & active speech model ("Pasang semua")
+   * after verifying `sum(sizes) * 1.5 + 1 GB` free disk space.
+   */
+  async installAllRequiredComponents(): Promise<Result<BatchInstallOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("install_all_required_components") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Repairs a missing or quarantined component by re-downloading & verifying from the manifest.
- */
-async repairComponent(component: string, version: string | null) : Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('install_all_required_components') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Repairs a missing or quarantined component by re-downloading & verifying from the manifest.
+   */
+  async repairComponent(
+    component: string,
+    version: string | null
+  ): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("repair_component", { component, version }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Re-runs capability verification for an already-extracted quarantined binary version.
- */
-async retryQuarantinedComponent(component: string, version: string) : Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('repair_component', { component, version }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Re-runs capability verification for an already-extracted quarantined binary version.
+   */
+  async retryQuarantinedComponent(
+    component: string,
+    version: string
+  ): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("retry_quarantined_component", { component, version }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Runs full SHA-256 + capability verification on the currently active component version.
- */
-async verifyComponent(component: string) : Promise<Result<VerifyRepairOutcome, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('retry_quarantined_component', { component, version }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Runs full SHA-256 + capability verification on the currently active component version.
+   */
+  async verifyComponent(component: string): Promise<Result<VerifyRepairOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("verify_component", { component }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Validates a user-selected directory via `DataRoot::validate` and writes `bootstrap.json`.
- * Applies on next app restart; performs NO automatic data migration.
- */
-async selectCustomDataRoot(folderPath: string) : Promise<Result<DataRootChangeOutcome, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('verify_component', { component }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Validates a user-selected directory via `DataRoot::validate` and writes `bootstrap.json`.
+   * Applies on next app restart; performs NO automatic data migration.
+   */
+  async selectCustomDataRoot(
+    folderPath: string
+  ): Promise<Result<DataRootChangeOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("select_custom_data_root", { folderPath }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Clears a missing/unreachable `bootstrap.json` DataRoot override (never deleting user data)
- * and initializes the workspace at the default local folder.
- */
-async useDefaultDataRoot() : Promise<Result<WorkspaceStatus, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('select_custom_data_root', { folderPath }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Clears a missing/unreachable `bootstrap.json` DataRoot override (never deleting user data)
+   * and initializes the workspace at the default local folder.
+   */
+  async useDefaultDataRoot(): Promise<Result<WorkspaceStatus, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("use_default_data_root") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Returns current settings, speech-model state, passive encoder chain status, and hardware summary.
- */
-async getSettingsOverview() : Promise<Result<SettingsOverview, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('use_default_data_root') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns current settings, speech-model state, passive encoder chain status, and hardware summary.
+   */
+  async getSettingsOverview(): Promise<Result<SettingsOverview, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_settings_overview") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Persists non-sensitive settings updates (language, speech model preference, banner dismissal).
- */
-async updateSettings(patch: SettingsPatch) : Promise<Result<SettingsOverview, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('get_settings_overview') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Persists non-sensitive settings updates (language, speech model preference, banner dismissal).
+   */
+  async updateSettings(patch: SettingsPatch): Promise<Result<SettingsOverview, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("update_settings", { patch }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Returns whether the previous run exited cleanly or crashed.
- */
-async getCrashRecoveryStatus() : Promise<CrashRecoveryStatus> {
-    return await TAURI_INVOKE("get_crash_recovery_status");
-},
-/**
- * Dismisses the crash-recovery banner for the current session and archives the crash marker file.
- */
-async dismissCrashRecovery() : Promise<Result<null, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('update_settings', { patch }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns whether the previous run exited cleanly or crashed.
+   */
+  async getCrashRecoveryStatus(): Promise<CrashRecoveryStatus> {
+    return await TAURI_INVOKE('get_crash_recovery_status');
+  },
+  /**
+   * Dismisses the crash-recovery banner for the current session and archives the crash marker file.
+   */
+  async dismissCrashRecovery(): Promise<Result<null, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("dismiss_crash_recovery") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Lists recent redacted error events stored in SQLite (`error_events`), newest first.
- */
-async listErrorEvents(codeFilter: string | null, limit: number | null) : Promise<Result<ErrorEventRow[], AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('dismiss_crash_recovery') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists recent redacted error events stored in SQLite (`error_events`), newest first.
+   */
+  async listErrorEvents(
+    codeFilter: string | null,
+    limit: number | null
+  ): Promise<Result<ErrorEventRow[], AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("list_error_events", { codeFilter, limit }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Records an unhandled WebView / React JS error into `error_events` (rate-limited & size-capped).
- */
-async recordWebviewError(source: string, message: string, stack: string | null) : Promise<Result<boolean, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('list_error_events', { codeFilter, limit }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Records an unhandled WebView / React JS error into `error_events` (rate-limited & size-capped).
+   */
+  async recordWebviewError(
+    source: string,
+    message: string,
+    stack: string | null
+  ): Promise<Result<boolean, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("record_webview_error", { source, message, stack }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Generates a redacted plain-text/Markdown diagnostics report completely locally.
- */
-async generateDiagnosticsReport(userNote: string, includeVideoIds: boolean) : Promise<Result<DiagnosticsReportBundle, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('record_webview_error', { source, message, stack }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Generates a redacted plain-text/Markdown diagnostics report completely locally.
+   */
+  async generateDiagnosticsReport(
+    userNote: string,
+    includeVideoIds: boolean
+  ): Promise<Result<DiagnosticsReportBundle, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("generate_diagnostics_report", { userNote, includeVideoIds }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Saves the full (`<= 1 MB`) redacted diagnostics report to a user-chosen `.txt` file.
- */
-async saveDiagnosticsReportFile(destPath: string, userNote: string, includeVideoIds: boolean) : Promise<Result<SaveReportOutcome, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('generate_diagnostics_report', { userNote, includeVideoIds }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Saves the full (`<= 1 MB`) redacted diagnostics report to a user-chosen `.txt` file.
+   */
+  async saveDiagnosticsReportFile(
+    destPath: string,
+    userNote: string,
+    includeVideoIds: boolean
+  ): Promise<Result<SaveReportOutcome, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_diagnostics_report_file", { destPath, userNote, includeVideoIds }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Validates and probes a pasted YouTube single-video URL via supervised `yt-dlp` + `qjs`,
- * records any failure in local `error_events` (redacted), and inserts a `probed` project
- * record into SQLite on success.
- */
-async probeYoutubeUrl(rawUrl: string, requestId: string) : Promise<Result<ProbeProjectResponse, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_diagnostics_report_file', {
+          destPath,
+          userNote,
+          includeVideoIds,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Validates and probes a pasted YouTube single-video URL via supervised `yt-dlp` + `qjs`,
+   * records any failure in local `error_events` (redacted), and inserts a `probed` project
+   * record into SQLite on success.
+   */
+  async probeYoutubeUrl(
+    rawUrl: string,
+    requestId: string
+  ): Promise<Result<ProbeProjectResponse, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("probe_youtube_url", { rawUrl, requestId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Cancels an active YouTube probe identified by `request_id`.
- */
-async cancelYoutubeProbe(requestId: string) : Promise<Result<boolean, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('probe_youtube_url', { rawUrl, requestId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Cancels an active YouTube probe identified by `request_id`.
+   */
+  async cancelYoutubeProbe(requestId: string): Promise<Result<boolean, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("cancel_youtube_probe", { requestId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Lists the 10 most recent projects from SQLite `projects`.
- */
-async listRecentProjects() : Promise<Result<ProjectRecord[], AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('cancel_youtube_probe', { requestId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists the 10 most recent projects from SQLite `projects`.
+   */
+  async listRecentProjects(): Promise<Result<ProjectRecord[], AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("list_recent_projects") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Fetches a single project record by ID (used when reopening from "Proyek terakhir").
- */
-async getProject(projectId: string) : Promise<Result<ProjectRecord | null, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('list_recent_projects') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches a single project record by ID (used when reopening from "Proyek terakhir").
+   */
+  async getProject(projectId: string): Promise<Result<ProjectRecord | null, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_project", { projectId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and sets
- * `status = 'ranged'` for the project.
- */
-async updateProjectRange(projectId: string, rangeStartMs: number, rangeEndMs: number) : Promise<Result<ProjectRecord, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('get_project', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and sets
+   * `status = 'ranged'` for the project.
+   */
+  async updateProjectRange(
+    projectId: string,
+    rangeStartMs: number,
+    rangeEndMs: number
+  ): Promise<Result<ProjectRecord, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("update_project_range", { projectId, rangeStartMs, rangeEndMs }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Returns preview bridge URL/protocol/control video/timeout/range limits configuration.
- * In release builds, `bridge_url` is fixed to `https://clipper-bridge.vercel.app` and
- * `can_force_timecode_only` is strictly `false`.
- */
-async getPreviewConfig() : Promise<PreviewConfigResponse> {
-    return await TAURI_INVOKE("get_preview_config");
-},
-/**
- * Records non-PII preview diagnostics (`mode`, `bridge_ready_ms`, `fallback_reason`,
- * `yt_error_code`), updates allowlisted aggregate counters in `settings`, and logs
- * typed preview errors (`E_PREVIEW_CONFIG`, `E_YT_UNAVAILABLE`) to `error_events`.
- */
-async recordPreviewEvent(input: PreviewEventInput) : Promise<Result<PreviewCountersSnapshot, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('update_project_range', { projectId, rangeStartMs, rangeEndMs }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns preview bridge URL/protocol/control video/timeout/range limits configuration.
+   * In release builds, `bridge_url` is fixed to `https://clipper-bridge.vercel.app` and
+   * `can_force_timecode_only` is strictly `false`.
+   */
+  async getPreviewConfig(): Promise<PreviewConfigResponse> {
+    return await TAURI_INVOKE('get_preview_config');
+  },
+  /**
+   * Records non-PII preview diagnostics (`mode`, `bridge_ready_ms`, `fallback_reason`,
+   * `yt_error_code`), updates allowlisted aggregate counters in `settings`, and logs
+   * typed preview errors (`E_PREVIEW_CONFIG`, `E_YT_UNAVAILABLE`) to `error_events`.
+   */
+  async recordPreviewEvent(
+    input: PreviewEventInput
+  ): Promise<Result<PreviewCountersSnapshot, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("record_preview_event", { input }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
- */
-async deleteProject(projectId: string) : Promise<Result<boolean, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('record_preview_event', { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
+   */
+  async deleteProject(projectId: string): Promise<Result<boolean, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("delete_project", { projectId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Opens the workspace `logs/` directory in Windows Explorer via `tauri-plugin-opener`.
- */
-async openLogsFolder() : Promise<Result<null, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('delete_project', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Opens the workspace `logs/` directory in Windows Explorer via `tauri-plugin-opener`.
+   */
+  async openLogsFolder(): Promise<Result<null, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_logs_folder") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Opens a stored project's canonical YouTube watch URL in the user's system browser.
- * Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
- * from the stored, validated `source_video_id`.
- */
-async openVideoInBrowser(projectId: string, startSeconds: number | null) : Promise<Result<string, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('open_logs_folder') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Opens a stored project's canonical YouTube watch URL in the user's system browser.
+   * Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
+   * from the stored, validated `source_video_id`.
+   */
+  async openVideoInBrowser(
+    projectId: string,
+    startSeconds: number | null
+  ): Promise<Result<string, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_video_in_browser", { projectId, startSeconds }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Starts (or idempotently reuses) the persistent M1.4 `generate` pipeline job for `project_id`.
- */
-async startGenerateJob(projectId: string) : Promise<Result<JobRecord, AppCommandError>> {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('open_video_in_browser', { projectId, startSeconds }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Starts (or idempotently reuses) the persistent M1.4 `generate` pipeline job for `project_id`.
+   */
+  async startGenerateJob(projectId: string): Promise<Result<JobRecord, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("start_generate_job", { projectId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Fetches a single persistent job record by ID.
- */
-async getJob(jobId: string) : Promise<Result<JobRecord | null, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('start_generate_job', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches a single persistent job record by ID.
+   */
+  async getJob(jobId: string): Promise<Result<JobRecord | null, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_job", { jobId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Lists persistent job records (all recent or filtered to a single `project_id`).
- */
-async listJobs(projectId: string | null, limit: number | null) : Promise<Result<JobRecord[], AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('get_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists persistent job records (all recent or filtered to a single `project_id`).
+   */
+  async listJobs(
+    projectId: string | null,
+    limit: number | null
+  ): Promise<Result<JobRecord[], AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("list_jobs", { projectId, limit }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Requests immediate cancellation of an active (`queued`/`running`) job.
- */
-async cancelJob(jobId: string) : Promise<Result<boolean, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('list_jobs', { projectId, limit }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Requests immediate cancellation of an active (`queued`/`running`) job.
+   */
+  async cancelJob(jobId: string): Promise<Result<boolean, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("cancel_job", { jobId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Retries a `failed`, `cancelled`, or crash-`interrupted` generate job cleanly.
- */
-async retryJob(jobId: string) : Promise<Result<JobRecord, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('cancel_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Retries a `failed`, `cancelled`, or crash-`interrupted` generate job cleanly.
+   */
+  async retryJob(jobId: string): Promise<Result<JobRecord, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("retry_job", { jobId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Deletes cached source/proxy artifact files and composition payload for `project_id` while
- * preserving the project metadata and saved range (`Hapus data unduhan`).
- */
-async deleteProjectDownloadData(projectId: string) : Promise<Result<ProjectRecord, AppCommandError>> {
+      return { status: 'ok', data: await TAURI_INVOKE('retry_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Deletes cached source/proxy artifact files and composition payload for `project_id` while
+   * preserving the project metadata and saved range (`Hapus data unduhan`).
+   */
+  async deleteProjectDownloadData(
+    projectId: string
+  ): Promise<Result<ProjectRecord, AppCommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("delete_project_download_data", { projectId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-}
-}
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('delete_project_download_data', { projectId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+};
 
 /** user-defined events **/
 
-
 export const events = __makeEvents__<{
-componentInstallProgressEvent: ComponentInstallProgressEvent,
-jobEventPayload: JobEventPayload,
-probeProgressEvent: ProbeProgressEvent
+  componentInstallProgressEvent: ComponentInstallProgressEvent;
+  jobEventPayload: JobEventPayload;
+  probeProgressEvent: ProbeProgressEvent;
 }>({
-componentInstallProgressEvent: "component-install-progress-event",
-jobEventPayload: "job-event-payload",
-probeProgressEvent: "probe-progress-event"
-})
+  componentInstallProgressEvent: 'component-install-progress-event',
+  jobEventPayload: 'job-event-payload',
+  probeProgressEvent: 'probe-progress-event',
+});
 
 /** user-defined constants **/
 
-
-
 /** user-defined types **/
 
-export type AppCommandError = { code: string; message_key: string; message: string; detail: string; disk_bounds: DiskSpaceBounds | null }
+export type AppCommandError = {
+  code: string;
+  message_key: string;
+  message: string;
+  detail: string;
+  disk_bounds: DiskSpaceBounds | null;
+};
 /**
  * Application metadata returned to the frontend.
  */
-export type AppInfo = { name: string; version: string; platform: string }
-export type BatchInstallOutcome = { installed_count: number; skipped_count: number; outcomes: ComponentActionOutcome[] }
+export type AppInfo = { name: string; version: string; platform: string };
+export type BatchInstallOutcome = {
+  installed_count: number;
+  skipped_count: number;
+  outcomes: ComponentActionOutcome[];
+};
 /**
  * UI/IPC-safe capability report projection avoiding raw `u64` BigInt in TypeScript bindings.
  */
-export type CapabilityReportView = { component: string; version: string; mode: string; status: CapabilityStatus; checked_at: number; reported_version: string | null; reasons: string[]; warnings: string[]; ffmpeg: FfmpegCapabilities | null }
-export type CapabilityStatus = "pass" | "warn" | "fail"
-export type ComponentActionOutcome = { ok: boolean; component: string; version: string; already_installed: boolean; quarantined: boolean; rolled_back_to: string | null; error_code: string | null; message: string; capability_report: CapabilityReportView | null }
-export type ComponentDiagnosticsSnapshot = { custom_ffmpeg: CustomFfmpegStatus; components: ComponentStateSummary[]; pending_deferred_deletes: number }
-export type ComponentInstallProgressEvent = { job_id: string; component: string; stage: string; completed_items: number; total_items: number; item_completed_bytes: number; item_total_bytes: number; item_percent: number; rate_bps: number; item_eta_seconds: number | null; overall_percent: number; overall_eta_seconds: number | null; overall_eta_low_seconds: number | null; overall_eta_high_seconds: number | null }
-export type ComponentMissingAdvice = { code: string; component: string; version: string | null; message: string; mentions_antivirus: boolean; repair_action: boolean }
-export type ComponentStateSummary = { component: string; kind: string; current_version: string | null; previous_version: string | null; active_source: string; active_path: string | null; versions: ComponentVersionView[]; missing_advice: ComponentMissingAdvice | null }
-export type ComponentVersionView = { version: string; kind: string; status: string; is_current: boolean; is_previous: boolean; manifest_sequence: number; installed_at: number; quarantine_reason: string | null; capability_report: CapabilityReportView | null }
-export type ComponentsOverview = { diagnostics: ComponentDiagnosticsSnapshot; required_components: string[]; manifest: ManifestOverview | null; manifest_url_config: ManifestUrlConfig; disk_space: DiskSpaceStatus; speech_model: SpeechModelState }
-export type CrashRecord = { timestamp: number; app_version: string; location: string | null; message_redacted: string; backtrace_redacted: string }
-export type CrashRecoveryStatus = { unclean_shutdown_detected: boolean; previous_started_at: number | null; crash_record: CrashRecord | null; banner_dismissed: boolean }
-export type CustomFfmpegStatus = { enabled: boolean; configured_path: string | null; redacted_path: string | null; warning_flag: boolean; warning_message: string | null; warnings: string[]; file_present: boolean; fallback_active: boolean; capability_report: CapabilityReportView | null }
-export type DataRootChangeOutcome = { new_root_redacted: string; is_onedrive: boolean; requires_restart: boolean }
-export type DiagnosticsReportBundle = { report_id: string; ringkasan_bytes: number; preview_text: string; preview_bytes: number; preview_truncated: boolean; full_text: string; full_bytes: number; full_truncated: boolean; error_count: number }
-export type DiskSpaceBounds = { available_bytes: number; required_bytes: number }
-export type DiskSpaceStatus = { available_bytes: number; required_bytes: number; sufficient: boolean; data_root_redacted: string; is_default_data_root: boolean; is_onedrive: boolean }
-export type EncoderFailureKind = "encoder_not_found" | "driver_unsupported_or_init_error" | "media_foundation_or_profile_error" | "hardware_unavailable" | "unknown"
-export type EncoderFallbackEntry = { from: string; to: string | null; reason_kind: EncoderFailureKind; summary: string }
+export type CapabilityReportView = {
+  component: string;
+  version: string;
+  mode: string;
+  status: CapabilityStatus;
+  checked_at: number;
+  reported_version: string | null;
+  reasons: string[];
+  warnings: string[];
+  ffmpeg: FfmpegCapabilities | null;
+};
+export type CapabilityStatus = 'pass' | 'warn' | 'fail';
+export type ComponentActionOutcome = {
+  ok: boolean;
+  component: string;
+  version: string;
+  already_installed: boolean;
+  quarantined: boolean;
+  rolled_back_to: string | null;
+  error_code: string | null;
+  message: string;
+  capability_report: CapabilityReportView | null;
+};
+export type ComponentDiagnosticsSnapshot = {
+  custom_ffmpeg: CustomFfmpegStatus;
+  components: ComponentStateSummary[];
+  pending_deferred_deletes: number;
+};
+export type ComponentInstallProgressEvent = {
+  job_id: string;
+  component: string;
+  stage: string;
+  completed_items: number;
+  total_items: number;
+  item_completed_bytes: number;
+  item_total_bytes: number;
+  item_percent: number;
+  rate_bps: number;
+  item_eta_seconds: number | null;
+  overall_percent: number;
+  overall_eta_seconds: number | null;
+  overall_eta_low_seconds: number | null;
+  overall_eta_high_seconds: number | null;
+};
+export type ComponentMissingAdvice = {
+  code: string;
+  component: string;
+  version: string | null;
+  message: string;
+  mentions_antivirus: boolean;
+  repair_action: boolean;
+};
+export type ComponentStateSummary = {
+  component: string;
+  kind: string;
+  current_version: string | null;
+  previous_version: string | null;
+  active_source: string;
+  active_path: string | null;
+  versions: ComponentVersionView[];
+  missing_advice: ComponentMissingAdvice | null;
+};
+export type ComponentVersionView = {
+  version: string;
+  kind: string;
+  status: string;
+  is_current: boolean;
+  is_previous: boolean;
+  manifest_sequence: number;
+  installed_at: number;
+  quarantine_reason: string | null;
+  capability_report: CapabilityReportView | null;
+};
+export type ComponentsOverview = {
+  diagnostics: ComponentDiagnosticsSnapshot;
+  required_components: string[];
+  manifest: ManifestOverview | null;
+  manifest_url_config: ManifestUrlConfig;
+  disk_space: DiskSpaceStatus;
+  speech_model: SpeechModelState;
+};
+export type CrashRecord = {
+  timestamp: number;
+  app_version: string;
+  location: string | null;
+  message_redacted: string;
+  backtrace_redacted: string;
+};
+export type CrashRecoveryStatus = {
+  unclean_shutdown_detected: boolean;
+  previous_started_at: number | null;
+  crash_record: CrashRecord | null;
+  banner_dismissed: boolean;
+};
+export type CustomFfmpegStatus = {
+  enabled: boolean;
+  configured_path: string | null;
+  redacted_path: string | null;
+  warning_flag: boolean;
+  warning_message: string | null;
+  warnings: string[];
+  file_present: boolean;
+  fallback_active: boolean;
+  capability_report: CapabilityReportView | null;
+};
+export type DataRootChangeOutcome = {
+  new_root_redacted: string;
+  is_onedrive: boolean;
+  requires_restart: boolean;
+};
+export type DiagnosticsReportBundle = {
+  report_id: string;
+  ringkasan_bytes: number;
+  preview_text: string;
+  preview_bytes: number;
+  preview_truncated: boolean;
+  full_text: string;
+  full_bytes: number;
+  full_truncated: boolean;
+  error_count: number;
+};
+export type DiskSpaceBounds = { available_bytes: number; required_bytes: number };
+export type DiskSpaceStatus = {
+  available_bytes: number;
+  required_bytes: number;
+  sufficient: boolean;
+  data_root_redacted: string;
+  is_default_data_root: boolean;
+  is_onedrive: boolean;
+};
+export type EncoderFailureKind =
+  | 'encoder_not_found'
+  | 'driver_unsupported_or_init_error'
+  | 'media_foundation_or_profile_error'
+  | 'hardware_unavailable'
+  | 'unknown';
+export type EncoderFallbackEntry = {
+  from: string;
+  to: string | null;
+  reason_kind: EncoderFailureKind;
+  summary: string;
+};
 /**
  * Passive snapshot shown in Pengaturan & Diagnostik before any export has probed FFmpeg.
  */
-export type EncoderStatusSnapshot = { chain_order: string[]; cached_encoder: string | null; cached_fingerprint: string | null; current_fingerprint: string; fingerprint_matches: boolean; is_windows_n_kn: boolean; fallback_history: EncoderFallbackEntry[] }
+export type EncoderStatusSnapshot = {
+  chain_order: string[];
+  cached_encoder: string | null;
+  cached_fingerprint: string | null;
+  current_fingerprint: string;
+  fingerprint_matches: boolean;
+  is_windows_n_kn: boolean;
+  fallback_history: EncoderFallbackEntry[];
+};
 /**
  * Persisted structured core error event row in SQLite `error_events` table.
  */
-export type ErrorEventRow = { id: number; ts: number; code: string; stage: string; job_id: string | null; message_key: string; detail_redacted: string; stderr_tail_redacted: string; app_version: string; component_versions_json: string }
-export type FfmpegCapabilities = { ffmpeg_version: string; ffprobe_version: string; has_gpl: boolean; has_nonfree: boolean; has_version3: boolean; effective_license: string; forbidden_libs_present: string[]; forbidden_encoders_present: string[]; gpl_filters_present: string[]; hardware_encoders_available: string[]; required_encoders_present: string[]; missing_encoders: string[]; missing_decoders: string[]; missing_filters: string[]; missing_protocols: string[]; missing_formats: string[] }
-export type GpuAdapterInfo = { name: string; driver_version: string | null; vendor: string | null }
-export type HardwareProfile = { cpu_model: string; physical_cores: number; logical_cores: number; ram_bytes: number | null; windows_product: string; windows_display_version: string | null; windows_build: string; is_windows_n_kn: boolean; webview2_version: string | null; system_locale: string; timezone: string; ac_power: boolean | null; power_plan: string; gpus: GpuAdapterInfo[]; fingerprint: string }
-export type JobEventError = { code: string; messageKey: string; retryable: boolean; actionKeys: string[] }
-export type JobEventEta = { seconds: number; lowSeconds: number; highSeconds: number; confidence: string }
-export type JobEventOverall = { percent: number }
+export type ErrorEventRow = {
+  id: number;
+  ts: number;
+  code: string;
+  stage: string;
+  job_id: string | null;
+  message_key: string;
+  detail_redacted: string;
+  stderr_tail_redacted: string;
+  app_version: string;
+  component_versions_json: string;
+};
+export type FfmpegCapabilities = {
+  ffmpeg_version: string;
+  ffprobe_version: string;
+  has_gpl: boolean;
+  has_nonfree: boolean;
+  has_version3: boolean;
+  effective_license: string;
+  forbidden_libs_present: string[];
+  forbidden_encoders_present: string[];
+  gpl_filters_present: string[];
+  hardware_encoders_available: string[];
+  required_encoders_present: string[];
+  missing_encoders: string[];
+  missing_decoders: string[];
+  missing_filters: string[];
+  missing_protocols: string[];
+  missing_formats: string[];
+};
+export type GpuAdapterInfo = { name: string; driver_version: string | null; vendor: string | null };
+export type HardwareProfile = {
+  cpu_model: string;
+  physical_cores: number;
+  logical_cores: number;
+  ram_bytes: number | null;
+  windows_product: string;
+  windows_display_version: string | null;
+  windows_build: string;
+  is_windows_n_kn: boolean;
+  webview2_version: string | null;
+  system_locale: string;
+  timezone: string;
+  ac_power: boolean | null;
+  power_plan: string;
+  gpus: GpuAdapterInfo[];
+  fingerprint: string;
+};
+export type JobEventError = {
+  code: string;
+  messageKey: string;
+  retryable: boolean;
+  actionKeys: string[];
+};
+export type JobEventEta = {
+  seconds: number;
+  lowSeconds: number;
+  highSeconds: number;
+  confidence: string;
+};
+export type JobEventOverall = { percent: number };
 /**
  * Typed `JobEvent` payload matching `PROGRESS_AND_ETA §3` emitted to the React UI via `tauri-specta`.
  */
-export type JobEventPayload = { jobId: string; projectId: string; kind: string; state: string; stage: JobEventStage; stageProgress: JobEventStageProgress; overall: JobEventOverall; rate: JobEventRate | null; eta: JobEventEta | null; detail: { [key in string]: string } | null; error: JobEventError | null; ts: number }
-export type JobEventRate = { value: number; unit: string; smoothed: boolean }
-export type JobEventStage = { id: string; index: number; count: number; labelKey: string; labelArgs: { [key in string]: string } | null }
-export type JobEventStageProgress = { done: number; total: number | null; unit: string }
+export type JobEventPayload = {
+  jobId: string;
+  projectId: string;
+  kind: string;
+  state: string;
+  stage: JobEventStage;
+  stageProgress: JobEventStageProgress;
+  overall: JobEventOverall;
+  rate: JobEventRate | null;
+  eta: JobEventEta | null;
+  detail: { [key in string]: string } | null;
+  error: JobEventError | null;
+  ts: number;
+};
+export type JobEventRate = { value: number; unit: string; smoothed: boolean };
+export type JobEventStage = {
+  id: string;
+  index: number;
+  count: number;
+  labelKey: string;
+  labelArgs: { [key in string]: string } | null;
+};
+export type JobEventStageProgress = { done: number; total: number | null; unit: string };
 /**
  * Persisted background job record in SQLite `jobs` table (DATA_MODEL §9; PROGRESS_AND_ETA §3).
  */
-export type JobRecord = { id: string; project_id: string; kind: string; status: string; stage: string | null; progress_json: string | null; error_code: string | null; error_detail: string | null; idempotency_key: string | null; attempt: number; created_at: number; started_at: number | null; finished_at: number | null }
-export type ManifestComponentItem = { component: string; version: string; archive: string; size_bytes: number; is_model: boolean; is_current_installed: boolean }
-export type ManifestOverview = { sequence: number; channel: string; generated_at: string; components: ManifestComponentItem[] }
-export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean }
+export type JobRecord = {
+  id: string;
+  project_id: string;
+  kind: string;
+  status: string;
+  stage: string | null;
+  progress_json: string | null;
+  error_code: string | null;
+  error_detail: string | null;
+  idempotency_key: string | null;
+  attempt: number;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+};
+export type ManifestComponentItem = {
+  component: string;
+  version: string;
+  archive: string;
+  size_bytes: number;
+  is_model: boolean;
+  is_current_installed: boolean;
+};
+export type ManifestOverview = {
+  sequence: number;
+  channel: string;
+  generated_at: string;
+  components: ManifestComponentItem[];
+};
+export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean };
 /**
  * Preview bridge configuration and range limits exposed to the frontend.
  */
-export type PreviewConfigResponse = { bridge_url: string; bridge_protocol_version: number; control_video_id: string; ready_timeout_ms: number; max_range_seconds: number; download_prior_rt_factor: number; download_prior_startup_seconds: number; can_force_timecode_only: boolean }
+export type PreviewConfigResponse = {
+  bridge_url: string;
+  bridge_protocol_version: number;
+  control_video_id: string;
+  ready_timeout_ms: number;
+  max_range_seconds: number;
+  download_prior_rt_factor: number;
+  download_prior_startup_seconds: number;
+  can_force_timecode_only: boolean;
+};
 /**
  * Non-sensitive aggregate preview telemetry counters stored locally in SQLite `settings`.
  */
-export type PreviewCountersSnapshot = { embed_disabled_count: number; fallback_count: number; config_error_count: number }
+export type PreviewCountersSnapshot = {
+  embed_disabled_count: number;
+  fallback_count: number;
+  config_error_count: number;
+};
 /**
  * Structured preview diagnostics & counter increment payload recorded cleanly without PII/URLs.
  */
-export type PreviewEventInput = { mode: string; bridge_ready_ms: number | null; fallback_reason: string | null; yt_error_code: number | null; counter_kind: string | null; record_error_code: string | null }
-export type PreviewMode = "embed" | "timecode_only"
+export type PreviewEventInput = {
+  mode: string;
+  bridge_ready_ms: number | null;
+  fallback_reason: string | null;
+  yt_error_code: number | null;
+  counter_kind: string | null;
+  record_error_code: string | null;
+};
+export type PreviewMode = 'embed' | 'timecode_only';
 /**
  * Typed video metadata extracted from `yt-dlp -J`. Never includes format URLs.
  */
-export type ProbeInfo = { id: string; title: string; channel: string; duration_seconds: number; live_status: string | null; availability: string | null; playable_in_embed: boolean; was_live: boolean; is_live: boolean; estimated_bytes_per_second: number | null; has_avc1_1080p: boolean; preview_mode: PreviewMode }
+export type ProbeInfo = {
+  id: string;
+  title: string;
+  channel: string;
+  duration_seconds: number;
+  live_status: string | null;
+  availability: string | null;
+  playable_in_embed: boolean;
+  was_live: boolean;
+  is_live: boolean;
+  estimated_bytes_per_second: number | null;
+  has_avc1_1080p: boolean;
+  preview_mode: PreviewMode;
+};
 /**
  * Typed progress event emitted for `generate` / `probe` operations (`<= 4/s`, 2 s heartbeat).
  */
-export type ProbeProgressEvent = { request_id: string; operation: string; stage: string; indeterminate: boolean; elapsed_ms: number; heartbeat: boolean }
+export type ProbeProgressEvent = {
+  request_id: string;
+  operation: string;
+  stage: string;
+  indeterminate: boolean;
+  elapsed_ms: number;
+  heartbeat: boolean;
+};
 /**
  * Safe metadata + persisted project record returned to the UI upon successful YouTube probe.
  */
-export type ProbeProjectResponse = { probe_info: ProbeInfo; project: ProjectRecord; suggested_start_seconds: number | null }
+export type ProbeProjectResponse = {
+  probe_info: ProbeInfo;
+  project: ProjectRecord;
+  suggested_start_seconds: number | null;
+};
 /**
  * Persisted project summary record exposed to the Beranda / Editor workspace.
  */
-export type ProjectRecord = { id: string; title: string; channel: string; source_provider: string; source_video_id: string; source_url: string; duration_seconds: number; live_status: string | null; preview_mode: string; suggested_start_seconds: number | null; range_start_ms: number | null; range_end_ms: number | null; status: string; composition_hash: string | null; created_at: number; updated_at: number }
-export type SaveReportOutcome = { saved_path_redacted: string; bytes_written: number; truncated: boolean }
-export type SettingsOverview = { language: string; speech_state: SpeechModelState; encoder_status: EncoderStatusSnapshot; hardware: HardwareProfile; data_root_redacted: string; is_default_data_root: boolean; is_onedrive: boolean }
-export type SettingsPatch = { language: string | null; 
-/**
- * When `Some("auto")` resets user override to automatic RAM default;
- * otherwise selects an explicit model (`tiny`/`base`/`small-q5_1`/`small`/`medium`).
- */
-speech_model_selection: string | null; dismiss_speech_downgrade: boolean | null }
-export type SpeechModel = "tiny" | "base" | "small-q5_1" | "small" | "medium"
-export type SpeechModelOptionInfo = { id: string; manifest_component: string; min_ram_gb: number; speed_tier: string }
-export type SpeechModelState = { active_model: SpeechModel; recommended_model: SpeechModel; is_user_override: boolean; downgrade_suggested: boolean; suggested_lighter_model: SpeechModel | null; consecutive_slow_runs: number; options: SpeechModelOptionInfo[] }
-export type VerifyRepairOutcome = { component: string; version: string | null; intact: boolean; repaired: boolean; error_code: string | null; message: string; capability_report: CapabilityReportView | null }
+export type ProjectRecord = {
+  id: string;
+  title: string;
+  channel: string;
+  source_provider: string;
+  source_video_id: string;
+  source_url: string;
+  duration_seconds: number;
+  live_status: string | null;
+  preview_mode: string;
+  suggested_start_seconds: number | null;
+  range_start_ms: number | null;
+  range_end_ms: number | null;
+  status: string;
+  composition_hash: string | null;
+  created_at: number;
+  updated_at: number;
+};
+export type SaveReportOutcome = {
+  saved_path_redacted: string;
+  bytes_written: number;
+  truncated: boolean;
+};
+export type SettingsOverview = {
+  language: string;
+  speech_state: SpeechModelState;
+  encoder_status: EncoderStatusSnapshot;
+  hardware: HardwareProfile;
+  data_root_redacted: string;
+  is_default_data_root: boolean;
+  is_onedrive: boolean;
+};
+export type SettingsPatch = {
+  language: string | null;
+  /**
+   * When `Some("auto")` resets user override to automatic RAM default;
+   * otherwise selects an explicit model (`tiny`/`base`/`small-q5_1`/`small`/`medium`).
+   */
+  speech_model_selection: string | null;
+  dismiss_speech_downgrade: boolean | null;
+};
+export type SpeechModel = 'tiny' | 'base' | 'small-q5_1' | 'small' | 'medium';
+export type SpeechModelOptionInfo = {
+  id: string;
+  manifest_component: string;
+  min_ram_gb: number;
+  speed_tier: string;
+};
+export type SpeechModelState = {
+  active_model: SpeechModel;
+  recommended_model: SpeechModel;
+  is_user_override: boolean;
+  downgrade_suggested: boolean;
+  suggested_lighter_model: SpeechModel | null;
+  consecutive_slow_runs: number;
+  options: SpeechModelOptionInfo[];
+};
+export type VerifyRepairOutcome = {
+  component: string;
+  version: string | null;
+  intact: boolean;
+  repaired: boolean;
+  error_code: string | null;
+  message: string;
+  capability_report: CapabilityReportView | null;
+};
 /**
  * Workspace initialization status returned to the frontend.
  */
-export type WorkspaceStatus = { is_initialized: boolean; root: string | null; error_code: string | null; error_message: string | null; configured_root_unreachable: boolean; unreachable_root_redacted: string | null }
+export type WorkspaceStatus = {
+  is_initialized: boolean;
+  root: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  configured_root_unreachable: boolean;
+  unreachable_root_redacted: string | null;
+};
 
 /** tauri-specta globals **/
 
-import {
-	invoke as TAURI_INVOKE,
-	Channel as TAURI_CHANNEL,
-} from "@tauri-apps/api/core";
-import * as TAURI_API_EVENT from "@tauri-apps/api/event";
-import { type WebviewWindow as __WebviewWindow__ } from "@tauri-apps/api/webviewWindow";
+import { invoke as TAURI_INVOKE, Channel as TAURI_CHANNEL } from '@tauri-apps/api/core';
+import * as TAURI_API_EVENT from '@tauri-apps/api/event';
+import { type WebviewWindow as __WebviewWindow__ } from '@tauri-apps/api/webviewWindow';
 
 type __EventObj__<T> = {
-	listen: (
-		cb: TAURI_API_EVENT.EventCallback<T>,
-	) => ReturnType<typeof TAURI_API_EVENT.listen<T>>;
-	once: (
-		cb: TAURI_API_EVENT.EventCallback<T>,
-	) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
-	emit: null extends T
-		? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
-		: (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
+  listen: (cb: TAURI_API_EVENT.EventCallback<T>) => ReturnType<typeof TAURI_API_EVENT.listen<T>>;
+  once: (cb: TAURI_API_EVENT.EventCallback<T>) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
+  emit: null extends T
+    ? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
+    : (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
 };
 
-export type Result<T, E> =
-	| { status: "ok"; data: T }
-	| { status: "error"; error: E };
+export type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
-function __makeEvents__<T extends Record<string, any>>(
-	mappings: Record<keyof T, string>,
-) {
-	return new Proxy(
-		{} as unknown as {
-			[K in keyof T]: __EventObj__<T[K]> & {
-				(handle: __WebviewWindow__): __EventObj__<T[K]>;
-			};
-		},
-		{
-			get: (_, event) => {
-				const name = mappings[event as keyof T];
+function __makeEvents__<T extends Record<string, any>>(mappings: Record<keyof T, string>) {
+  return new Proxy(
+    {} as unknown as {
+      [K in keyof T]: __EventObj__<T[K]> & {
+        (handle: __WebviewWindow__): __EventObj__<T[K]>;
+      };
+    },
+    {
+      get: (_, event) => {
+        const name = mappings[event as keyof T];
 
-				return new Proxy((() => {}) as any, {
-					apply: (_, __, [window]: [__WebviewWindow__]) => ({
-						listen: (arg: any) => window.listen(name, arg),
-						once: (arg: any) => window.once(name, arg),
-						emit: (arg: any) => window.emit(name, arg),
-					}),
-					get: (_, command: keyof __EventObj__<any>) => {
-						switch (command) {
-							case "listen":
-								return (arg: any) => TAURI_API_EVENT.listen(name, arg);
-							case "once":
-								return (arg: any) => TAURI_API_EVENT.once(name, arg);
-							case "emit":
-								return (arg: any) => TAURI_API_EVENT.emit(name, arg);
-						}
-					},
-				});
-			},
-		},
-	);
+        return new Proxy((() => {}) as any, {
+          apply: (_, __, [window]: [__WebviewWindow__]) => ({
+            listen: (arg: any) => window.listen(name, arg),
+            once: (arg: any) => window.once(name, arg),
+            emit: (arg: any) => window.emit(name, arg),
+          }),
+          get: (_, command: keyof __EventObj__<any>) => {
+            switch (command) {
+              case 'listen':
+                return (arg: any) => TAURI_API_EVENT.listen(name, arg);
+              case 'once':
+                return (arg: any) => TAURI_API_EVENT.once(name, arg);
+              case 'emit':
+                return (arg: any) => TAURI_API_EVENT.emit(name, arg);
+            }
+          },
+        });
+      },
+    }
+  );
 }

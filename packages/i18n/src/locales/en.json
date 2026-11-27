@@ -238,6 +238,14 @@
       "title": "Selected clip exceeds limit",
       "body": "Selected clip duration exceeds the maximum allowed range."
     },
+    "E_VERIFY_FAILED": {
+      "title": "Media verification failed",
+      "body": "The downloaded media file is incomplete, corrupted, or does not match the requested clip duration. Please try downloading again."
+    },
+    "E_JOB_BUSY": {
+      "title": "Another job is running",
+      "body": "Only one download/conversion job can run at a time. Wait for it to complete or cancel the active job first."
+    },
     "E_UNKNOWN": {
       "title": "An error occurred",
       "body": "An unexpected error occurred. Try again or open Diagnostics to copy a report."
@@ -278,6 +286,58 @@
     "errStartBeforeEnd": "Start time must be earlier than end time.",
     "errExceedsDuration": "End time cannot exceed video duration ({duration}).",
     "errMinDuration": "Clip duration must be at least 1 second.",
-    "errMaxDuration": "Maximum clip duration is {maxSeconds} seconds ({maxMinutes} minutes) for beta."
+    "errMaxDuration": "Maximum clip duration is {maxSeconds} seconds ({maxMinutes} minutes) for beta.",
+    "generating": "Processing…",
+    "rangeMismatchSavedHint": "Range changed — updates are saved automatically before downloading."
+  },
+  "job": {
+    "stage": {
+      "probe": "Inspecting source",
+      "download": "Downloading clip",
+      "preparePreview": "Preparing preview",
+      "build": "Building project"
+    },
+    "preparingDownload": "Preparing download…",
+    "stepOf": "Step {current} of {total}",
+    "etaCalculating": "Estimating remaining time…",
+    "etaFewSeconds": "a few seconds left",
+    "etaApprox": "about {duration} left",
+    "etaRangeMinutes": "about {min}–{max} min left",
+    "etaRangeText": "about {low}–{high} left",
+    "rateRealtime": "{speed}× real-time",
+    "detailsToggle": "Process details",
+    "cacheHitNotice": "Using verified cached media (download skipped).",
+    "stallWarning": "Slow connection / no progress yet — still trying…",
+    "stallRetryHint": "No progress for over 60 seconds. You can retry or cancel.",
+    "cancelButton": "Cancel",
+    "cancelConfirmTitle": "Cancel download?",
+    "cancelConfirmBody": "The download will stop and must restart from the beginning if resumed.",
+    "cancelConfirmContinue": "Continue",
+    "cancelConfirmStop": "Yes, cancel",
+    "cancelledNotice": "Operation cancelled by user.",
+    "interruptedNotice": "A previous job was interrupted when the app closed (stage: {stage}). Click Retry to restart.",
+    "retryButton": "Retry",
+    "busyMessage": "Another job is already running. Wait for it to finish or cancel it first.",
+    "actionRepair": "Repair",
+    "actionCheckConnection": "Check connection",
+    "actionClearCache": "Clean cache",
+    "actionRetry": "Retry",
+    "successTitle": "Clip ready for editing",
+    "successMeta": "{width}×{height} · {fps} fps · {codec} · {size}",
+    "proxyGeneratedNote": "An H.264/AAC preview proxy was prepared automatically for smooth playback (original source stays intact for export).",
+    "openEditor": "Open editor",
+    "activityChipRunning": "{stage} {percent}% · {eta}",
+    "activityChipInterrupted": "Job interrupted · Retry"
+  },
+  "homeStatus": {
+    "probed": "Probed",
+    "ranged": "Range saved",
+    "downloaded": "Downloaded",
+    "interrupted": "Interrupted",
+    "deleteDownloaded": "Delete download data",
+    "deleteDownloadedConfirm": "Delete downloaded media and composition files for this project? Project metadata and saved clip range will be kept.",
+    "deleteDownloadedConfirmAction": "Yes, delete download data",
+    "cancelAction": "Cancel",
+    "retryInterrupted": "Retry"
   }
 }

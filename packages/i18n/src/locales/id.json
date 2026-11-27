@@ -238,6 +238,14 @@
       "title": "Rentang klip melebihi batas",
       "body": "Durasi klip melebihi batas maksimum saat ini."
     },
+    "E_VERIFY_FAILED": {
+      "title": "Verifikasi berkas media gagal",
+      "body": "Berkas hasil unduhan tidak lengkap, korup, atau durasinya tidak sesuai rentang yang dipilih. Silakan coba unduh ulang."
+    },
+    "E_JOB_BUSY": {
+      "title": "Proses lain sedang berjalan",
+      "body": "Saat ini hanya satu proses unduh/konversi yang dapat berjalan pada satu waktu. Tunggu selesai atau batalkan proses aktif."
+    },
     "E_UNKNOWN": {
       "title": "Terjadi kesalahan",
       "body": "Terjadi kendala tak terduga. Silakan coba lagi atau buka tab Diagnostik untuk menyalin laporan."
@@ -278,6 +286,58 @@
     "errStartBeforeEnd": "Waktu mulai harus lebih awal daripada waktu akhir.",
     "errExceedsDuration": "Waktu akhir tidak boleh melebihi durasi video ({duration}).",
     "errMinDuration": "Durasi klip minimal 1 detik.",
-    "errMaxDuration": "Durasi klip maksimal {maxSeconds} detik ({maxMinutes} menit) untuk versi beta."
+    "errMaxDuration": "Durasi klip maksimal {maxSeconds} detik ({maxMinutes} menit) untuk versi beta.",
+    "generating": "Memproses…",
+    "rangeMismatchSavedHint": "Rentang diubah — perubahan akan disimpan otomatis sebelum mengunduh."
+  },
+  "job": {
+    "stage": {
+      "probe": "Memeriksa sumber",
+      "download": "Mengunduh klip",
+      "preparePreview": "Menyiapkan pratinjau",
+      "build": "Menyusun proyek"
+    },
+    "preparingDownload": "Menyiapkan unduhan…",
+    "stepOf": "Tahap {current} dari {total}",
+    "etaCalculating": "Menghitung estimasi…",
+    "etaFewSeconds": "beberapa detik lagi",
+    "etaApprox": "sekitar {duration} lagi",
+    "etaRangeMinutes": "sekitar {min}–{max} menit lagi",
+    "etaRangeText": "sekitar {low}–{high} lagi",
+    "rateRealtime": "{speed}× kecepatan normal",
+    "detailsToggle": "Detail proses",
+    "cacheHitNotice": "Menggunakan berkas cache yang sudah terverifikasi (unduhan dilewati).",
+    "stallWarning": "Koneksi lambat / proses belum bergerak — masih mencoba…",
+    "stallRetryHint": "Proses tampak terhenti lebih dari 60 detik. Kamu dapat mencoba lagi atau membatalkan.",
+    "cancelButton": "Batal",
+    "cancelConfirmTitle": "Batalkan proses unduh?",
+    "cancelConfirmBody": "Proses unduh akan dihentikan dan harus diulang dari awal jika dilanjutkan.",
+    "cancelConfirmContinue": "Lanjutkan",
+    "cancelConfirmStop": "Ya, batalkan",
+    "cancelledNotice": "Proses dibatalkan oleh pengguna.",
+    "interruptedNotice": "Proses sebelumnya terhenti saat aplikasi ditutup (tahap: {stage}). Klik Ulangi untuk memulai ulang.",
+    "retryButton": "Ulangi",
+    "busyMessage": "Ada proses lain yang sedang berjalan. Tunggu hingga selesai atau batalkan terlebih dahulu.",
+    "actionRepair": "Perbaiki",
+    "actionCheckConnection": "Periksa koneksi",
+    "actionClearCache": "Bersihkan cache",
+    "actionRetry": "Coba lagi",
+    "successTitle": "Klip siap diedit",
+    "successMeta": "{width}×{height} · {fps} fps · {codec} · {size}",
+    "proxyGeneratedNote": "Proxy pratinjau H.264/AAC disiapkan otomatis untuk pemutaran lancar (file sumber asli tetap utuh untuk export).",
+    "openEditor": "Buka editor",
+    "activityChipRunning": "{stage} {percent}% · {eta}",
+    "activityChipInterrupted": "Proses terhenti · Ulangi"
+  },
+  "homeStatus": {
+    "probed": "Baru diperiksa",
+    "ranged": "Rentang siap",
+    "downloaded": "Siap diedit",
+    "interrupted": "Terhenti",
+    "deleteDownloaded": "Hapus data unduhan",
+    "deleteDownloadedConfirm": "Hapus file media & komposisi hasil unduhan untuk proyek ini? Metadata dan rentang klip proyek tetap dipertahankan.",
+    "deleteDownloadedConfirmAction": "Ya, hapus data unduhan",
+    "cancelAction": "Batal",
+    "retryInterrupted": "Ulangi"
   }
 }
