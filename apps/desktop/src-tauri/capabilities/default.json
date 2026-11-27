@@ -13,10 +13,6 @@
         { "path": "$LOCALDATA/ClipperHelper-Dev/logs" }
       ]
     },
-    {
-      "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://www.youtube.com/watch?v=*" }]
-    },
     "dialog:allow-open",
     "dialog:allow-save"
   ]

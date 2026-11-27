@@ -369,15 +369,111 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Opens a stored project's canonical YouTube watch URL in the user's system browser.
+   * Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
+   * from the stored, validated `source_video_id`.
+   */
+  async openVideoInBrowser(
+    projectId: string,
+    startSeconds: number | null
+  ): Promise<Result<string, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('open_video_in_browser', { projectId, startSeconds }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Starts (or idempotently reuses) the persistent M1.4 `generate` pipeline job for `project_id`.
+   */
+  async startGenerateJob(projectId: string): Promise<Result<JobRecord, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('start_generate_job', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Fetches a single persistent job record by ID.
+   */
+  async getJob(jobId: string): Promise<Result<JobRecord | null, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Lists persistent job records (all recent or filtered to a single `project_id`).
+   */
+  async listJobs(
+    projectId: string | null,
+    limit: number | null
+  ): Promise<Result<JobRecord[], AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('list_jobs', { projectId, limit }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Requests immediate cancellation of an active (`queued`/`running`) job.
+   */
+  async cancelJob(jobId: string): Promise<Result<boolean, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('cancel_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Retries a `failed`, `cancelled`, or crash-`interrupted` generate job cleanly.
+   */
+  async retryJob(jobId: string): Promise<Result<JobRecord, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('retry_job', { jobId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Deletes cached source/proxy artifact files and composition payload for `project_id` while
+   * preserving the project metadata and saved range (`Hapus data unduhan`).
+   */
+  async deleteProjectDownloadData(
+    projectId: string
+  ): Promise<Result<ProjectRecord, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('delete_project_download_data', { projectId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
 
 export const events = __makeEvents__<{
   componentInstallProgressEvent: ComponentInstallProgressEvent;
+  jobEventPayload: JobEventPayload;
   probeProgressEvent: ProbeProgressEvent;
 }>({
   componentInstallProgressEvent: 'component-install-progress-event',
+  jobEventPayload: 'job-event-payload',
   probeProgressEvent: 'probe-progress-event',
 });
 
@@ -609,6 +705,63 @@ export type HardwareProfile = {
   gpus: GpuAdapterInfo[];
   fingerprint: string;
 };
+export type JobEventError = {
+  code: string;
+  messageKey: string;
+  retryable: boolean;
+  actionKeys: string[];
+};
+export type JobEventEta = {
+  seconds: number;
+  lowSeconds: number;
+  highSeconds: number;
+  confidence: string;
+};
+export type JobEventOverall = { percent: number };
+/**
+ * Typed `JobEvent` payload matching `PROGRESS_AND_ETA §3` emitted to the React UI via `tauri-specta`.
+ */
+export type JobEventPayload = {
+  jobId: string;
+  projectId: string;
+  kind: string;
+  state: string;
+  stage: JobEventStage;
+  stageProgress: JobEventStageProgress;
+  overall: JobEventOverall;
+  rate: JobEventRate | null;
+  eta: JobEventEta | null;
+  detail: { [key in string]: string } | null;
+  error: JobEventError | null;
+  ts: number;
+};
+export type JobEventRate = { value: number; unit: string; smoothed: boolean };
+export type JobEventStage = {
+  id: string;
+  index: number;
+  count: number;
+  labelKey: string;
+  labelArgs: { [key in string]: string } | null;
+};
+export type JobEventStageProgress = { done: number; total: number | null; unit: string };
+/**
+ * Persisted background job record in SQLite `jobs` table (DATA_MODEL §9; PROGRESS_AND_ETA §3).
+ */
+export type JobRecord = {
+  id: string;
+  project_id: string;
+  kind: string;
+  status: string;
+  stage: string | null;
+  progress_json: string | null;
+  error_code: string | null;
+  error_detail: string | null;
+  idempotency_key: string | null;
+  attempt: number;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+};
 export type ManifestComponentItem = {
   component: string;
   version: string;
@@ -710,6 +863,7 @@ export type ProjectRecord = {
   range_start_ms: number | null;
   range_end_ms: number | null;
   status: string;
+  composition_hash: string | null;
   created_at: number;
   updated_at: number;
 };

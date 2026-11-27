@@ -1,7 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { RangePickerView } from '../components/RangePickerView';
 import { commands, PreviewConfigResponse, ProjectRecord } from '../ipc/bindings';
 import {
@@ -17,10 +16,6 @@ import {
   validateClipRange,
 } from '../utils/timecode';
 
-vi.mock('@tauri-apps/plugin-opener', () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../ipc/bindings', async () => {
   const actual = await vi.importActual<typeof import('../ipc/bindings')>('../ipc/bindings');
   return {
@@ -28,6 +23,10 @@ vi.mock('../ipc/bindings', async () => {
     commands: {
       ...actual.commands,
       updateProjectRange: vi.fn(),
+      openVideoInBrowser: vi.fn().mockResolvedValue({
+        status: 'ok',
+        data: 'https://www.youtube.com/watch?v=9s6imDGjy08&t=120s',
+      }),
       recordPreviewEvent: vi.fn().mockResolvedValue({
         status: 'ok',
         data: { embed_disabled_count: 0, fallback_count: 0, config_error_count: 0 },
@@ -51,6 +50,7 @@ function buildProject(overrides?: Partial<ProjectRecord>): ProjectRecord {
     range_start_ms: null,
     range_end_ms: null,
     status: 'probed',
+    composition_hash: null,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -61,7 +61,7 @@ function buildPreviewConfig(overrides?: Partial<PreviewConfigResponse>): Preview
   return {
     bridge_url: 'https://clipper-bridge.vercel.app',
     bridge_protocol_version: 1,
-    control_video_id: 'WufkeDaJisQ',
+    control_video_id: 'aqz-KE-bpKQ',
     ready_timeout_ms: 6000,
     max_range_seconds: 300,
     download_prior_rt_factor: 1.66,
@@ -188,7 +188,7 @@ describe('BridgeSession & extrapolation protocol logic', () => {
       targetOrigin: 'https://clipper-bridge.vercel.app',
       expectedProtocolVersion: 1,
       readyTimeoutMs: 6000,
-      controlVideoId: 'WufkeDaJisQ',
+      controlVideoId: 'aqz-KE-bpKQ',
       videoId: '9s6imDGjy08',
       probeDurationSeconds: 600,
       nonce: 'nonce1234',
@@ -217,7 +217,7 @@ describe('BridgeSession & extrapolation protocol logic', () => {
       source: fakeSource,
       data: { type: 'error', code: 150 },
     });
-    expect(sent[2]?.cmd).toMatchObject({ type: 'load', videoId: 'WufkeDaJisQ' });
+    expect(sent[2]?.cmd).toMatchObject({ type: 'load', videoId: 'aqz-KE-bpKQ' });
     expect(fallbacks).toHaveLength(0);
 
     // Control video fails => OUR config error -> E_PREVIEW_CONFIG
@@ -394,10 +394,9 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
       expect(screen.getByTestId('range-saved-notice')).toBeInTheDocument();
     });
 
-    // "Lanjut ke unduh" remains disabled with "Segera hadir"
+    // M1.4: "Lanjut ke unduh" is enabled when range is valid
     const nextDownloadBtn = screen.getByRole('button', { name: 'Lanjut ke unduh' });
-    expect(nextDownloadBtn).toBeDisabled();
-    expect(screen.getByTestId('range-picker-view')).toHaveTextContent('Segera hadir');
+    expect(nextDownloadBtn).toBeEnabled();
   });
 
   it('switches to timecode-only on 6s bridge timeout and opens restricted YouTube URL', async () => {
@@ -427,7 +426,7 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     expect(screen.queryByTestId('preview-error-banner')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Buka video di browser' }));
-    expect(openUrl).toHaveBeenCalledWith('https://www.youtube.com/watch?v=9s6imDGjy08&t=120');
+    expect(commands.openVideoInBrowser).toHaveBeenCalledWith(proj.id, 120);
   });
 
   it('distinguishes owner-restricted 101/150 (no error banner) from config error 153 (E_PREVIEW_CONFIG banner)', async () => {
@@ -438,7 +437,7 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     r1.completeHandshake();
 
     r1.sendFromBridge({ type: 'error', code: 150 });
-    expect(r1.sentCommands.some((c) => c.type === 'load' && c.videoId === 'WufkeDaJisQ')).toBe(
+    expect(r1.sentCommands.some((c) => c.type === 'load' && c.videoId === 'aqz-KE-bpKQ')).toBe(
       true
     );
 
@@ -513,5 +512,62 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     expect((screen.getByLabelText('Waktu akhir (HH:MM:SS)') as HTMLInputElement).value).toBe(
       '00:08:45'
     );
+  });
+
+  it('disables Lanjut ke unduh when range exceeds max_range_seconds and starts generate job when valid', async () => {
+    const user = userEvent.setup();
+    const proj = buildProject({
+      duration_seconds: 1200,
+      range_start_ms: 0,
+      range_end_ms: 60_000,
+      status: 'ranged',
+    });
+    vi.mocked(commands.updateProjectRange).mockResolvedValue({
+      status: 'ok',
+      data: proj,
+    });
+    const onStartGenerate = vi.fn().mockResolvedValue({
+      id: 'job-start-1',
+      project_id: proj.id,
+      kind: 'generate',
+      status: 'queued',
+      stage: 'probe',
+      progress_json: null,
+      error_code: null,
+      error_detail: null,
+      idempotency_key: 'k'.repeat(64),
+      attempt: 1,
+      created_at: 1_700_000_000,
+      started_at: null,
+      finished_at: null,
+    });
+
+    render(
+      <RangePickerView
+        locale="id"
+        project={proj}
+        previewConfig={buildPreviewConfig({ max_range_seconds: 300 })}
+        onBackHome={vi.fn()}
+        onOpenDiagnostics={vi.fn()}
+        onProjectUpdated={vi.fn()}
+        onStartGenerate={onStartGenerate}
+      />
+    );
+
+    const nextBtn = screen.getByTestId('next-download-button');
+    expect(nextBtn).toBeEnabled();
+
+    await user.click(nextBtn);
+    await waitFor(() => {
+      expect(onStartGenerate).toHaveBeenCalledWith(proj.id);
+    });
+    expect(screen.getByTestId('operation-panel')).toBeInTheDocument();
+
+    // Exceed max_range_seconds -> disabled with E_RANGE_TOO_LONG error
+    const endInput = screen.getByLabelText('Waktu akhir (HH:MM:SS)');
+    await user.clear(endInput);
+    await user.type(endInput, '00:10:00');
+    expect(screen.getByTestId('range-validation-error')).toHaveTextContent('E_RANGE_TOO_LONG');
+    expect(screen.getByTestId('next-download-button')).toBeDisabled();
   });
 });

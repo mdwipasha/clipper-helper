@@ -39,6 +39,13 @@ export const CompositionSourceSchema = z.object({
       WorkspacePathRegex,
       'Must be POSIX path relative to workspace root matching ^(cache|projects)/[A-Za-z0-9._/-]+$'
     ),
+  previewPath: z
+    .string()
+    .regex(
+      WorkspacePathRegex,
+      'Must be POSIX path relative to workspace root matching ^(cache|projects)/[A-Za-z0-9._/-]+$'
+    )
+    .optional(),
   absoluteStartMs: z.number().nonnegative(),
   durationMs: z.number().positive(),
   width: z.number().int().positive(),

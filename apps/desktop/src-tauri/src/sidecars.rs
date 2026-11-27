@@ -515,11 +515,30 @@ impl SidecarSupervisor {
     pub async fn spawn_streaming<F>(
         &self,
         spec: &SidecarSpec,
-        mut on_stdout_line: F,
+        on_stdout_line: F,
         cancel_token: Option<&CancellationToken>,
     ) -> Result<SidecarResult, SidecarError>
     where
         F: FnMut(String) + Send + 'static,
+    {
+        self.spawn_streaming_with_hooks(spec, on_stdout_line, |_| {}, || {}, cancel_token)
+            .await
+    }
+
+    /// Spawn a sidecar process and stream stdout lines, stderr lines, and 2 s periodic ticks
+    /// (for heartbeats and stall detection) inside the Windows Job Object.
+    pub async fn spawn_streaming_with_hooks<FOut, FErr, FTick>(
+        &self,
+        spec: &SidecarSpec,
+        mut on_stdout_line: FOut,
+        mut on_stderr_line: FErr,
+        mut on_tick: FTick,
+        cancel_token: Option<&CancellationToken>,
+    ) -> Result<SidecarResult, SidecarError>
+    where
+        FOut: FnMut(String) + Send,
+        FErr: FnMut(String) + Send,
+        FTick: FnMut() + Send,
     {
         if !spec.binary_path.is_absolute() {
             return Err(SidecarError::PathNotAbsolute(spec.binary_path.clone()));
@@ -671,6 +690,7 @@ impl SidecarSupervisor {
         let mut truncated = false;
 
         let mut splitter = LineSplitter::new(spec.max_line_bytes);
+        let mut stderr_splitter = LineSplitter::new(spec.max_line_bytes);
         let mut stderr_ring = StderrRingBuffer::new(spec.max_stderr_bytes);
 
         let mut stdout_buf = vec![0u8; 4096];
@@ -686,6 +706,8 @@ impl SidecarSupervisor {
         tokio::pin! {
             let timeout_sleep = tokio::time::sleep(timeout_duration);
         }
+        let mut tick_interval = tokio::time::interval(Duration::from_secs(2));
+        tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut post_exit_drain = false;
         let mut drain_deadline = tokio::time::Instant::now() + Duration::from_secs(365 * 24 * 3600);
@@ -696,6 +718,9 @@ impl SidecarSupervisor {
                     job.terminate(1);
                     let _ = child.kill().await;
                     return Err(SidecarError::Timeout(spec.timeout.unwrap()));
+                }
+                _ = tick_interval.tick(), if exit_status.is_none() => {
+                    on_tick();
                 }
                 _ = tokio::time::sleep_until(drain_deadline), if post_exit_drain => {
                     // Child already exited; drain window expired (likely inherited handles by grandchild)
@@ -746,7 +771,17 @@ impl SidecarSupervisor {
                         }
                         Ok(n) => {
                             total_stderr_bytes += n;
-                            stderr_ring.push_bytes(&stderr_buf[..n]);
+                            if total_stderr_bytes <= spec.max_total_bytes {
+                                stderr_ring.push_bytes(&stderr_buf[..n]);
+                                stderr_splitter.push_bytes(&stderr_buf[..n], |line| {
+                                    on_stderr_line(line);
+                                });
+                            } else if !truncated {
+                                truncated = true;
+                                job.terminate(1);
+                                let _ = child.kill().await;
+                                stderr_done = true;
+                            }
                         }
                         Err(e) => {
                             tracing::warn!("stderr read error: {}", e);
@@ -772,6 +807,9 @@ impl SidecarSupervisor {
         splitter.finish(|line| {
             captured_lines.push(line.clone());
             on_stdout_line(line);
+        });
+        stderr_splitter.finish(|line| {
+            on_stderr_line(line);
         });
 
         let stderr_tail = stderr_ring.to_redacted_string();

@@ -3,15 +3,41 @@ updates:
   - package-ecosystem: 'npm'
     directory: '/'
     schedule:
-      interval: 'weekly'
-    open-pull-requests-limit: 10
+      interval: 'monthly'
+    open-pull-requests-limit: 3
+    groups:
+      npm-dependencies:
+        patterns:
+          - '*'
+    ignore:
+      # Tauri JS/Rust parity is verified in CI and must be upgraded manually together
+      - dependency-name: '@tauri-apps/*'
+
   - package-ecosystem: 'cargo'
     directory: '/apps/desktop/src-tauri'
     schedule:
-      interval: 'weekly'
-    open-pull-requests-limit: 10
+      interval: 'monthly'
+    open-pull-requests-limit: 3
+    groups:
+      cargo-dependencies:
+        patterns:
+          - '*'
+    ignore:
+      # Tauri runtime, windowing/webview bindings, and IPC codegen require coordinated manual upgrades
+      - dependency-name: 'tauri'
+      - dependency-name: 'tauri-*'
+      - dependency-name: 'wry'
+      - dependency-name: 'tao'
+      - dependency-name: 'specta'
+      - dependency-name: 'specta-*'
+      - dependency-name: 'tauri-specta'
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
-      interval: 'weekly'
-    open-pull-requests-limit: 10
+      interval: 'monthly'
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - '*'

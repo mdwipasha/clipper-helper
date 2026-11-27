@@ -159,4 +159,54 @@ describe('CompositionSchema', () => {
     };
     expect(() => CompositionSchema.parse(invalid)).toThrow();
   });
+
+  it('accepts initial build_initial_composition shape with previewPath and empty captions', () => {
+    const initialFromRust = {
+      schemaVersion: 1,
+      id: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d',
+      canvas: { width: 1080, height: 1920, fps: 60 },
+      sources: [
+        {
+          id: 'src-1',
+          provider: 'youtube',
+          videoId: 'aqz-KE-bpKQ',
+          path: `cache/${'a'.repeat(64)}.mp4`,
+          previewPath: 'cache/proxies/p1.mp4',
+          absoluteStartMs: 10000,
+          durationMs: 70000,
+          width: 1920,
+          height: 1080,
+          fps: 60,
+        },
+      ],
+      timeline: [{ id: 'seg-1', sourceId: 'src-1', inMs: 5000, outMs: 65000 }],
+      layout: {
+        mode: 'fill',
+        crop: { x: 0.341797, y: 0, w: 0.316406, h: 1.0 },
+      },
+      captions: {
+        enabled: false,
+        status: 'none',
+        language: 'id',
+        words: [],
+        edits: [],
+        style: validComposition.captions.style,
+      },
+      overlays: [],
+      audio: {
+        gainDb: 0,
+        normalize: { enabled: false, targetLufs: -14.0 },
+      },
+      template: null,
+      export: { preset: 'standard', audioKbps: 192 },
+    };
+    const parsed = CompositionSchema.parse(initialFromRust);
+    expect(parsed.sources[0]?.previewPath).toBe('cache/proxies/p1.mp4');
+    expect(parsed.timeline[0]).toEqual({
+      id: 'seg-1',
+      sourceId: 'src-1',
+      inMs: 5000,
+      outMs: 65000,
+    });
+  });
 });

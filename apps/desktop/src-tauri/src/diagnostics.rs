@@ -1269,6 +1269,47 @@ mod tests {
                 .unwrap();
         }
 
+        let cap_report = crate::capabilities::CapabilityReport {
+            component: "ffmpeg".into(),
+            version: "n9.0.2-58-g8c7ef49002-20261119".into(),
+            mode: "strict".into(),
+            status: crate::capabilities::CapabilityStatus::Pass,
+            checked_at: 1_700_000_000,
+            reported_version: Some("n9.0.2".into()),
+            reasons: vec![],
+            warnings: vec![],
+            ffmpeg: Some(crate::capabilities::FfmpegCapabilities {
+                ffmpeg_version: "n9.0.2".into(),
+                ffprobe_version: "n9.0.2".into(),
+                has_gpl: false,
+                has_nonfree: false,
+                has_version3: true,
+                effective_license: "LGPLv3".into(),
+                forbidden_libs_present: vec![],
+                forbidden_encoders_present: vec![],
+                gpl_filters_present: vec![],
+                hardware_encoders_available: vec!["h264_nvenc".into(), "h264_mf".into()],
+                required_encoders_present: vec!["aac".into(), "h264_mf".into()],
+                missing_encoders: vec![],
+                missing_decoders: vec![],
+                missing_filters: vec![],
+                missing_protocols: vec![],
+                missing_formats: vec![],
+            }),
+        };
+        store
+            .set_component_installed_current(
+                "ffmpeg",
+                "n9.0.2-58-g8c7ef49002-20261119",
+                "bin",
+                "bin/ffmpeg/n9.0.2-58-g8c7ef49002-20261119",
+                1,
+                "[]",
+                Some(&serde_json::to_string(&cap_report).unwrap()),
+                1_700_000_000,
+            )
+            .unwrap();
+
         let hw = mock_hw();
         let resolver = ComponentResolver::new(ws.clone(), store.clone(), InUseRegistry::new());
         let snapshot = resolver.diagnostics_snapshot().unwrap();
@@ -1304,8 +1345,14 @@ mod tests {
         // App lifecycle event excluded from error_count (3 + 2 = 5)
         assert_eq!(bundle.error_count, 5);
 
-        // ISO-8601 UTC + GiB labels + WebView2/locale/timezone + grouped count + reason ref
+        // ISO-8601 UTC + GiB labels + drive free/total + encoders_in_build + WebView2/locale/timezone + grouped count + reason ref
         assert!(bundle.preview_text.contains("16.00 GiB"));
+        assert!(
+            bundle.preview_text.contains("bebas /") && bundle.preview_text.contains("GiB total")
+        );
+        assert!(bundle
+            .preview_text
+            .contains("encoders_in_build=[h264_nvenc, h264_mf]"));
         assert!(bundle
             .preview_text
             .contains("WebView2: 130.0.2849.46 | Locale: id-ID | Zona Waktu: UTC+07:00"));

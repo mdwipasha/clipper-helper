@@ -183,14 +183,15 @@ create table public.app_config (
   key text primary key, value jsonb not null,
   updated_at timestamptz not null default now(), updated_by uuid
 );
--- keys: min_app_version, maintenance, limits, ticket, flags
+-- keys: min_app_version, maintenance, limits, ticket, flags, preview
 -- Seed defaults (require AppConfigSchema zod validation in packages/shared):
 insert into public.app_config(key, value) values
  ('min_app_version', '"0.0.0"'),
  ('maintenance',     '{"enabled":false,"message":null}'),
- ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
+ ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7,"download_prior_rt_factor":1.66,"download_prior_startup_seconds":10}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
  ('ticket',          '{"ttl_seconds":900,"active_kid":null,"next_kid":null}'),
- ('flags',           '{"caption_lead_offset_ms":0}'); -- caption_lead_offset_ms: default 0 pending S3d timing verification
+ ('flags',           '{"caption_lead_offset_ms":0}'), -- caption_lead_offset_ms: default 0 pending S3d timing verification
+ ('preview',         '{"bridge_url":"https://clipper-bridge.vercel.app","bridge_protocol_version":1,"control_video_id":"aqz-KE-bpKQ","ready_timeout_ms":6000}'); -- control_video_id: Big Buck Bunny (known-embeddable control)
 
 create table public.component_manifests (
   id uuid primary key default gen_random_uuid(),
@@ -397,6 +398,7 @@ interface Composition {
   sources: Array<{
     id: string; provider: 'youtube' | 'local_file'; videoId: string;   // local_file: content fingerprint
     path: string;                               // POSIX-style, relative to workspace root; must match ^(cache|projects)/[A-Za-z0-9._/-]+$ (see ARCHITECTURE §9)
+    previewPath?: string;                       // Optional POSIX-style relative path to WebView2-native H.264/AAC proxy (cache/proxies/...) when source path uses VP9/AV1/Opus
     absoluteStartMs: number;                    // where this file starts in the original VOD; working definition: absoluteStartMs = requestedStartMs (S1c verified relative audio sync; M1 sync test gates absolute alignment)
     durationMs: number; width: number; height: number; fps: number;
   }>;
@@ -503,12 +505,12 @@ create table projects (
 );
 create table jobs (
   id text primary key, project_id text, kind text,              -- generate|captions|export|model_download|component_update|app_update
-  status text,                                                  -- queued|running|paused|succeeded|failed|cancelled
+  status text,                                                  -- queued|running|paused|succeeded|failed|cancelled|interrupted
   stage text, progress_json text, error_code text, error_detail text,
   idempotency_key text, attempt integer default 0, created_at integer, started_at integer, finished_at integer
 );
 create table artifacts (
-  id text primary key, project_id text, kind text,              -- source|audio|transcript(SourceTranscript)|proxy|waveform|output
+  id text primary key, project_id text, kind text,              -- source|audio|transcript(SourceTranscript)|preview_proxy|waveform|output
   cache_key text unique, path text, size_bytes integer, sha256 text, created_at integer, last_used_at integer, pinned integer default 0
 );
 create table stage_stats (                                      -- ETA calibration

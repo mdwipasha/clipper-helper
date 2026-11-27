@@ -1,10 +1,12 @@
 pub mod archive;
 pub mod capabilities;
 pub mod commands;
+pub mod composition;
 pub mod crash;
 #[cfg(debug_assertions)]
 pub mod dev_commands;
 pub mod diagnostics;
+pub mod download;
 pub mod encoder;
 pub mod eta;
 pub mod hardware;
@@ -14,7 +16,10 @@ pub mod license;
 pub mod logging;
 pub mod manifest;
 pub mod net;
+pub mod pipeline;
+pub mod preview_proxy;
 pub mod probe;
+pub mod progress_parser;
 pub mod render;
 pub mod resolver;
 pub mod security;
@@ -53,7 +58,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
-            commands::ProbeProgressEvent
+            commands::ProbeProgressEvent,
+            jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
             commands::get_app_info,
@@ -84,6 +90,13 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
+            commands::start_generate_job,
+            commands::get_job,
+            commands::list_jobs,
+            commands::cancel_job,
+            commands::retry_job,
+            commands::delete_project_download_data,
             dev_commands::dev_get_system_info,
             dev_commands::dev_reset_workspace,
             dev_commands::dev_run_fake_sidecar,
@@ -110,7 +123,8 @@ pub fn export_typescript_bindings() -> Result<(), String> {
     let prod_builder = tauri_specta::Builder::<tauri::Wry>::new()
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
-            commands::ProbeProgressEvent
+            commands::ProbeProgressEvent,
+            jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
             commands::get_app_info,
@@ -141,6 +155,13 @@ pub fn export_typescript_bindings() -> Result<(), String> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
+            commands::start_generate_job,
+            commands::get_job,
+            commands::list_jobs,
+            commands::cancel_job,
+            commands::retry_job,
+            commands::delete_project_download_data,
         ]);
     let bindings_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc/bindings.ts");
@@ -187,7 +208,8 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .events(tauri_specta::collect_events![
             commands::ComponentInstallProgressEvent,
-            commands::ProbeProgressEvent
+            commands::ProbeProgressEvent,
+            jobs::JobEventPayload
         ])
         .commands(tauri_specta::collect_commands![
             commands::get_app_info,
@@ -218,6 +240,13 @@ pub fn create_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::record_preview_event,
             commands::delete_project,
             commands::open_logs_folder,
+            commands::open_video_in_browser,
+            commands::start_generate_job,
+            commands::get_job,
+            commands::list_jobs,
+            commands::cancel_job,
+            commands::retry_job,
+            commands::delete_project_download_data,
         ])
 }
 
@@ -257,6 +286,14 @@ pub fn initialize_workspace_into_app(
             e
         ))
     })?;
+    let job_rec = jobs::JobCoordinator::reconcile_startup(&root, &store);
+    if !job_rec.interrupted_job_ids.is_empty() || job_rec.cleaned_temp_dirs > 0 {
+        tracing::warn!(
+            "Startup job reconciliation: interrupted={} cleaned_tmp_dirs={}",
+            job_rec.interrupted_job_ids.len(),
+            job_rec.cleaned_temp_dirs
+        );
+    }
 
     let logs_dir = root.join("logs");
     if let Err(e) = logging::activate_file_logging(&logs_dir) {
@@ -359,6 +396,8 @@ pub fn run() {
             app.manage(commands::ManifestCacheState::default());
             app.manage(commands::WebViewErrorRateLimiter::default());
             app.manage(commands::ProbeCancelRegistry::default());
+            app.manage(jobs::JobCoordinator::default());
+            app.manage(download::ProbeHandleCache::default());
 
             if let Err(err) = initialize_workspace_into_app(app.handle()) {
                 tracing::error!("Workspace initialization failed: {}", err);

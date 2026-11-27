@@ -1,11 +1,16 @@
 import { SupportedLocale, t } from '@clipper-helper/i18n';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppCommandError, commands, PreviewConfigResponse, ProjectRecord } from '../ipc/bindings';
+import {
+  AppCommandError,
+  commands,
+  JobEventPayload,
+  JobRecord,
+  PreviewConfigResponse,
+  ProjectRecord,
+} from '../ipc/bindings';
 import { BridgeFallbackInfo, BridgePreviewState } from '../utils/bridgeClient';
 import { formatDurationHms } from '../utils/format';
 import {
-  buildAllowedYouTubeWatchUrl,
   estimateDownloadSeconds,
   formatEstimateMinutes,
   formatTimecodeInput,
@@ -14,23 +19,38 @@ import {
 } from '../utils/timecode';
 import { BridgePlayer, BridgePlayerControls } from './BridgePlayer';
 import { ErrorBanner, toErrorBannerModel } from './ErrorBanner';
+import { OperationPanel } from './OperationPanel';
 
 interface RangePickerViewProps {
   locale: SupportedLocale;
   project: ProjectRecord;
   previewConfig: PreviewConfigResponse;
+  projectJob?: JobRecord | null;
+  projectJobEvent?: JobEventPayload | null;
+  busyJobError?: AppCommandError | null;
   onBackHome: () => void;
   onOpenDiagnostics: () => void;
+  onOpenComponents?: () => void;
   onProjectUpdated: (project: ProjectRecord) => void;
+  onStartGenerate?: (projectId: string) => Promise<JobRecord | null>;
+  onCancelJob?: (jobId: string) => Promise<void>;
+  onRetryJob?: (jobId: string) => Promise<JobRecord | null>;
 }
 
 export function RangePickerView({
   locale,
   project,
   previewConfig,
+  projectJob = null,
+  projectJobEvent = null,
+  busyJobError = null,
   onBackHome,
   onOpenDiagnostics,
+  onOpenComponents,
   onProjectUpdated,
+  onStartGenerate,
+  onCancelJob,
+  onRetryJob,
 }: RangePickerViewProps) {
   const videoDuration = Math.max(1, project.duration_seconds);
 
@@ -78,6 +98,9 @@ export function RangePickerView({
   const [saveError, setSaveError] = useState<AppCommandError | null>(null);
   const [savedNotice, setSavedNotice] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+  const [localJob, setLocalJob] = useState<JobRecord | null>(null);
+  const [startingDownload, setStartingDownload] = useState<boolean>(false);
+  const [generateError, setGenerateError] = useState<AppCommandError | null>(null);
 
   const playerRef = useRef<BridgePlayerControls | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -253,9 +276,89 @@ export function RangePickerView({
     }
   };
 
+  const activeDisplayedJob =
+    projectJob ?? (localJob && localJob.project_id === project.id ? localJob : null);
+  const activeJobState = projectJobEvent?.state ?? activeDisplayedJob?.status ?? null;
+  const isJobRunning = activeJobState === 'queued' || activeJobState === 'running';
+
+  const handleStartDownloadPipeline = async () => {
+    if (!validation.valid || startingDownload || isJobRunning) return;
+    setStartingDownload(true);
+    setSaveError(null);
+    setGenerateError(null);
+
+    try {
+      const startMs = Math.round(validation.startSeconds * 1000);
+      const endMs = Math.round(validation.endSeconds * 1000);
+
+      if (
+        project.range_start_ms !== startMs ||
+        project.range_end_ms !== endMs ||
+        project.status === 'probed'
+      ) {
+        const rangeRes = await commands.updateProjectRange(project.id, startMs, endMs);
+        if (rangeRes.status !== 'ok') {
+          setSaveError(rangeRes.error);
+          return;
+        }
+        onProjectUpdated(rangeRes.data);
+        setSavedNotice(true);
+      }
+
+      if (onStartGenerate) {
+        const started = await onStartGenerate(project.id);
+        if (started) {
+          setLocalJob(started);
+        }
+      } else {
+        const res = await commands.startGenerateJob(project.id);
+        if (res.status === 'ok') {
+          setLocalJob(res.data);
+        } else {
+          setGenerateError(res.error);
+        }
+      }
+    } catch (err) {
+      setGenerateError({
+        code: 'E_UNKNOWN',
+        message_key: 'err.E_UNKNOWN.body',
+        message: err instanceof Error ? err.message : String(err),
+        detail: err instanceof Error ? err.message : String(err),
+        disk_bounds: null,
+      });
+    } finally {
+      setStartingDownload(false);
+    }
+  };
+
+  const handleCancelJobInternal = async (jobId: string) => {
+    if (onCancelJob) {
+      await onCancelJob(jobId);
+      return;
+    }
+    const res = await commands.cancelJob(jobId);
+    if (res.status === 'error') {
+      setGenerateError(res.error);
+    }
+  };
+
+  const handleRetryJobInternal = async (jobId: string) => {
+    setGenerateError(null);
+    if (onRetryJob) {
+      const retried = await onRetryJob(jobId);
+      if (retried) setLocalJob(retried);
+      return;
+    }
+    const res = await commands.retryJob(jobId);
+    if (res.status === 'ok') {
+      setLocalJob(res.data);
+    } else {
+      setGenerateError(res.error);
+    }
+  };
+
   const handleOpenInBrowser = async () => {
-    const watchUrl = buildAllowedYouTubeWatchUrl(project.source_video_id, parsedStart ?? 0);
-    await openUrl(watchUrl).catch(() => undefined);
+    await commands.openVideoInBrowser(project.id, parsedStart ?? 0).catch(() => undefined);
   };
 
   const updateTimelineFromPointer = (clientX: number) => {
@@ -635,23 +738,38 @@ export function RangePickerView({
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <button
             type="button"
-            disabled={!validation.valid || saving}
+            disabled={!validation.valid || saving || isJobRunning}
             onClick={() => void handleSaveRange()}
-            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
+            className="bg-slate-800 hover:bg-slate-700 border border-slate-600 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
           >
             {t('range.saveRange', undefined, locale)}
           </button>
 
           <button
             type="button"
-            disabled
-            aria-disabled="true"
-            className="bg-slate-800 text-slate-400 text-xs font-medium px-4 py-2 rounded-lg cursor-not-allowed"
+            data-testid="next-download-button"
+            disabled={!validation.valid || saving || startingDownload || isJobRunning}
+            onClick={() => void handleStartDownloadPipeline()}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-semibold px-4 py-2 rounded-lg transition"
           >
-            {t('range.nextDownload', undefined, locale)}
+            {startingDownload || isJobRunning
+              ? t('range.generating', undefined, locale)
+              : t('range.nextDownload', undefined, locale)}
           </button>
-          <span className="text-xs text-slate-400">{t('range.comingSoon', undefined, locale)}</span>
         </div>
+
+        {(activeDisplayedJob || generateError || busyJobError) && (
+          <OperationPanel
+            locale={locale}
+            job={activeDisplayedJob}
+            liveEvent={projectJobEvent}
+            busyError={generateError ?? busyJobError}
+            onCancelJob={handleCancelJobInternal}
+            onRetryJob={handleRetryJobInternal}
+            onNavigateRepair={onOpenComponents}
+            onNavigateDiagnostics={onOpenDiagnostics}
+          />
+        )}
       </div>
     </section>
   );

@@ -24,17 +24,26 @@ use crate::crash::{self, CrashRecoveryStatus};
 use crate::diagnostics::{
     self, DiagnosticsReportBundle, DiagnosticsReportOptions, REQUIRED_DISK_MIN_BUFFER_BYTES,
 };
+use crate::download::{
+    compute_download_cache_key, compute_download_window, ProbeHandleCache,
+    DEFAULT_RANGE_HANDLE_SECONDS,
+};
 use crate::encoder::{self, EncoderStatusSnapshot};
 use crate::eta::EtaEstimator;
 use crate::hardware::{self, HardwareProfile};
 use crate::installer::{self, InUseRegistry, VerifyRepairOutcome};
+use crate::jobs::{
+    compute_generate_idempotency_key, JobCoordinator, JobEventPayload, StartJobDisposition,
+};
 use crate::manifest::{self, ComponentManifest};
-use crate::probe::{self, ProbeError, ProbeInfo};
+use crate::pipeline::{execute_generate_job, GenerateRunParams};
+use crate::probe::{self, ProbeError, ProbeInfo, YT_FORMAT_SELECTOR};
 use crate::resolver::{ComponentDiagnosticsSnapshot, ComponentResolver};
 use crate::security::{self, DataRoot};
 use crate::speech::{self, SpeechModel, SpeechModelState};
 use crate::store::{
-    ErrorEventRow, LocalStore, NewErrorEvent, PreviewCountersSnapshot, ProjectRecord, ProjectRepo,
+    ArtifactRepo, ErrorEventRow, JobRecord, JobRepo, LocalStore, NewErrorEvent,
+    PreviewCountersSnapshot, ProjectRecord, ProjectRepo,
 };
 use crate::WorkspaceState;
 
@@ -1393,6 +1402,87 @@ pub fn open_logs_folder(app: tauri::AppHandle) -> Result<(), AppCommandError> {
         })
 }
 
+/// Builds a strictly validated YouTube watch URL (`https://www.youtube.com/watch?v=<id>&t=<n>s`)
+/// from a stored project's provider and 11-char video ID.
+pub fn build_youtube_watch_url_from_stored(
+    provider: &str,
+    video_id: &str,
+    start_seconds: Option<f64>,
+) -> Result<String, AppCommandError> {
+    if provider != "youtube" {
+        return Err(AppCommandError::simple(
+            "E_YT_URL_INVALID",
+            "Tautan eksternal hanya didukung untuk sumber YouTube.".to_string(),
+            format!("Unsupported provider for browser open: {}", provider),
+        ));
+    }
+    let valid_id = video_id.len() == 11
+        && video_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !valid_id {
+        return Err(AppCommandError::simple(
+            "E_YT_URL_INVALID",
+            "ID video YouTube tersimpan tidak valid.".to_string(),
+            "Invalid stored YouTube video ID".to_string(),
+        ));
+    }
+    match start_seconds {
+        Some(secs) if secs.is_finite() && secs >= 0.0 => {
+            let clamped = (secs.floor() as u64).min(86_400);
+            Ok(format!(
+                "https://www.youtube.com/watch?v={}&t={}s",
+                video_id, clamped
+            ))
+        }
+        _ => Ok(format!("https://www.youtube.com/watch?v={}", video_id)),
+    }
+}
+
+/// Opens a stored project's canonical YouTube watch URL in the user's system browser.
+/// Replaces frontend `opener:allow-open-url` capability by constructing the URL strictly in Rust
+/// from the stored, validated `source_video_id`.
+#[tauri::command]
+#[specta::specta]
+pub fn open_video_in_browser(
+    app: tauri::AppHandle,
+    project_id: String,
+    start_seconds: Option<f64>,
+) -> Result<String, AppCommandError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let (_, store, _) = deps_from_app(&app)?;
+    let project = ProjectRepo::new(&store)
+        .get(&project_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan.".to_string(),
+                "Project not found for open_video_in_browser".to_string(),
+            )
+        })?;
+
+    let url = build_youtube_watch_url_from_stored(
+        &project.source_provider,
+        &project.source_video_id,
+        start_seconds,
+    )?;
+
+    app.opener().open_url(&url, None::<&str>).map_err(|e| {
+        AppCommandError::simple(
+            "E_UNKNOWN",
+            format!("Gagal membuka video di browser: {}", e),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+
+    Ok(url)
+}
+
 struct ProbeTokenCleanup {
     registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
     request_id: String,
@@ -1485,6 +1575,16 @@ pub async fn probe_youtube_url(
             record_error(&store, "E_UNKNOWN", "probe", &msg, "");
             AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
         })?;
+
+    if let Some(cache_state) = app.try_state::<ProbeHandleCache>() {
+        cache_state.insert(
+            &project.source_provider,
+            &project.source_video_id,
+            outcome.handle,
+        );
+    } else {
+        let _ = probe::cleanup_probe_handle(&outcome.handle);
+    }
 
     Ok(ProbeProjectResponse {
         probe_info: outcome.info,
@@ -1590,7 +1690,7 @@ pub fn get_preview_config() -> PreviewConfigResponse {
     PreviewConfigResponse {
         bridge_url,
         bridge_protocol_version: 1,
-        control_video_id: "WufkeDaJisQ".to_string(),
+        control_video_id: "aqz-KE-bpKQ".to_string(),
         ready_timeout_ms: 6000,
         max_range_seconds: 300,
         download_prior_rt_factor: 1.66,
@@ -1636,6 +1736,373 @@ pub fn record_preview_event(
     Ok(counters)
 }
 
+fn validated_project_range_ms(
+    project: &ProjectRecord,
+    max_range_seconds: u32,
+) -> Result<(u32, u32), AppCommandError> {
+    let (Some(start_f), Some(end_f)) = (project.range_start_ms, project.range_end_ms) else {
+        return Err(AppCommandError::simple(
+            "E_RANGE_INVALID",
+            "Simpan rentang klip terlebih dahulu sebelum mengunduh.".to_string(),
+            "Project has no persisted range_start_ms/range_end_ms".to_string(),
+        ));
+    };
+    if !start_f.is_finite() || !end_f.is_finite() || start_f < 0.0 || end_f <= start_f {
+        return Err(AppCommandError::simple(
+            "E_RANGE_INVALID",
+            "Rentang klip tidak valid.".to_string(),
+            "Invalid persisted clip range bounds".to_string(),
+        ));
+    }
+    let start_ms = start_f.round() as u32;
+    let end_ms = end_f.round() as u32;
+    let dur_ms = end_ms.saturating_sub(start_ms);
+    if dur_ms < 1000 {
+        return Err(AppCommandError::simple(
+            "E_RANGE_INVALID",
+            "Durasi klip minimal 1 detik.".to_string(),
+            "Range shorter than 1000 ms".to_string(),
+        ));
+    }
+    if dur_ms > max_range_seconds.saturating_mul(1000) {
+        return Err(AppCommandError::simple(
+            "E_RANGE_TOO_LONG",
+            format!(
+                "Durasi klip melebihi batas maksimal {} detik.",
+                max_range_seconds
+            ),
+            format!("Range {} ms exceeds limit {} s", dur_ms, max_range_seconds),
+        ));
+    }
+    if let Err(dl_err) = compute_download_window(
+        start_ms,
+        end_ms,
+        project.duration_seconds,
+        DEFAULT_RANGE_HANDLE_SECONDS,
+    ) {
+        return Err(AppCommandError::simple(
+            dl_err.error_code(),
+            dl_err.to_string(),
+            security::redact_sensitive_text(&dl_err.to_string()),
+        ));
+    }
+    Ok((start_ms, end_ms))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_generate_pipeline_task(
+    app: &tauri::AppHandle,
+    ws_root: PathBuf,
+    store: LocalStore,
+    in_use: InUseRegistry,
+    coordinator: JobCoordinator,
+    probe_cache: ProbeHandleCache,
+    job: JobRecord,
+    project: ProjectRecord,
+    start_ms: u32,
+    end_ms: u32,
+    max_range_seconds: u32,
+    cancel_token: CancellationToken,
+) {
+    let app_handle = app.clone();
+    let device_profile = hardware::probe_hardware_profile().device_profile_key();
+
+    tauri::async_runtime::spawn(async move {
+        let sink: Arc<dyn Fn(JobEventPayload) + Send + Sync> = Arc::new(move |payload| {
+            let _ = payload.emit(&app_handle);
+        });
+        let _ = execute_generate_job(GenerateRunParams {
+            ws_root,
+            store,
+            in_use,
+            coordinator,
+            probe_cache,
+            job,
+            project,
+            selected_start_ms: start_ms,
+            selected_end_ms: end_ms,
+            device_profile,
+            max_range_seconds,
+            handle_seconds: DEFAULT_RANGE_HANDLE_SECONDS,
+            extra_sidecar_env: Vec::new(),
+            free_space_override: None,
+            cancel_token,
+            event_sink: sink,
+        })
+        .await;
+    });
+}
+
+/// Starts (or idempotently reuses) the persistent M1.4 `generate` pipeline job for `project_id`.
+#[tauri::command]
+#[specta::specta]
+pub fn start_generate_job(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<JobRecord, AppCommandError> {
+    let (ws_root, store, in_use) = deps_from_app(&app)?;
+    let coordinator = app
+        .try_state::<JobCoordinator>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+    let probe_cache = app
+        .try_state::<ProbeHandleCache>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+
+    let project = ProjectRepo::new(&store)
+        .get(&project_id)
+        .map_err(|e| AppCommandError::simple("E_UNKNOWN", e.to_string(), e.to_string()))?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan.".to_string(),
+                "Project not found for start_generate_job".to_string(),
+            )
+        })?;
+
+    let preview_cfg = get_preview_config();
+    let (start_ms, end_ms) = validated_project_range_ms(&project, preview_cfg.max_range_seconds)?;
+    let window = compute_download_window(
+        start_ms,
+        end_ms,
+        project.duration_seconds,
+        DEFAULT_RANGE_HANDLE_SECONDS,
+    )
+    .map_err(|e| AppCommandError::simple(e.error_code(), e.to_string(), e.to_string()))?;
+
+    let idempotency_key = compute_generate_idempotency_key(
+        &project.id,
+        &project.source_provider,
+        &project.source_video_id,
+        start_ms,
+        end_ms,
+        YT_FORMAT_SELECTOR,
+        DEFAULT_RANGE_HANDLE_SECONDS,
+    );
+    let cache_key = compute_download_cache_key(
+        &project.source_provider,
+        &project.source_video_id,
+        &window,
+        YT_FORMAT_SELECTOR,
+    );
+    let cached_rel = format!("cache/{}.mp4", cache_key);
+    let cached_file_present = security::resolve_workspace_path_with_root(&ws_root, &cached_rel)
+        .map(|p| p.is_file())
+        .unwrap_or(false);
+    let already_downloaded_and_cached =
+        project.status == "downloaded" && project.composition_hash.is_some() && cached_file_present;
+
+    let disposition = coordinator
+        .begin_generate(
+            &store,
+            &project.id,
+            &idempotency_key,
+            already_downloaded_and_cached,
+        )
+        .map_err(|e| {
+            let code = e.error_code();
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple(code, msg.clone(), msg)
+        })?;
+
+    match disposition {
+        StartJobDisposition::ReusedExisting { job } => Ok(job),
+        StartJobDisposition::Started { job, token } => {
+            spawn_generate_pipeline_task(
+                &app,
+                ws_root,
+                store,
+                in_use,
+                coordinator,
+                probe_cache,
+                job.clone(),
+                project,
+                start_ms,
+                end_ms,
+                preview_cfg.max_range_seconds,
+                token,
+            );
+            Ok(job)
+        }
+    }
+}
+
+/// Fetches a single persistent job record by ID.
+#[tauri::command]
+#[specta::specta]
+pub fn get_job(
+    app: tauri::AppHandle,
+    job_id: String,
+) -> Result<Option<JobRecord>, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    JobRepo::new(&store).get(&job_id).map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+    })
+}
+
+/// Lists persistent job records (all recent or filtered to a single `project_id`).
+#[tauri::command]
+#[specta::specta]
+pub fn list_jobs(
+    app: tauri::AppHandle,
+    project_id: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<JobRecord>, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    let clamped = limit.unwrap_or(20).clamp(1, 50) as usize;
+    let repo = JobRepo::new(&store);
+    let res = match project_id {
+        Some(ref pid) if !pid.trim().is_empty() => repo.list_for_project(pid.trim(), clamped),
+        _ => repo.list_recent(clamped),
+    };
+    res.map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+    })
+}
+
+/// Requests immediate cancellation of an active (`queued`/`running`) job.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_job(app: tauri::AppHandle, job_id: String) -> Result<bool, AppCommandError> {
+    let (ws_root, store, _) = deps_from_app(&app)?;
+    let coordinator = app
+        .try_state::<JobCoordinator>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+    coordinator
+        .cancel_job(&ws_root, &store, &job_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple(e.error_code(), msg.clone(), msg)
+        })
+}
+
+/// Retries a `failed`, `cancelled`, or crash-`interrupted` generate job cleanly.
+#[tauri::command]
+#[specta::specta]
+pub fn retry_job(app: tauri::AppHandle, job_id: String) -> Result<JobRecord, AppCommandError> {
+    let (ws_root, store, in_use) = deps_from_app(&app)?;
+    let coordinator = app
+        .try_state::<JobCoordinator>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+    let probe_cache = app
+        .try_state::<ProbeHandleCache>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+
+    let (job, token) = coordinator.retry_generate(&store, &job_id).map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple(e.error_code(), msg.clone(), msg)
+    })?;
+
+    let project = ProjectRepo::new(&store)
+        .get(&job.project_id)
+        .map_err(|e| AppCommandError::simple("E_UNKNOWN", e.to_string(), e.to_string()))?
+        .ok_or_else(|| {
+            AppCommandError::simple(
+                "E_UNKNOWN",
+                "Proyek tidak ditemukan untuk mengulangi proses.".to_string(),
+                "Project not found for retry_job".to_string(),
+            )
+        })?;
+
+    let preview_cfg = get_preview_config();
+    let (start_ms, end_ms) =
+        match validated_project_range_ms(&project, preview_cfg.max_range_seconds) {
+            Ok(bounds) => bounds,
+            Err(err) => {
+                coordinator.finish_active(&job.id);
+                let _ = JobRepo::new(&store).mark_failed(
+                    &job.id,
+                    job.stage.as_deref().unwrap_or("probe"),
+                    &err.code,
+                    &err.detail,
+                    None,
+                );
+                return Err(err);
+            }
+        };
+
+    spawn_generate_pipeline_task(
+        &app,
+        ws_root,
+        store,
+        in_use,
+        coordinator,
+        probe_cache,
+        job.clone(),
+        project,
+        start_ms,
+        end_ms,
+        preview_cfg.max_range_seconds,
+        token,
+    );
+    Ok(job)
+}
+
+/// Deletes cached source/proxy artifact files and composition payload for `project_id` while
+/// preserving the project metadata and saved range (`Hapus data unduhan`).
+#[tauri::command]
+#[specta::specta]
+pub fn delete_project_download_data(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<ProjectRecord, AppCommandError> {
+    let (ws_root, store, _) = deps_from_app(&app)?;
+    let coordinator = app
+        .try_state::<JobCoordinator>()
+        .map(|s| (*s).clone())
+        .unwrap_or_default();
+
+    if let Some(active_id) = coordinator.active_job_id() {
+        if let Ok(Some(active_job)) = JobRepo::new(&store).get(&active_id) {
+            if active_job.project_id == project_id {
+                return Err(AppCommandError::simple(
+                    "E_JOB_BUSY",
+                    "Hentikan proses yang sedang berjalan sebelum menghapus data unduhan."
+                        .to_string(),
+                    "Cannot delete download data while project job is active".to_string(),
+                ));
+            }
+        }
+    }
+
+    let unreferenced_paths = ArtifactRepo::new(&store)
+        .delete_for_project_and_collect_unreferenced_paths(&project_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?;
+
+    for rel in unreferenced_paths {
+        if let Ok(abs) = security::resolve_workspace_path_with_root(&ws_root, &rel) {
+            if abs.is_file() {
+                let _ = std::fs::remove_file(&abs);
+            }
+        }
+    }
+
+    if let Ok(comp_abs) = security::resolve_workspace_path_with_root(
+        &ws_root,
+        &format!("projects/{}/composition.json", project_id),
+    ) {
+        if comp_abs.is_file() {
+            let _ = std::fs::remove_file(&comp_abs);
+        }
+    }
+
+    ProjectRepo::new(&store)
+        .clear_downloaded_data(&project_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1655,6 +2122,31 @@ mod tests {
         assert_eq!(
             compute_preinstall_required_bytes(sum),
             (150 * 1024 * 1024u64) + (1024 * 1024 * 1024u64)
+        );
+    }
+
+    #[test]
+    fn test_build_youtube_watch_url_from_stored_validates_id_and_clamps_time() {
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(125.9)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=125s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(0.0)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=0s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", Some(999_999.0)).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ&t=86400s"
+        );
+        assert_eq!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ", None).unwrap(),
+            "https://www.youtube.com/watch?v=WufkeDaJisQ"
+        );
+        assert!(build_youtube_watch_url_from_stored("local_file", "WufkeDaJisQ", None).is_err());
+        assert!(build_youtube_watch_url_from_stored("youtube", "bad-id!", None).is_err());
+        assert!(
+            build_youtube_watch_url_from_stored("youtube", "WufkeDaJisQ&evil=1", None).is_err()
         );
     }
 }

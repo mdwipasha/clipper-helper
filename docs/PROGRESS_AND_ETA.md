@@ -49,7 +49,7 @@ Free local operation. Triggered after trimming: transcribes ONLY the trimmed seg
 ```ts
 type JobEvent = {
   jobId: string; kind: 'generate' | 'captions' | 'export' | 'model_download' | 'component_update' | 'app_update' | 'benchmark';
-  state: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
+  state: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
   stage: { id: string; index: number; count: number; labelKey: string; labelArgs?: Record<string, string | number> };
   stageProgress: { done: number; total: number | null; unit: 'bytes' | 'media_seconds' | 'frames' | 'audio_seconds' | 'steps' };
   overall: { percent: number };                           // 0..100, monotonic
@@ -164,6 +164,8 @@ User text is Indonesian (i18n keys `err.<code>.title/body`); each entry lists de
 | `E_YT_RATE_LIMITED` | Platform rate limit / HTTP 403 or 429 (after silent re-probe retry fails) | yes | Wait a few minutes · Retry |
 | `E_YT_EXTRACT_FAILED` | Downloader can't read the video (unknown classification falls here; raw text in redacted logs only) | yes | **Update downloader** · Retry · Use local file |
 | `E_RANGE_INVALID` / `E_RANGE_TOO_LONG` | Start/end invalid or over the cap | no | Adjust range |
+| `E_JOB_BUSY` | Another exclusive job (e.g. `generate`) is already active | yes | Wait or cancel active job |
+| `E_JOB_CANCELLED` | Active job was cancelled by the user | yes | Retry |
 | `E_DISK_LOW` / `E_DISK_FULL` | Not enough free space | yes | Free space · Clean cache |
 | `E_COMPONENT_MISSING` | Required sidecar/model missing or hash mismatch | yes | Repair (re-download) |
 | `E_MODEL_DOWNLOAD_FAILED` | Speech model download failed | yes | Retry (resumes) |
