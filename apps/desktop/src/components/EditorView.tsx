@@ -225,7 +225,7 @@ export function EditorView({
     }
     void startFilmstrip();
     return () => {
-      void commands.cancelProjectThumbnails(project.id).catch(() => undefined);
+      void Promise.resolve(commands.cancelProjectThumbnails(project.id)).catch(() => undefined);
     };
   }, [media, project.id, startFilmstrip]);
 
@@ -304,9 +304,9 @@ export function EditorView({
     return () => {
       window.removeEventListener('blur', onBlur);
       if (editorStateRef.current?.dirty) {
-        void commands
-          .saveComposition(project.id, JSON.stringify(editorStateRef.current.composition))
-          .catch(() => undefined);
+        void Promise.resolve(
+          commands.saveComposition(project.id, JSON.stringify(editorStateRef.current.composition))
+        ).catch(() => undefined);
       }
     };
   }, [flushSave, project.id]);
@@ -687,9 +687,9 @@ export function EditorView({
   const handleVideoDecodeError = () => {
     setDecodeError(true);
     setIsPlaying(false);
-    void commands
-      .recordWebviewError('editor-video', 'WebView HTMLVideoElement decode error', null)
-      .catch(() => undefined);
+    void Promise.resolve(
+      commands.recordWebviewError('editor-video', 'WebView HTMLVideoElement decode error', null)
+    ).catch(() => undefined);
   };
 
   const handleReproxy = async () => {
@@ -1300,7 +1300,9 @@ export function EditorView({
             }
             onCancelFilmstrip={() => {
               setFilmstripStatus('cancelled');
-              void commands.cancelProjectThumbnails(project.id).catch(() => undefined);
+              void Promise.resolve(commands.cancelProjectThumbnails(project.id)).catch(
+                () => undefined
+              );
             }}
             onRetryFilmstrip={() => void startFilmstrip()}
           />

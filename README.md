@@ -8,8 +8,7 @@ Built for clippers who take part in clipping campaigns (Motionklip-style program
 
 ## Status
 
-Pre-implementation. This folder is the source of truth for product, architecture, data and security.
-When code and docs disagree, fix one of them **in the same PR**.
+**M1.0–M1.5 implemented** (branch `m1.5`): component system, YouTube probe, embed preview, range picker, generate pipeline (download + proxy + initial composition), and editor v1 (trim with handles, 9:16 fill crop, undo/redo, autosave, filmstrip). This folder is the source of truth for product, architecture, data and security. When code and docs disagree, fix one of them **in the same PR**.
 
 ## Getting started (Windows 10/11 x64)
 
