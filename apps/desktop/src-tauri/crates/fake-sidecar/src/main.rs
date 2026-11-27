@@ -10,9 +10,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
-    args.windows(2)
-        .find(|w| w[0] == flag)
-        .map(|w| w[1].clone())
+    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
 }
 
 fn handle_ytdlp_probe(args: &[String]) {
@@ -24,7 +22,10 @@ fn handle_ytdlp_probe(args: &[String]) {
         .unwrap_or("WufkeDaJisQ");
 
     if scenario == "fail" {
-        eprintln!("ERROR: [youtube] {}: HTTP Error 429: Too Many Requests", video_id);
+        eprintln!(
+            "ERROR: [youtube] {}: HTTP Error 429: Too Many Requests",
+            video_id
+        );
         std::process::exit(1);
     }
 
@@ -44,7 +45,8 @@ fn write_dummy_media(out_arg: &str) {
 }
 
 fn handle_ytdlp_download(args: &[String]) {
-    let scenario = env::var("CLIPPER_FAKE_YTDLP_SCENARIO").unwrap_or_else(|_| "success".to_string());
+    let scenario =
+        env::var("CLIPPER_FAKE_YTDLP_SCENARIO").unwrap_or_else(|_| "success".to_string());
     let out_arg = arg_value(args, "-o").unwrap_or_else(|| "out.mp4".to_string());
 
     match scenario.as_str() {
@@ -116,7 +118,10 @@ fn handle_ytdlp_download(args: &[String]) {
         }
         "slow_start" => {
             let mut err = std::io::stderr().lock();
-            let _ = writeln!(err, "frame= 0 fps=0.0 q=0.0 size= 0KiB time=N/A bitrate=N/A speed=N/A");
+            let _ = writeln!(
+                err,
+                "frame= 0 fps=0.0 q=0.0 size= 0KiB time=N/A bitrate=N/A speed=N/A"
+            );
             std::thread::sleep(std::time::Duration::from_millis(80));
             let _ = writeln!(
                 err,
@@ -188,12 +193,16 @@ fn handle_ffprobe(args: &[String]) {
 }
 
 fn handle_ffmpeg_proxy(args: &[String]) {
-    let scenario = env::var("CLIPPER_FAKE_FFMPEG_SCENARIO").unwrap_or_else(|_| "success".to_string());
+    let scenario =
+        env::var("CLIPPER_FAKE_FFMPEG_SCENARIO").unwrap_or_else(|_| "success".to_string());
     if scenario == "fail" {
         eprintln!("[h264_mf] Error initializing MediaFoundation encoder");
         std::process::exit(1);
     }
-    let out_path = args.last().cloned().unwrap_or_else(|| "proxy.mp4".to_string());
+    let out_path = args
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "proxy.mp4".to_string());
     let mut out = std::io::stdout().lock();
     for step in [20_000_000u64, 45_000_000, 70_000_000] {
         let _ = writeln!(out, "frame={}", (step / 1_000_000) * 30);
