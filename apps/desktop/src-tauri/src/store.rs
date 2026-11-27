@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current schema version. Bump this when adding new migrations.
-pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+pub const CURRENT_SCHEMA_VERSION: u32 = 6;
 
 pub const ERROR_EVENT_RETENTION_DAYS: u64 = 30;
 pub const ERROR_EVENT_MAX_ROWS: usize = 500;
@@ -138,8 +138,42 @@ pub struct ProjectRecord {
     pub range_start_ms: Option<f64>,
     pub range_end_ms: Option<f64>,
     pub status: String,
+    pub composition_hash: Option<String>,
     pub created_at: f64,
     pub updated_at: f64,
+}
+
+/// Persisted background job record in SQLite `jobs` table (DATA_MODEL §9; PROGRESS_AND_ETA §3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, specta::Type)]
+pub struct JobRecord {
+    pub id: String,
+    pub project_id: String,
+    pub kind: String,
+    pub status: String,
+    pub stage: Option<String>,
+    pub progress_json: Option<String>,
+    pub error_code: Option<String>,
+    pub error_detail: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub attempt: u32,
+    pub created_at: f64,
+    pub started_at: Option<f64>,
+    pub finished_at: Option<f64>,
+}
+
+/// Persisted cached media/artifact row in SQLite `artifacts` table (DATA_MODEL §9).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, specta::Type)]
+pub struct ArtifactRecord {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub kind: String,
+    pub cache_key: String,
+    pub path: String,
+    pub size_bytes: f64,
+    pub sha256: Option<String>,
+    pub created_at: f64,
+    pub last_used_at: f64,
+    pub pinned: bool,
 }
 
 /// Non-sensitive aggregate preview telemetry counters stored locally in SQLite `settings`.
@@ -333,6 +367,16 @@ impl LocalStore {
                 })?;
             conn.pragma_update(None, "user_version", 5)?;
             tracing::info!("Database migrated to schema version 5");
+        }
+
+        if version < 6 {
+            conn.execute_batch(MIGRATION_V6)
+                .map_err(|e| StoreError::MigrationFailed {
+                    version: 6,
+                    detail: e.to_string(),
+                })?;
+            conn.pragma_update(None, "user_version", 6)?;
+            tracing::info!("Database migrated to schema version 6");
         }
 
         let final_version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -1254,13 +1298,19 @@ impl<'a> ProjectRepo<'a> {
         }
     }
 
+    const PROJECT_SELECT_COLS: &'static str =
+        "id, title, channel, source_provider, source_video_id, source_url,
+         duration_seconds, live_status, preview_mode, suggested_start_seconds,
+         range_start_ms, range_end_ms, status, composition_hash, created_at, updated_at";
+
     fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRecord> {
         let dur: i64 = row.get(6)?;
         let suggested: Option<i64> = row.get(9)?;
         let range_start: Option<i64> = row.get(10)?;
         let range_end: Option<i64> = row.get(11)?;
-        let created: i64 = row.get(13)?;
-        let updated: i64 = row.get(14)?;
+        let composition_hash: Option<String> = row.get(13)?;
+        let created: i64 = row.get(14)?;
+        let updated: i64 = row.get(15)?;
         Ok(ProjectRecord {
             id: row.get(0)?,
             title: row
@@ -1285,6 +1335,7 @@ impl<'a> ProjectRepo<'a> {
             status: row
                 .get::<_, Option<String>>(12)?
                 .unwrap_or_else(|| "probed".to_string()),
+            composition_hash,
             created_at: created.max(0) as f64,
             updated_at: updated.max(0) as f64,
         })
@@ -1345,13 +1396,11 @@ impl<'a> ProjectRepo<'a> {
             ],
         )?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, title, channel, source_provider, source_video_id, source_url,
-                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    range_start_ms, range_end_ms, status, created_at, updated_at
-             FROM projects
-             WHERE source_provider = 'youtube' AND source_video_id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM projects WHERE source_provider = 'youtube' AND source_video_id = ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![parsed.video_id], Self::map_row)?;
         match rows.next() {
             Some(Ok(rec)) => Ok(rec),
@@ -1366,14 +1415,11 @@ impl<'a> ProjectRepo<'a> {
     pub fn list_recent(&self, limit: usize) -> Result<Vec<ProjectRecord>, StoreError> {
         let clamped_limit = limit.clamp(1, 50) as i64;
         let conn = self.store.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, title, channel, source_provider, source_video_id, source_url,
-                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    range_start_ms, range_end_ms, status, created_at, updated_at
-             FROM projects
-             ORDER BY updated_at DESC, created_at DESC, rowid DESC
-             LIMIT ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM projects ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params![clamped_limit], Self::map_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
@@ -1383,13 +1429,11 @@ impl<'a> ProjectRepo<'a> {
     pub fn get(&self, project_id: &str) -> Result<Option<ProjectRecord>, StoreError> {
         Self::validate_project_id(project_id)?;
         let conn = self.store.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, title, channel, source_provider, source_video_id, source_url,
-                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    range_start_ms, range_end_ms, status, created_at, updated_at
-             FROM projects
-             WHERE id = ?1",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM projects WHERE id = ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
         match rows.next() {
             Some(Ok(rec)) => Ok(Some(rec)),
@@ -1431,13 +1475,103 @@ impl<'a> ProjectRepo<'a> {
                 project_id
             )));
         }
-        let mut stmt = conn.prepare(
-            "SELECT id, title, channel, source_provider, source_video_id, source_url,
-                    duration_seconds, live_status, preview_mode, suggested_start_seconds,
-                    range_start_ms, range_end_ms, status, created_at, updated_at
-             FROM projects
-             WHERE id = ?1",
+        let sql = format!(
+            "SELECT {} FROM projects WHERE id = ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(rec),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Err(StoreError::Internal("Updated project missing".to_string())),
+        }
+    }
+
+    /// Saves the canonical initial Composition JSON + SHA-256 hash and updates project status.
+    pub fn save_composition(
+        &self,
+        project_id: &str,
+        composition_json: &str,
+        composition_hash: &str,
+        status: &str,
+    ) -> Result<ProjectRecord, StoreError> {
+        Self::validate_project_id(project_id)?;
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        let changed = conn.execute(
+            "UPDATE projects
+             SET composition_json = ?1, composition_hash = ?2, status = ?3, updated_at = ?4
+             WHERE id = ?5",
+            params![
+                composition_json,
+                composition_hash,
+                status,
+                now as i64,
+                project_id
+            ],
         )?;
+        if changed == 0 {
+            return Err(StoreError::Internal(format!(
+                "Project '{}' not found",
+                project_id
+            )));
+        }
+        let sql = format!(
+            "SELECT {} FROM projects WHERE id = ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(rec)) => Ok(rec),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Err(StoreError::Internal("Updated project missing".to_string())),
+        }
+    }
+
+    /// Reads the stored canonical Composition JSON for a project, if present.
+    pub fn get_composition_json(&self, project_id: &str) -> Result<Option<String>, StoreError> {
+        Self::validate_project_id(project_id)?;
+        let conn = self.store.lock_conn()?;
+        let mut stmt = conn.prepare("SELECT composition_json FROM projects WHERE id = ?1")?;
+        let mut rows = stmt.query_map(params![project_id], |r| r.get::<_, Option<String>>(0))?;
+        match rows.next() {
+            Some(Ok(val)) => Ok(val),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    /// Clears downloaded composition payload and reverts status (`'ranged'` or `'probed'`)
+    /// when a user deletes cached download data while preserving the project record.
+    pub fn clear_downloaded_data(&self, project_id: &str) -> Result<ProjectRecord, StoreError> {
+        Self::validate_project_id(project_id)?;
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        let changed = conn.execute(
+            "UPDATE projects
+             SET composition_json = NULL,
+                 composition_hash = NULL,
+                 status = CASE
+                   WHEN range_start_ms IS NOT NULL AND range_end_ms IS NOT NULL THEN 'ranged'
+                   ELSE 'probed'
+                 END,
+                 updated_at = ?1
+             WHERE id = ?2",
+            params![now as i64, project_id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Internal(format!(
+                "Project '{}' not found",
+                project_id
+            )));
+        }
+        let sql = format!(
+            "SELECT {} FROM projects WHERE id = ?1",
+            Self::PROJECT_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query_map(params![project_id], Self::map_row)?;
         match rows.next() {
             Some(Ok(rec)) => Ok(rec),
@@ -1461,6 +1595,409 @@ impl<'a> ProjectRepo<'a> {
         let conn = self.store.lock_conn()?;
         let changed = conn.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
         Ok(changed > 0)
+    }
+}
+
+/// Repository managing persistent `jobs` rows (DATA_MODEL §9; PROGRESS_AND_ETA §3).
+pub struct JobRepo<'a> {
+    store: &'a LocalStore,
+}
+
+impl<'a> JobRepo<'a> {
+    const JOB_SELECT_COLS: &'static str =
+        "id, project_id, kind, status, stage, progress_json, error_code, error_detail,
+         idempotency_key, attempt, created_at, started_at, finished_at";
+
+    pub fn new(store: &'a LocalStore) -> Self {
+        Self { store }
+    }
+
+    fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
+        let attempt: i64 = row.get(9)?;
+        let created: i64 = row.get(10)?;
+        let started: Option<i64> = row.get(11)?;
+        let finished: Option<i64> = row.get(12)?;
+        Ok(JobRecord {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            kind: row.get(2)?,
+            status: row.get(3)?,
+            stage: row.get(4)?,
+            progress_json: row.get(5)?,
+            error_code: row.get(6)?,
+            error_detail: row.get(7)?,
+            idempotency_key: row.get(8)?,
+            attempt: attempt.max(0) as u32,
+            created_at: created.max(0) as f64,
+            started_at: started.map(|v| v.max(0) as f64),
+            finished_at: finished.map(|v| v.max(0) as f64),
+        })
+    }
+
+    pub fn get(&self, job_id: &str) -> Result<Option<JobRecord>, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let sql = format!("SELECT {} FROM jobs WHERE id = ?1", Self::JOB_SELECT_COLS);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![job_id], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(r)) => Ok(Some(r)),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_recent(&self, limit: usize) -> Result<Vec<JobRecord>, StoreError> {
+        let clamped = limit.clamp(1, 50) as i64;
+        let conn = self.store.lock_conn()?;
+        let sql = format!(
+            "SELECT {} FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?1",
+            Self::JOB_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![clamped], Self::map_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn list_for_project(
+        &self,
+        project_id: &str,
+        limit: usize,
+    ) -> Result<Vec<JobRecord>, StoreError> {
+        let clamped = limit.clamp(1, 50) as i64;
+        let conn = self.store.lock_conn()?;
+        let sql = format!(
+            "SELECT {} FROM jobs WHERE project_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+            Self::JOB_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![project_id, clamped], Self::map_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn find_active_by_kind(&self, kind: &str) -> Result<Option<JobRecord>, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let sql = format!(
+            "SELECT {} FROM jobs WHERE kind = ?1 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+            Self::JOB_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![kind], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(r)) => Ok(Some(r)),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn find_latest_by_idempotency(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<JobRecord>, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let sql = format!(
+            "SELECT {} FROM jobs WHERE idempotency_key = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            Self::JOB_SELECT_COLS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![idempotency_key], Self::map_row)?;
+        match rows.next() {
+            Some(Ok(r)) => Ok(Some(r)),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn create_queued(
+        &self,
+        project_id: &str,
+        kind: &str,
+        initial_stage: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<JobRecord, StoreError> {
+        let now = unix_now_secs();
+        let id = uuid::Uuid::new_v4().to_string();
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "INSERT INTO jobs (id, project_id, kind, status, stage, idempotency_key, attempt, created_at)
+             VALUES (?1, ?2, ?3, 'queued', ?4, ?5, 1, ?6)",
+            params![id, project_id, kind, initial_stage, idempotency_key, now as i64],
+        )?;
+        drop(conn);
+        self.get(&id)?
+            .ok_or_else(|| StoreError::Internal("Inserted job missing".to_string()))
+    }
+
+    pub fn mark_running(&self, job_id: &str, stage: &str) -> Result<JobRecord, StoreError> {
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "UPDATE jobs
+             SET status = 'running',
+                 stage = ?1,
+                 error_code = NULL,
+                 error_detail = NULL,
+                 started_at = COALESCE(started_at, ?2),
+                 finished_at = NULL
+             WHERE id = ?3 AND status NOT IN ('succeeded','failed','cancelled')",
+            params![stage, now as i64, job_id],
+        )?;
+        drop(conn);
+        self.get(job_id)?
+            .ok_or_else(|| StoreError::Internal("Job missing".to_string()))
+    }
+
+    pub fn prepare_retry(
+        &self,
+        job_id: &str,
+        initial_stage: &str,
+    ) -> Result<JobRecord, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let changed = conn.execute(
+            "UPDATE jobs
+             SET status = 'queued',
+                 stage = ?1,
+                 progress_json = NULL,
+                 error_code = NULL,
+                 error_detail = NULL,
+                 attempt = attempt + 1,
+                 finished_at = NULL
+             WHERE id = ?2 AND status IN ('failed','cancelled','interrupted')",
+            params![initial_stage, job_id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Internal(format!(
+                "Job '{}' is not retryable in its current state",
+                job_id
+            )));
+        }
+        drop(conn);
+        self.get(job_id)?
+            .ok_or_else(|| StoreError::Internal("Retry job missing".to_string()))
+    }
+
+    pub fn update_stage_and_progress(
+        &self,
+        job_id: &str,
+        stage: &str,
+        progress_json: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "UPDATE jobs
+             SET stage = ?1, progress_json = ?2
+             WHERE id = ?3 AND status = 'running'",
+            params![stage, progress_json, job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_succeeded(
+        &self,
+        job_id: &str,
+        stage: &str,
+        progress_json: &str,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "UPDATE jobs
+             SET status = 'succeeded', stage = ?1, progress_json = ?2, finished_at = ?3
+             WHERE id = ?4 AND status NOT IN ('succeeded','failed','cancelled','interrupted')",
+            params![stage, progress_json, now as i64, job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_failed(
+        &self,
+        job_id: &str,
+        stage: &str,
+        error_code: &str,
+        error_detail: &str,
+        progress_json: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs();
+        let redacted_detail = crate::security::redact_sensitive_text(error_detail);
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "UPDATE jobs
+             SET status = 'failed',
+                 stage = ?1,
+                 error_code = ?2,
+                 error_detail = ?3,
+                 progress_json = COALESCE(?4, progress_json),
+                 finished_at = ?5
+             WHERE id = ?6 AND status NOT IN ('succeeded','failed','cancelled','interrupted')",
+            params![
+                stage,
+                error_code,
+                redacted_detail,
+                progress_json,
+                now as i64,
+                job_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_cancelled(
+        &self,
+        job_id: &str,
+        stage: &str,
+        progress_json: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "UPDATE jobs
+             SET status = 'cancelled',
+                 stage = ?1,
+                 progress_json = COALESCE(?2, progress_json),
+                 finished_at = ?3
+             WHERE id = ?4 AND status NOT IN ('succeeded','failed','cancelled','interrupted')",
+            params![stage, progress_json, now as i64, job_id],
+        )?;
+        Ok(())
+    }
+
+    /// Reconciles any `running` or `queued` jobs left over from an unexpected exit / crash
+    /// to `interrupted` while preserving their active `stage`. Returns affected job IDs.
+    pub fn reconcile_stale_running_jobs(&self) -> Result<Vec<JobRecord>, StoreError> {
+        let now = unix_now_secs();
+        let conn = self.store.lock_conn()?;
+        let sql = format!(
+            "SELECT {} FROM jobs WHERE status IN ('running', 'queued')",
+            Self::JOB_SELECT_COLS
+        );
+        let stale: Vec<JobRecord> = {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], Self::map_row)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        if !stale.is_empty() {
+            conn.execute(
+                "UPDATE jobs
+                 SET status = 'interrupted', finished_at = ?1
+                 WHERE status IN ('running', 'queued')",
+                params![now as i64],
+            )?;
+        }
+        Ok(stale)
+    }
+}
+
+/// Repository managing `artifacts` table (cached sources, preview proxies, etc.).
+pub struct ArtifactRepo<'a> {
+    store: &'a LocalStore,
+}
+
+impl<'a> ArtifactRepo<'a> {
+    pub fn new(store: &'a LocalStore) -> Self {
+        Self { store }
+    }
+
+    pub fn upsert(
+        &self,
+        project_id: Option<&str>,
+        kind: &str,
+        cache_key: &str,
+        rel_path: &str,
+        size_bytes: u64,
+        sha256: Option<&str>,
+    ) -> Result<ArtifactRecord, StoreError> {
+        let now = unix_now_secs();
+        let id = uuid::Uuid::new_v4().to_string();
+        let conn = self.store.lock_conn()?;
+        conn.execute(
+            "INSERT INTO artifacts (id, project_id, kind, cache_key, path, size_bytes, sha256, created_at, last_used_at, pinned)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 0)
+             ON CONFLICT(cache_key) DO UPDATE SET
+               project_id = COALESCE(excluded.project_id, artifacts.project_id),
+               path = excluded.path,
+               size_bytes = excluded.size_bytes,
+               sha256 = COALESCE(excluded.sha256, artifacts.sha256),
+               last_used_at = excluded.last_used_at",
+            params![
+                id,
+                project_id,
+                kind,
+                cache_key,
+                rel_path,
+                size_bytes as i64,
+                sha256,
+                now as i64
+            ],
+        )?;
+        drop(conn);
+        self.get_by_cache_key(cache_key)?
+            .ok_or_else(|| StoreError::Internal("Upserted artifact missing".to_string()))
+    }
+
+    pub fn get_by_cache_key(&self, cache_key: &str) -> Result<Option<ArtifactRecord>, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, kind, cache_key, path, size_bytes, sha256, created_at, last_used_at, pinned
+             FROM artifacts
+             WHERE cache_key = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![cache_key], |r| {
+            let sz: i64 = r.get::<_, Option<i64>>(5)?.unwrap_or(0);
+            let created: i64 = r.get(7)?;
+            let used: i64 = r.get::<_, Option<i64>>(8)?.unwrap_or(created);
+            let pinned: i64 = r.get(9)?;
+            Ok(ArtifactRecord {
+                id: r.get(0)?,
+                project_id: r.get(1)?,
+                kind: r.get(2)?,
+                cache_key: r.get(3)?,
+                path: r.get(4)?,
+                size_bytes: sz.max(0) as f64,
+                sha256: r.get(6)?,
+                created_at: created.max(0) as f64,
+                last_used_at: used.max(0) as f64,
+                pinned: pinned != 0,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(a)) => Ok(Some(a)),
+            Some(Err(e)) => Err(StoreError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    /// Removes artifact rows for `project_id` and returns relative file paths that are safe
+    /// to delete from disk (i.e. not still referenced by any other project's composition).
+    pub fn delete_for_project_and_collect_unreferenced_paths(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let conn = self.store.lock_conn()?;
+        let paths: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT path FROM artifacts WHERE project_id = ?1")?;
+            let rows = stmt.query_map(params![project_id], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        conn.execute(
+            "DELETE FROM artifacts WHERE project_id = ?1",
+            params![project_id],
+        )?;
+
+        // Check whether any remaining project's composition references one of these paths.
+        let mut removable = Vec::new();
+        for p in paths {
+            let other_ref_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM projects WHERE id != ?1 AND composition_json LIKE ?2",
+                params![project_id, format!("%{}%", p)],
+                |r| r.get(0),
+            )?;
+            if other_ref_count == 0 {
+                removable.push(p);
+            }
+        }
+        Ok(removable)
     }
 }
 
@@ -1725,6 +2262,41 @@ WHERE source_provider IS NOT NULL
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_provider_video
   ON projects(source_provider, source_video_id)
   WHERE source_provider IS NOT NULL AND source_video_id IS NOT NULL;
+";
+
+/// V6: Extend `jobs.status` CHECK constraint to support crash-recovered `'interrupted'`
+/// state and add project/status indexes on `jobs` for job runner & UI queries.
+const MIGRATION_V6: &str = "
+CREATE TABLE jobs_v6 (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('generate','captions','export','model_download','component_update','app_update')),
+    status TEXT NOT NULL CHECK (status IN ('queued','running','paused','succeeded','failed','cancelled','interrupted')),
+    stage TEXT,
+    progress_json TEXT,
+    error_code TEXT,
+    error_detail TEXT,
+    idempotency_key TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+);
+
+INSERT INTO jobs_v6 (
+    id, project_id, kind, status, stage, progress_json, error_code, error_detail,
+    idempotency_key, attempt, created_at, started_at, finished_at
+)
+SELECT
+    id, project_id, kind, status, stage, progress_json, error_code, error_detail,
+    idempotency_key, attempt, created_at, started_at, finished_at
+FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_v6 RENAME TO jobs;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at DESC);
 ";
 
 // ── Tests ───────────────────────────────────────────────────────────────

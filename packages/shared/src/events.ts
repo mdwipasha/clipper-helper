@@ -20,6 +20,7 @@ export const JobStateSchema = z.enum([
   'succeeded',
   'failed',
   'cancelled',
+  'interrupted',
 ]);
 
 export type JobState = z.infer<typeof JobStateSchema>;
