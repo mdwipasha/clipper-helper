@@ -88,7 +88,7 @@ export const SEED_APP_CONFIG: AppConfig = {
   preview: {
     bridge_url: 'https://clipper-bridge.vercel.app',
     bridge_protocol_version: 1,
-    control_video_id: 'WufkeDaJisQ',
+    control_video_id: 'aqz-KE-bpKQ', // Big Buck Bunny (known-embeddable control)
     ready_timeout_ms: 6000,
   },
 };

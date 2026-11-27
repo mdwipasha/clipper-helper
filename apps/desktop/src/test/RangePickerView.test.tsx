@@ -60,7 +60,7 @@ function buildPreviewConfig(overrides?: Partial<PreviewConfigResponse>): Preview
   return {
     bridge_url: 'https://clipper-bridge.vercel.app',
     bridge_protocol_version: 1,
-    control_video_id: 'WufkeDaJisQ',
+    control_video_id: 'aqz-KE-bpKQ',
     ready_timeout_ms: 6000,
     max_range_seconds: 300,
     download_prior_rt_factor: 1.66,
@@ -187,7 +187,7 @@ describe('BridgeSession & extrapolation protocol logic', () => {
       targetOrigin: 'https://clipper-bridge.vercel.app',
       expectedProtocolVersion: 1,
       readyTimeoutMs: 6000,
-      controlVideoId: 'WufkeDaJisQ',
+      controlVideoId: 'aqz-KE-bpKQ',
       videoId: '9s6imDGjy08',
       probeDurationSeconds: 600,
       nonce: 'nonce1234',
@@ -216,7 +216,7 @@ describe('BridgeSession & extrapolation protocol logic', () => {
       source: fakeSource,
       data: { type: 'error', code: 150 },
     });
-    expect(sent[2]?.cmd).toMatchObject({ type: 'load', videoId: 'WufkeDaJisQ' });
+    expect(sent[2]?.cmd).toMatchObject({ type: 'load', videoId: 'aqz-KE-bpKQ' });
     expect(fallbacks).toHaveLength(0);
 
     // Control video fails => OUR config error -> E_PREVIEW_CONFIG
@@ -437,7 +437,7 @@ describe('RangePickerView UI (player, fallback, ads, nudges, loop, persistence)'
     r1.completeHandshake();
 
     r1.sendFromBridge({ type: 'error', code: 150 });
-    expect(r1.sentCommands.some((c) => c.type === 'load' && c.videoId === 'WufkeDaJisQ')).toBe(
+    expect(r1.sentCommands.some((c) => c.type === 'load' && c.videoId === 'aqz-KE-bpKQ')).toBe(
       true
     );
 

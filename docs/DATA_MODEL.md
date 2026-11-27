@@ -183,14 +183,15 @@ create table public.app_config (
   key text primary key, value jsonb not null,
   updated_at timestamptz not null default now(), updated_by uuid
 );
--- keys: min_app_version, maintenance, limits, ticket, flags
+-- keys: min_app_version, maintenance, limits, ticket, flags, preview
 -- Seed defaults (require AppConfigSchema zod validation in packages/shared):
 insert into public.app_config(key, value) values
  ('min_app_version', '"0.0.0"'),
  ('maintenance',     '{"enabled":false,"message":null}'),
- ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
+ ('limits',          '{"max_range_seconds":300,"max_clip_seconds":300,"reexport_tolerance_ms":15000,"reexport_daily_cap":30,"reexport_total_cap":200,"free_device_daily_cap":5,"max_segments":20,"device_swap_cooldown_days":7,"download_prior_rt_factor":1.66,"download_prior_startup_seconds":10}'), -- max_range_seconds: proposed 300 (5 min) for beta, pending user decision; hard max configurable up to 600
  ('ticket',          '{"ttl_seconds":900,"active_kid":null,"next_kid":null}'),
- ('flags',           '{"caption_lead_offset_ms":0}'); -- caption_lead_offset_ms: default 0 pending S3d timing verification
+ ('flags',           '{"caption_lead_offset_ms":0}'), -- caption_lead_offset_ms: default 0 pending S3d timing verification
+ ('preview',         '{"bridge_url":"https://clipper-bridge.vercel.app","bridge_protocol_version":1,"control_video_id":"aqz-KE-bpKQ","ready_timeout_ms":6000}'); -- control_video_id: Big Buck Bunny (known-embeddable control)
 
 create table public.component_manifests (
   id uuid primary key default gen_random_uuid(),

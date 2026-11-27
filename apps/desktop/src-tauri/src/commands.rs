@@ -1671,7 +1671,7 @@ pub fn get_preview_config() -> PreviewConfigResponse {
     PreviewConfigResponse {
         bridge_url,
         bridge_protocol_version: 1,
-        control_video_id: "WufkeDaJisQ".to_string(),
+        control_video_id: "aqz-KE-bpKQ".to_string(),
         ready_timeout_ms: 6000,
         max_range_seconds: 300,
         download_prior_rt_factor: 1.66,
