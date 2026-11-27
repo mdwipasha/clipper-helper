@@ -14,6 +14,7 @@ interface OperationPanelProps {
   onRetryJob: (jobId: string) => Promise<void>;
   onNavigateRepair?: () => void;
   onNavigateDiagnostics?: () => void;
+  onOpenEditor?: () => void;
 }
 
 const STAGE_LABEL_BY_ID: Record<string, string> = {
@@ -49,6 +50,7 @@ export function OperationPanel({
   onRetryJob,
   onNavigateRepair,
   onNavigateDiagnostics,
+  onOpenEditor,
 }: OperationPanelProps) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [submittingCancel, setSubmittingCancel] = useState(false);
@@ -368,15 +370,23 @@ export function OperationPanel({
               <div className="flex items-center gap-2 pt-0.5">
                 <button
                   type="button"
-                  disabled
-                  aria-disabled="true"
-                  className="bg-slate-800 text-slate-400 text-xs font-medium px-3.5 py-1.5 rounded-lg cursor-not-allowed"
+                  data-testid="operation-open-editor-button"
+                  disabled={!onOpenEditor}
+                  aria-disabled={!onOpenEditor}
+                  onClick={onOpenEditor}
+                  className={
+                    onOpenEditor
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-1.5 rounded-lg transition'
+                      : 'bg-slate-800 text-slate-400 text-xs font-medium px-3.5 py-1.5 rounded-lg cursor-not-allowed'
+                  }
                 >
                   {t('job.openEditor', undefined, locale)}
                 </button>
-                <span className="text-xs text-slate-400">
-                  {t('range.comingSoon', undefined, locale)}
-                </span>
+                {!onOpenEditor && (
+                  <span className="text-xs text-slate-400">
+                    {t('range.comingSoon', undefined, locale)}
+                  </span>
+                )}
               </div>
             </div>
           )}

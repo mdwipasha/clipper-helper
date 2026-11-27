@@ -35,6 +35,7 @@ interface RangePickerViewProps {
   onStartGenerate?: (projectId: string) => Promise<JobRecord | null>;
   onCancelJob?: (jobId: string) => Promise<void>;
   onRetryJob?: (jobId: string) => Promise<JobRecord | null>;
+  onOpenEditor?: () => void;
 }
 
 export function RangePickerView({
@@ -51,6 +52,7 @@ export function RangePickerView({
   onStartGenerate,
   onCancelJob,
   onRetryJob,
+  onOpenEditor,
 }: RangePickerViewProps) {
   const videoDuration = Math.max(1, project.duration_seconds);
 
@@ -761,6 +763,7 @@ export function RangePickerView({
             onRetryJob={handleRetryJobInternal}
             onNavigateRepair={onOpenComponents}
             onNavigateDiagnostics={onOpenDiagnostics}
+            onOpenEditor={onOpenEditor}
           />
         )}
       </div>

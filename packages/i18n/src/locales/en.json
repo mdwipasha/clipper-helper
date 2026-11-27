@@ -246,6 +246,10 @@
       "title": "Another job is running",
       "body": "Only one download/conversion job can run at a time. Wait for it to complete or cancel the active job first."
     },
+    "E_TEMPLATE_INVALID": {
+      "title": "Invalid composition",
+      "body": "The composition edit payload failed validation or clip duration limits."
+    },
     "E_UNKNOWN": {
       "title": "An error occurred",
       "body": "An unexpected error occurred. Try again or open Diagnostics to copy a report."
@@ -296,7 +300,8 @@
       "probe": "Inspecting source",
       "download": "Downloading clip",
       "preparePreview": "Preparing preview",
-      "build": "Building project"
+      "build": "Building project",
+      "thumbnails": "Generating filmstrip"
     },
     "preparingDownload": "Preparing download…",
     "stepOf": "Step {current} of {total}",
@@ -334,11 +339,94 @@
     "probed": "Probed",
     "ranged": "Range saved",
     "downloaded": "Downloaded",
+    "edited": "Edited",
     "interrupted": "Interrupted",
     "deleteDownloaded": "Delete download data",
     "deleteDownloadedConfirm": "Delete downloaded media and composition files for this project? Project metadata and saved clip range will be kept.",
     "deleteDownloadedConfirmAction": "Yes, delete download data",
     "cancelAction": "Cancel",
     "retryInterrupted": "Retry"
+  },
+  "editor": {
+    "title": "Clip Editor",
+    "backHome": "Back to Home",
+    "changeRange": "Change range",
+    "undo": "Undo",
+    "redo": "Redo",
+    "exportButton": "Export",
+    "exportComingSoon": "Coming soon",
+    "proxyBadge": "Preview proxy mode",
+    "originalBadge": "Original media",
+    "loadingMedia": "Loading editor media…",
+    "saveStatus": {
+      "saved": "Saved",
+      "saving": "Saving…",
+      "dirty": "Unsaved…",
+      "error": "Save failed"
+    },
+    "unsavedGuard": {
+      "title": "Unsaved changes",
+      "body": "Your latest edit has not finished saving cleanly. Wait or retry saving before leaving.",
+      "stay": "Stay in editor",
+      "leaveAnyway": "Leave anyway"
+    },
+    "transport": {
+      "play": "Play",
+      "pause": "Pause",
+      "loopSelection": "Loop selection",
+      "mute": "Mute",
+      "unmute": "Unmute",
+      "rate": "Speed",
+      "jumpIn": "Jump to In",
+      "jumpOut": "Jump to Out",
+      "prevFrame": "−1 frame",
+      "nextFrame": "+1 frame",
+      "prevSecond": "−1 s",
+      "nextSecond": "+1 s",
+      "shortcutsHint": "Shortcuts: Space = Play/Pause · ←/→ = 1 frame · Shift+←/→ = 1 s · I/O = Set In/Out · Home/End = Jump · Ctrl+Z / Ctrl+Shift+Z = Undo/Redo"
+    },
+    "preview": {
+      "title": "9:16 Preview (Fill)",
+      "panHint": "Drag preview to pan crop · Scroll / slider to zoom",
+      "zoom": "Zoom",
+      "center": "Center",
+      "reset": "Reset",
+      "overviewTitle": "Full source frame",
+      "overviewHint": "Drag rectangle to position 9:16 crop"
+    },
+    "trim": {
+      "title": "Timeline & Trim",
+      "playheadLabel": "Playhead",
+      "inLabel": "In",
+      "outLabel": "Out",
+      "selectedLabel": "Selected",
+      "totalLabel": "Total file",
+      "setIn": "Set In (I)",
+      "setOut": "Set Out (O)",
+      "handleLegend": "Handle regions (margin before & after)",
+      "maxWarning": "Selected duration exceeds maximum limit ({maxSeconds} s).",
+      "scrubAria": "Timeline position",
+      "handleInAria": "Drag In handle",
+      "handleOutAria": "Drag Out handle"
+    },
+    "filmstrip": {
+      "generating": "Generating filmstrip ({percent}%) · {eta}",
+      "preparing": "Preparing filmstrip…",
+      "cancel": "Cancel filmstrip",
+      "cancelled": "Filmstrip cancelled.",
+      "retry": "Reload filmstrip",
+      "unavailable": "Preview filmstrip unavailable."
+    },
+    "errors": {
+      "mediaMissingTitle": "Cached media file missing",
+      "mediaMissingBody": "The downloaded video file for this project was deleted or moved from the cache folder.",
+      "redownloadAction": "Re-download",
+      "proxyMissingTitle": "Preview proxy missing or not ready",
+      "proxyMissingBody": "This source uses a non-H.264 codec and needs an MP4 preview proxy for smooth playback.",
+      "reproxyAction": "Prepare preview again",
+      "decodeErrorTitle": "Failed to play video preview",
+      "decodeErrorBody": "WebView playback hit a media decode error. Details have been recorded in Diagnostics.",
+      "openDiagnostics": "Open Diagnostics"
+    }
   }
 }

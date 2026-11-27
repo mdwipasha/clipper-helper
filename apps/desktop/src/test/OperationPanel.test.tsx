@@ -198,5 +198,41 @@ describe('OperationPanel (M1.4 progress, stall, cancel confirm, errors, cache hi
     expect(screen.getByTestId('operation-proxy-note')).toBeInTheDocument();
     expect(screen.getByTestId('operation-success-card')).toHaveTextContent('1920×1080');
     expect(screen.getByRole('button', { name: 'Buka editor' })).toBeDisabled();
+
+    const onOpenEditor = vi.fn();
+    rerender(
+      <OperationPanel
+        locale="id"
+        job={makeJob({ status: 'succeeded', stage: 'build' })}
+        liveEvent={makeEvent({
+          state: 'succeeded',
+          stage: {
+            id: 'build',
+            index: 3,
+            count: 4,
+            labelKey: 'job.stage.build',
+            labelArgs: null,
+          },
+          overall: { percent: 100 },
+          detail: {
+            cacheHit: 'true',
+            needsProxy: 'true',
+            width: '1920',
+            height: '1080',
+            fps: '60',
+            videoCodec: 'vp9',
+            sizeBytes: '7340032',
+          },
+        })}
+        onCancelJob={vi.fn()}
+        onRetryJob={vi.fn()}
+        onOpenEditor={onOpenEditor}
+      />
+    );
+
+    const openBtn = screen.getByRole('button', { name: 'Buka editor' });
+    expect(openBtn).toBeEnabled();
+    await user.click(openBtn);
+    expect(onOpenEditor).toHaveBeenCalledTimes(1);
   });
 });
