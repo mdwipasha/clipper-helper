@@ -16,7 +16,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -24,7 +24,7 @@ jobs:
           version: 11.16.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'pnpm'
@@ -60,7 +60,7 @@ jobs:
           cargo audit --file apps\desktop\src-tauri\Cargo.lock > audit-reports\cargo-audit.txt 2>&1 || exit 0
 
       - name: Upload Audit Reports Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audit-reports
           path: audit-reports/
@@ -73,7 +73,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -81,7 +81,7 @@ jobs:
           version: 11.16.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: 'pnpm'
@@ -148,7 +148,7 @@ jobs:
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all
 
       - name: Cache Pinned Real Binaries (by inventory SHA-256)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: tools/dev-fixtures/real
           key: ${{ runner.os }}-pinned-components-${{ hashFiles('tools/src/fetch-pinned-components.js') }}
@@ -195,7 +195,7 @@ jobs:
           Write-Host "Release binary verified: strict isolation confirmed (zero dev commands present)."
 
       - name: Upload Desktop Binary Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clipper-helper-desktop-binary
           path: apps/desktop/src-tauri/target/release/clipper-helper-desktop.exe
