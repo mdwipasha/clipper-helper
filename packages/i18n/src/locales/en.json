@@ -273,6 +273,7 @@
     "setEndHere": "Set end here",
     "clipDurationLabel": "Selected clip duration",
     "downloadEstimate": "Estimated download: ~{minutes} min (±{seconds} s)",
+    "downloadEstimateFormatted": "Estimated download: about {point} ({range})",
     "timecodeOnlyBanner": "Pratinjau tidak tersedia untuk video ini",
     "timecodeOnlyOwnerHint": "The video owner disabled external embedding. You can still set start and end timecodes manually.",
     "timecodeOnlyTimeoutHint": "Preview bridge did not respond within 6 seconds. Switched to timecode-only mode.",

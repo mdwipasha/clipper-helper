@@ -9,10 +9,10 @@ import {
   ProjectRecord,
 } from '../ipc/bindings';
 import { BridgeFallbackInfo, BridgePreviewState } from '../utils/bridgeClient';
+import { formatDownloadEstimateSummary } from '../utils/etaFormat';
 import { formatDurationHms } from '../utils/format';
 import {
   estimateDownloadSeconds,
-  formatEstimateMinutes,
   formatTimecodeInput,
   parseTimecode,
   validateClipRange,
@@ -401,7 +401,7 @@ export function RangePickerView({
         previewConfig.download_prior_rt_factor,
         previewConfig.download_prior_startup_seconds
       );
-  const estimateMinutes = formatEstimateMinutes(estimateSeconds);
+  const estimateText = formatDownloadEstimateSummary(estimateSeconds, locale);
 
   const startPercent =
     parsedStart !== null ? Math.max(0, Math.min(100, (parsedStart / videoDuration) * 100)) : 0;
@@ -687,14 +687,7 @@ export function RangePickerView({
                 </strong>
               </span>
               <span data-testid="download-estimate-text" className="text-cyan-300 font-medium">
-                {t(
-                  'range.downloadEstimate',
-                  {
-                    minutes: estimateMinutes,
-                    seconds: Math.round(estimateSeconds),
-                  },
-                  locale
-                )}
+                {estimateText}
               </span>
             </div>
           ) : (

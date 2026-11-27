@@ -15,6 +15,7 @@ import {
   parseTimecode,
   validateClipRange,
 } from '../utils/timecode';
+import { formatDownloadEstimateSummary } from '../utils/etaFormat';
 
 vi.mock('../ipc/bindings', async () => {
   const actual = await vi.importActual<typeof import('../ipc/bindings')>('../ipc/bindings');
@@ -136,7 +137,24 @@ describe('Timecode parsing, validation & download estimate helpers', () => {
       })
     ).toMatchObject({ valid: false, code: 'E_RANGE_TOO_LONG' });
 
-    expect(estimateDownloadSeconds(166, 1.66, 10)).toBe(110);
+    expect(estimateDownloadSeconds(156, 1.66, 10, 5)).toBe(110);
+  });
+
+  it('formats download estimates with handles and §5 rounding across 10s to 10m', () => {
+    const cases: Array<[number, string, string]> = [
+      [10, '20 dtk', '20–30 dtk'],
+      [30, '35 dtk', '30–45 dtk'],
+      [60, '50 dtk', '45 dtk–1 mnt 15 dtk'],
+      [180, '2 mnt', '1 mnt 45 dtk–2 mnt 45 dtk'],
+      [300, '3 mnt 15 dtk', '2 mnt 45 dtk–4 mnt 15 dtk'],
+      [600, '6 mnt 15 dtk', '5 mnt 15 dtk–8 mnt 15 dtk'],
+    ];
+    for (const [rangeSec, expectedPoint, expectedRange] of cases) {
+      const est = estimateDownloadSeconds(rangeSec, 1.66, 10, 5);
+      const formatted = formatDownloadEstimateSummary(est, 'id');
+      expect(formatted).toContain(expectedPoint);
+      expect(formatted).toContain(`(${expectedRange})`);
+    }
   });
 
   it('builds strictly restricted external YouTube watch URLs only', () => {
