@@ -8,7 +8,7 @@
 //! - Diagnostics store, crash recovery, WebView JS error capture (rate-limited + capped),
 //!   redacted report generator, `.txt` export, and narrow logs folder opener.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::Manager;
 use tauri_specta::Event;
+use tokio_util::sync::CancellationToken;
 
 use crate::capabilities::CapabilityReportView;
 use crate::crash::{self, CrashRecoveryStatus};
@@ -28,10 +29,11 @@ use crate::eta::EtaEstimator;
 use crate::hardware::{self, HardwareProfile};
 use crate::installer::{self, InUseRegistry, VerifyRepairOutcome};
 use crate::manifest::{self, ComponentManifest};
+use crate::probe::{self, ProbeError, ProbeInfo};
 use crate::resolver::{ComponentDiagnosticsSnapshot, ComponentResolver};
 use crate::security::{self, DataRoot};
 use crate::speech::{self, SpeechModel, SpeechModelState};
-use crate::store::{ErrorEventRow, LocalStore, NewErrorEvent};
+use crate::store::{ErrorEventRow, LocalStore, NewErrorEvent, ProjectRecord, ProjectRepo};
 use crate::WorkspaceState;
 
 pub const DEFAULT_PRODUCTION_MANIFEST_URL: &str =
@@ -44,6 +46,29 @@ pub struct ManifestCacheState(pub Arc<Mutex<Option<ComponentManifest>>>);
 /// Managed state for server-side rate limiting of WebView JS error capture.
 #[derive(Default, Clone)]
 pub struct WebViewErrorRateLimiter(pub Arc<Mutex<VecDeque<Instant>>>);
+
+/// Managed state tracking in-flight YouTube probe cancellation tokens by `request_id`.
+#[derive(Default, Clone)]
+pub struct ProbeCancelRegistry(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
+
+/// Typed progress event emitted for `generate` / `probe` operations (`<= 4/s`, 2 s heartbeat).
+#[derive(Serialize, Deserialize, Type, Event, Debug, Clone)]
+pub struct ProbeProgressEvent {
+    pub request_id: String,
+    pub operation: String,
+    pub stage: String,
+    pub indeterminate: bool,
+    pub elapsed_ms: f64,
+    pub heartbeat: bool,
+}
+
+/// Safe metadata + persisted project record returned to the UI upon successful YouTube probe.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct ProbeProjectResponse {
+    pub probe_info: ProbeInfo,
+    pub project: ProjectRecord,
+    pub suggested_start_seconds: Option<u32>,
+}
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct DiskSpaceBounds {
@@ -65,6 +90,21 @@ impl AppCommandError {
         Self {
             code: code.to_string(),
             message_key: error_key_for_code(code),
+            message: message.into(),
+            detail: detail.into(),
+            disk_bounds: None,
+        }
+    }
+
+    fn with_message_key(
+        code: &str,
+        message_key: impl Into<String>,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.to_string(),
+            message_key: message_key.into(),
             message: message.into(),
             detail: detail.into(),
             disk_bounds: None,
@@ -100,7 +140,13 @@ pub struct WorkspaceStatus {
     pub root: Option<String>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    pub configured_root_unreachable: bool,
+    pub unreachable_root_redacted: Option<String>,
 }
+
+/// Thread-safe holder for mutable workspace initialization status (updated when recovering DataRoot).
+#[derive(Debug)]
+pub struct WorkspaceStatusState(pub Mutex<WorkspaceStatus>);
 
 #[derive(Serialize, Deserialize, Type, Debug, Clone)]
 pub struct ManifestUrlConfig {
@@ -248,11 +294,29 @@ fn error_key_for_code(code: &str) -> String {
 }
 
 fn record_error(store: &LocalStore, code: &str, stage: &str, detail: &str, stderr_tail: &str) {
+    record_error_with_key(
+        store,
+        code,
+        &error_key_for_code(code),
+        stage,
+        detail,
+        stderr_tail,
+    );
+}
+
+fn record_error_with_key(
+    store: &LocalStore,
+    code: &str,
+    message_key: &str,
+    stage: &str,
+    detail: &str,
+    stderr_tail: &str,
+) {
     let _ = store.record_error_event(NewErrorEvent {
         code: code.to_string(),
         stage: stage.to_string(),
         job_id: None,
-        message_key: error_key_for_code(code),
+        message_key: message_key.to_string(),
         detail: detail.to_string(),
         stderr_tail: stderr_tail.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -407,16 +471,42 @@ pub fn get_app_info() -> AppInfo {
 #[tauri::command]
 #[specta::specta]
 pub fn get_workspace_status(app: tauri::AppHandle) -> WorkspaceStatus {
-    if let Some(status) = app.try_state::<WorkspaceStatus>() {
-        (*status).clone()
-    } else {
-        WorkspaceStatus {
-            is_initialized: false,
-            root: None,
-            error_code: Some("E_APP_INIT_FAILED".to_string()),
-            error_message: Some("Workspace status uninitialized".to_string()),
+    if let Some(status_state) = app.try_state::<WorkspaceStatusState>() {
+        if let Ok(guard) = status_state.0.lock() {
+            return guard.clone();
         }
     }
+    WorkspaceStatus {
+        is_initialized: false,
+        root: None,
+        error_code: Some("E_APP_INIT_FAILED".to_string()),
+        error_message: Some("Workspace status uninitialized".to_string()),
+        configured_root_unreachable: false,
+        unreachable_root_redacted: None,
+    }
+}
+
+/// Clears a missing/unreachable `bootstrap.json` DataRoot override (never deleting user data)
+/// and initializes the workspace at the default local folder.
+#[tauri::command]
+#[specta::specta]
+pub fn use_default_data_root(app: tauri::AppHandle) -> Result<WorkspaceStatus, AppCommandError> {
+    security::DataRoot::reset_bootstrap_to_default().map_err(|e| {
+        AppCommandError::simple(
+            e.error_code(),
+            e.to_string(),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+
+    let status = crate::initialize_workspace_into_app(&app).map_err(|e| {
+        AppCommandError::simple(
+            e.error_code(),
+            e.to_string(),
+            security::redact_sensitive_text(&e.to_string()),
+        )
+    })?;
+    Ok(status)
 }
 
 /// Returns current component statuses, manifest cache, disk check, and speech-model target.
@@ -502,9 +592,10 @@ pub async fn fetch_components_manifest(
     .await
     .map_err(|e| {
         let code = e.error_code();
+        let msg_key = e.message_key();
         let redacted = security::redact_sensitive_text(&e.to_string());
-        record_error(&store, code, "manifest_fetch", &redacted, "");
-        AppCommandError::simple(code, redacted.clone(), redacted)
+        record_error_with_key(&store, code, msg_key, "manifest_fetch", &redacted, "");
+        AppCommandError::with_message_key(code, msg_key, redacted.clone(), redacted)
     })?;
 
     if let Some(cache) = app.try_state::<ManifestCacheState>() {
@@ -537,7 +628,9 @@ fn get_cached_manifest_entry(
         .find(|c| c.component == component && version.map(|v| v == c.version).unwrap_or(true))
         .cloned()
         .ok_or_else(|| {
-            let ver_display = version.unwrap_or("(latest)");
+            let ver_display = version
+                .map(manifest::format_component_version)
+                .unwrap_or_else(|| "(latest)".to_string());
             let msg = format!(
                 "Komponen '{}' versi {} tidak tersedia di manifest.",
                 component, ver_display
@@ -698,9 +791,15 @@ async fn install_single_entry(
         }
         Err(err) => {
             let code = err.error_code();
+            let msg_key = err.message_key();
             let redacted = security::redact_sensitive_text(&err.to_string());
-            record_error(store, code, "install", &redacted, "");
-            Err(AppCommandError::simple(code, redacted.clone(), redacted))
+            record_error_with_key(store, code, &msg_key, "install", &redacted, "");
+            Err(AppCommandError::with_message_key(
+                code,
+                msg_key,
+                redacted.clone(),
+                redacted,
+            ))
         }
     }
 }
@@ -882,9 +981,10 @@ pub async fn repair_component(
 
     res.map_err(|e| {
         let code = e.error_code();
+        let msg_key = e.message_key();
         let redacted = security::redact_sensitive_text(&e.to_string());
-        record_error(&store, code, "repair", &redacted, "");
-        AppCommandError::simple(code, redacted.clone(), redacted)
+        record_error_with_key(&store, code, &msg_key, "repair", &redacted, "");
+        AppCommandError::with_message_key(code, msg_key, redacted.clone(), redacted)
     })
 }
 
@@ -1264,6 +1364,151 @@ pub fn open_logs_folder(app: tauri::AppHandle) -> Result<(), AppCommandError> {
                 format!("Gagal membuka folder log: {}", e),
                 security::redact_sensitive_text(&e.to_string()),
             )
+        })
+}
+
+struct ProbeTokenCleanup {
+    registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    request_id: String,
+}
+
+impl Drop for ProbeTokenCleanup {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.registry.lock() {
+            guard.remove(&self.request_id);
+        }
+    }
+}
+
+/// Validates and probes a pasted YouTube single-video URL via supervised `yt-dlp` + `qjs`,
+/// records any failure in local `error_events` (redacted), and inserts a `probed` project
+/// record into SQLite on success.
+#[tauri::command]
+#[specta::specta]
+pub async fn probe_youtube_url(
+    app: tauri::AppHandle,
+    raw_url: String,
+    request_id: String,
+) -> Result<ProbeProjectResponse, AppCommandError> {
+    let (ws_root, store, in_use) = deps_from_app(&app)?;
+    let cancel_state = app
+        .try_state::<ProbeCancelRegistry>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+
+    let clean_req_id = if request_id.trim().is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        request_id.trim().chars().take(64).collect()
+    };
+
+    let cancel_token = CancellationToken::new();
+    if let Ok(mut guard) = cancel_state.lock() {
+        guard.insert(clean_req_id.clone(), cancel_token.clone());
+    }
+    let _cleanup = ProbeTokenCleanup {
+        registry: cancel_state,
+        request_id: clean_req_id.clone(),
+    };
+
+    let resolver = ComponentResolver::new(ws_root.clone(), store.clone(), in_use);
+    let app_for_emit = app.clone();
+    let req_for_emit = clean_req_id.clone();
+
+    let outcome = probe::probe_youtube_url(
+        &ws_root,
+        &resolver,
+        &raw_url,
+        Some(&cancel_token),
+        move |update| {
+            let _ = ProbeProgressEvent {
+                request_id: req_for_emit.clone(),
+                operation: update.operation,
+                stage: update.stage,
+                indeterminate: update.indeterminate,
+                elapsed_ms: update.elapsed_ms,
+                heartbeat: update.heartbeat,
+            }
+            .emit(&app_for_emit);
+        },
+    )
+    .await
+    .map_err(|err| {
+        if !matches!(err, ProbeError::Cancelled) {
+            record_error_with_key(
+                &store,
+                err.code(),
+                &err.message_key(),
+                "probe",
+                &err.redacted_detail(),
+                "",
+            );
+        }
+        AppCommandError::with_message_key(
+            err.code(),
+            err.message_key(),
+            security::redact_sensitive_text(&err.to_string()),
+            err.redacted_detail(),
+        )
+    })?;
+
+    let project = ProjectRepo::new(&store)
+        .create_from_probe(&outcome.parsed_url, &outcome.info)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            record_error(&store, "E_UNKNOWN", "probe", &msg, "");
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+        })?;
+
+    Ok(ProbeProjectResponse {
+        probe_info: outcome.info,
+        project,
+        suggested_start_seconds: outcome.parsed_url.suggested_start_seconds,
+    })
+}
+
+/// Cancels an active YouTube probe identified by `request_id`.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_youtube_probe(
+    app: tauri::AppHandle,
+    request_id: String,
+) -> Result<bool, AppCommandError> {
+    let Some(cancel_state) = app.try_state::<ProbeCancelRegistry>() else {
+        return Ok(false);
+    };
+    let Ok(guard) = cancel_state.0.lock() else {
+        return Ok(false);
+    };
+    if let Some(token) = guard.get(request_id.trim()) {
+        token.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Lists the 10 most recent projects from SQLite `projects`.
+#[tauri::command]
+#[specta::specta]
+pub fn list_recent_projects(app: tauri::AppHandle) -> Result<Vec<ProjectRecord>, AppCommandError> {
+    let (_, store, _) = deps_from_app(&app)?;
+    ProjectRepo::new(&store).list_recent(10).map_err(|e| {
+        let msg = security::redact_sensitive_text(&e.to_string());
+        AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
+    })
+}
+
+/// Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
+#[tauri::command]
+#[specta::specta]
+pub fn delete_project(app: tauri::AppHandle, project_id: String) -> Result<bool, AppCommandError> {
+    let (ws_root, store, _) = deps_from_app(&app)?;
+    ProjectRepo::new(&store)
+        .delete(&ws_root, &project_id)
+        .map_err(|e| {
+            let msg = security::redact_sensitive_text(&e.to_string());
+            AppCommandError::simple("E_UNKNOWN", msg.clone(), msg)
         })
 }
 

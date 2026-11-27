@@ -33,6 +33,9 @@ pub struct HardwareProfile {
     pub windows_display_version: Option<String>,
     pub windows_build: String,
     pub is_windows_n_kn: bool,
+    pub webview2_version: Option<String>,
+    pub system_locale: String,
+    pub timezone: String,
     pub ac_power: Option<bool>,
     pub power_plan: String,
     pub gpus: Vec<GpuAdapterInfo>,
@@ -148,11 +151,58 @@ impl HardwareProber {
     }
 }
 
-/// Reads passive hardware, OS, GPU driver, RAM, and power metadata.
+/// Derives accurate Windows product name from build number (`>= 22000` => Windows 11),
+/// ignoring Windows 11's legacy registry `ProductName` value ("Windows 10 ...").
+pub fn derive_windows_product_name(registry_product: &str, build_number: &str) -> String {
+    let major_build: u64 = build_number
+        .split('.')
+        .next()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let trimmed = registry_product.trim();
+    if major_build >= 22_000 {
+        if let Some(idx) = trimmed.to_ascii_lowercase().find("windows 10") {
+            let prefix = &trimmed[..idx];
+            let suffix = &trimmed[idx + "windows 10".len()..];
+            return format!("{}Windows 11{}", prefix, suffix);
+        }
+        if trimmed.is_empty() {
+            return "Windows 11".to_string();
+        }
+        if !trimmed.contains("Windows 11") {
+            return format!("Windows 11 ({})", trimmed);
+        }
+    }
+    if trimmed.is_empty() {
+        "Windows".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Formats registry `ActiveTimeBias` (minutes west of UTC) + `TimeZoneKeyName`.
+pub fn format_timezone_label(active_time_bias_raw: Option<u32>, tz_key: Option<&str>) -> String {
+    let tz_name = tz_key.map(str::trim).filter(|s| !s.is_empty());
+    let offset_str = active_time_bias_raw.map(|raw| {
+        let bias_west = raw as i32;
+        let offset_east = -bias_west;
+        let sign = if offset_east >= 0 { '+' } else { '-' };
+        let abs = offset_east.abs();
+        format!("UTC{}{:02}:{:02}", sign, abs / 60, abs % 60)
+    });
+    match (offset_str, tz_name) {
+        (Some(off), Some(name)) => format!("{} ({})", off, name),
+        (Some(off), None) => off,
+        (None, Some(name)) => name.to_string(),
+        (None, None) => "Unknown".to_string(),
+    }
+}
+
+/// Reads passive hardware, OS, GPU driver, RAM, WebView2, locale, timezone, and power metadata.
 #[cfg(windows)]
 pub fn probe_hardware_profile() -> HardwareProfile {
     use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
-    use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     let logical_cores = std::thread::available_parallelism()
@@ -191,7 +241,7 @@ pub fn probe_hardware_profile() -> HardwareProfile {
     .filter(|s| !s.is_empty())
     .unwrap_or_else(|| "Unknown CPU".to_string());
 
-    let windows_product = reg_read_string(
+    let raw_windows_product = reg_read_string(
         HKEY_LOCAL_MACHINE,
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
         "ProductName",
@@ -208,6 +258,7 @@ pub fn probe_hardware_profile() -> HardwareProfile {
         "CurrentBuildNumber",
     )
     .unwrap_or_else(|| "unknown".to_string());
+    let windows_product = derive_windows_product_name(&raw_windows_product, &build_number);
     let ubr = reg_read_dword(
         HKEY_LOCAL_MACHINE,
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
@@ -223,6 +274,59 @@ pub fn probe_hardware_profile() -> HardwareProfile {
         "EditionID",
     );
     let is_windows_n_kn = detect_is_windows_n_kn(edition_id.as_deref(), &windows_product);
+
+    const WEBVIEW2_CLIENT_GUID: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+    let webview2_version = reg_read_string(
+        HKEY_LOCAL_MACHINE,
+        &format!(
+            r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{}",
+            WEBVIEW2_CLIENT_GUID
+        ),
+        "pv",
+    )
+    .or_else(|| {
+        reg_read_string(
+            HKEY_LOCAL_MACHINE,
+            &format!(
+                r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{}",
+                WEBVIEW2_CLIENT_GUID
+            ),
+            "pv",
+        )
+    })
+    .or_else(|| {
+        reg_read_string(
+            HKEY_CURRENT_USER,
+            &format!(
+                r"Software\Microsoft\EdgeUpdate\Clients\{}",
+                WEBVIEW2_CLIENT_GUID
+            ),
+            "pv",
+        )
+    })
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+
+    let system_locale = reg_read_string(
+        HKEY_CURRENT_USER,
+        r"Control Panel\International",
+        "LocaleName",
+    )
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "unknown".to_string());
+
+    let tz_key = reg_read_string(
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+        "TimeZoneKeyName",
+    );
+    let active_bias = reg_read_dword(
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+        "ActiveTimeBias",
+    );
+    let timezone = format_timezone_label(active_bias, tz_key.as_deref());
 
     let power_scheme_guid = reg_read_string(
         HKEY_LOCAL_MACHINE,
@@ -265,6 +369,9 @@ pub fn probe_hardware_profile() -> HardwareProfile {
         windows_display_version,
         windows_build,
         is_windows_n_kn,
+        webview2_version,
+        system_locale,
+        timezone,
         ac_power,
         power_plan,
         gpus,
@@ -409,6 +516,9 @@ pub fn probe_hardware_profile() -> HardwareProfile {
         windows_display_version: None,
         windows_build: "non-windows".to_string(),
         is_windows_n_kn: false,
+        webview2_version: None,
+        system_locale: "en-US".to_string(),
+        timezone: "UTC+00:00".to_string(),
         ac_power: None,
         power_plan: "Unknown".to_string(),
         gpus,
@@ -419,6 +529,26 @@ pub fn probe_hardware_profile() -> HardwareProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_derive_windows_product_name_uses_build_number() {
+        assert_eq!(
+            derive_windows_product_name("Windows 10 Pro", "26200"),
+            "Windows 11 Pro"
+        );
+        assert_eq!(
+            derive_windows_product_name("Windows 10 Home", "22000.1"),
+            "Windows 11 Home"
+        );
+        assert_eq!(
+            derive_windows_product_name("Windows 10 Pro", "19045.4046"),
+            "Windows 10 Pro"
+        );
+        assert_eq!(
+            format_timezone_label(Some(4294966876), Some("SE Asia Standard Time")),
+            "UTC+07:00 (SE Asia Standard Time)"
+        );
+    }
 
     #[test]
     fn test_windows_n_kn_edition_detection() {

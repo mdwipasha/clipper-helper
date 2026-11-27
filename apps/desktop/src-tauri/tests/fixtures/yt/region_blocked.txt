@@ -1,0 +1,7 @@
+[STATUS: ASSUMED]
+[CAPTURE_DATE: 2026-11-20]
+[SOURCE_URL: synthetic (EXAMPLE_GEO)]
+[NOTE: Derived from yt-dlp standard error message for region-restricted videos]
+[COMMAND: yt-dlp --no-playlist --no-warnings --ignore-config -J https://www.youtube.com/watch?v=EXAMPLE_GEO]
+[EXIT_CODE: 1]
+ERROR: [youtube] EXAMPLE_GEO: Video unavailable. The uploader has not made this video available in your country

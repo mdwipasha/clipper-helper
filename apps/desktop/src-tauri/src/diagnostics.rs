@@ -27,6 +27,8 @@ pub const RINGKASAN_MAX_BYTES: usize = 4096;
 pub const CLIPBOARD_REPORT_MAX_BYTES: usize = 100 * 1024;
 pub const FILE_REPORT_MAX_BYTES: usize = 1024 * 1024;
 pub const REQUIRED_DISK_MIN_BUFFER_BYTES: u64 = 1024 * 1024 * 1024; // 1 GB
+pub const MAX_REPORT_LIST_LINE_CHARS: usize = 300;
+const LONG_REASON_DEDUP_THRESHOLD_CHARS: usize = 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 pub struct DiagnosticsReportBundle {
@@ -65,16 +67,22 @@ fn unix_now_secs() -> u64 {
         .as_secs()
 }
 
-fn format_bytes_gb(bytes: u64) -> String {
-    let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    format!("{:.2} GB", gb)
+fn format_bytes_gib(bytes: u64) -> String {
+    let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    format!("{:.2} GiB", gib)
 }
 
 fn format_ram(ram_bytes: Option<u64>) -> String {
     match ram_bytes {
-        Some(b) if b > 0 => format_bytes_gb(b),
+        Some(b) if b > 0 => format_bytes_gib(b),
         _ => "Tidak diketahui".to_string(),
     }
+}
+
+fn format_iso_with_ago(ts_secs: u64, now_secs: u64) -> String {
+    let iso = logging::format_utc_iso8601(ts_secs);
+    let mins = now_secs.saturating_sub(ts_secs) / 60;
+    format!("{} ({} menit lalu)", iso, mins)
 }
 
 fn truncate_utf8_bytes(s: &str, max_bytes: usize) -> String {
@@ -88,13 +96,148 @@ fn truncate_utf8_bytes(s: &str, max_bytes: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+/// Caps any single bullet/list line to `max_chars` Unicode scalar characters.
+fn cap_list_line(line: &str, max_chars: usize) -> String {
+    let clean = line.replace(['\r', '\n'], " ");
+    if clean.chars().count() <= max_chars {
+        return clean;
+    }
+    let keep = max_chars.saturating_sub(1);
+    let truncated: String = clean.chars().take(keep).collect();
+    format!("{}…", truncated)
+}
+
+struct GroupedError<'a> {
+    code: &'a str,
+    stage: &'a str,
+    message_key: &'a str,
+    detail: String,
+    stderr_tail: Option<String>,
+    count: usize,
+    first_ts: u64,
+    last_ts: u64,
+}
+
+fn group_error_events<'a>(errors: &'a [ErrorEventRow]) -> Vec<GroupedError<'a>> {
+    let mut groups: Vec<GroupedError<'a>> = Vec::new();
+    for err in errors {
+        let ts = err.ts.max(0.0) as u64;
+        let detail = security::redact_sensitive_text(&err.detail_redacted)
+            .replace(['\r', '\n'], " ")
+            .trim()
+            .to_string();
+        if let Some(existing) = groups
+            .iter_mut()
+            .find(|g| g.code == err.code && g.stage == err.stage && g.detail == detail)
+        {
+            existing.count = existing.count.saturating_add(1);
+            existing.first_ts = existing.first_ts.min(ts);
+            existing.last_ts = existing.last_ts.max(ts);
+            if existing.stderr_tail.is_none() && !err.stderr_tail_redacted.trim().is_empty() {
+                existing.stderr_tail =
+                    Some(security::redact_sensitive_text(&err.stderr_tail_redacted));
+            }
+        } else {
+            let tail = if err.stderr_tail_redacted.trim().is_empty() {
+                None
+            } else {
+                Some(security::redact_sensitive_text(&err.stderr_tail_redacted))
+            };
+            groups.push(GroupedError {
+                code: &err.code,
+                stage: &err.stage,
+                message_key: &err.message_key,
+                detail,
+                stderr_tail: tail,
+                count: 1,
+                first_ts: ts,
+                last_ts: ts,
+            });
+        }
+    }
+    groups
+}
+
+/// Deduplicates repeated or long reason strings into `[R1]`, `[R2]`, … references so long
+/// quarantine/capability reasons are printed in full once and referenced succinctly elsewhere.
+struct ReasonRegistry {
+    counts: std::collections::HashMap<String, usize>,
+    assigned: std::collections::HashMap<String, String>,
+    entries: Vec<(String, String)>,
+}
+
+impl ReasonRegistry {
+    fn from_snapshot_and_errors(
+        snapshot: &ComponentDiagnosticsSnapshot,
+        grouped_errors: &[GroupedError<'_>],
+    ) -> Self {
+        let mut reg = Self {
+            counts: std::collections::HashMap::new(),
+            assigned: std::collections::HashMap::new(),
+            entries: Vec::new(),
+        };
+        for comp in &snapshot.components {
+            for v in &comp.versions {
+                if let Some(q) = &v.quarantine_reason {
+                    reg.observe(q);
+                }
+                if let Some(rep) = &v.capability_report {
+                    if !rep.reasons.is_empty() {
+                        reg.observe(&rep.reasons.join("; "));
+                    }
+                }
+            }
+        }
+        for g in grouped_errors {
+            if !g.detail.is_empty() {
+                reg.observe(&g.detail);
+            }
+        }
+        reg
+    }
+
+    fn observe(&mut self, raw: &str) {
+        let clean = security::redact_sensitive_text(raw)
+            .replace(['\r', '\n'], " ")
+            .trim()
+            .to_string();
+        if clean.is_empty() {
+            return;
+        }
+        let c = self.counts.entry(clean).or_insert(0);
+        *c = c.saturating_add(1);
+    }
+
+    fn render_ref(&mut self, raw: &str) -> String {
+        let clean = security::redact_sensitive_text(raw)
+            .replace(['\r', '\n'], " ")
+            .trim()
+            .to_string();
+        if clean.is_empty() {
+            return String::new();
+        }
+        let count = self.counts.get(&clean).copied().unwrap_or(1);
+        let needs_ref = count > 1 || clean.chars().count() > LONG_REASON_DEDUP_THRESHOLD_CHARS;
+        if !needs_ref {
+            return clean;
+        }
+        if let Some(id) = self.assigned.get(&clean) {
+            return format!("lihat [{}]", id);
+        }
+        let id = format!("R{}", self.entries.len() + 1);
+        self.assigned.insert(clean.clone(), id.clone());
+        self.entries.push((id.clone(), clean));
+        format!("[{}]", id)
+    }
+}
+
 /// Builds Section 1 (`## RINGKASAN`), strictly enforced to `<= 4096 bytes`.
 #[allow(clippy::too_many_arguments)]
 fn build_ringkasan_section(
     report_id: &str,
     ts_secs: u64,
     ws_root: &Path,
-    free_disk_bytes: Option<u64>,
+    disk_summary: Option<(Option<String>, u64, u64)>,
     hw: &HardwareProfile,
     snapshot: &ComponentDiagnosticsSnapshot,
     speech_state: &SpeechModelState,
@@ -102,11 +245,21 @@ fn build_ringkasan_section(
     recent_errors: &[ErrorEventRow],
     opts: &DiagnosticsReportOptions,
 ) -> String {
-    let clean_note = security::redact_sensitive_text(opts.user_note.trim());
+    let clean_note =
+        security::redact_report_envelope(&security::redact_sensitive_text(opts.user_note.trim()));
     let clean_root = security::redact_sensitive_text(&ws_root.to_string_lossy());
     let ram_str = format_ram(hw.ram_bytes_u64());
-    let disk_str = match free_disk_bytes {
-        Some(b) => format!("{} bebas ({})", format_bytes_gb(b), clean_root),
+    let disk_str = match disk_summary {
+        Some((drive_opt, free_b, total_b)) => {
+            let drv = drive_opt.as_deref().unwrap_or("-");
+            format!(
+                "{} {} bebas / {} total ({})",
+                drv,
+                format_bytes_gib(free_b),
+                format_bytes_gib(total_b),
+                clean_root
+            )
+        }
         None => format!("Tidak diketahui ({})", clean_root),
     };
     let ac_str = match hw.ac_power {
@@ -140,7 +293,11 @@ fn build_ringkasan_section(
                 .iter()
                 .filter(|v| v.status == "quarantined")
                 .count();
-            let ver = c.current_version.as_deref().unwrap_or("BELUM PASANG");
+            let ver = c
+                .current_version
+                .as_deref()
+                .map(crate::manifest::format_component_version)
+                .unwrap_or_else(|| "BELUM PASANG".to_string());
             let custom_tag = if c.component == "ffmpeg" && c.active_source == "custom" {
                 " [Custom]"
             } else {
@@ -163,21 +320,53 @@ fn build_ringkasan_section(
         .as_deref()
         .unwrap_or("belum diuji (lazy)");
 
+    let grouped_errors = group_error_events(recent_errors);
+
     // Start with generous note & error detail caps, shrink only if > 4096 bytes.
     for (note_cap, err_cap) in [(600usize, 180usize), (250, 96), (80, 48)] {
         let mut s = String::new();
         let _ = writeln!(s, "# ClipperHelper Diagnostics Report");
         let _ = writeln!(s, "## RINGKASAN");
-        let _ = writeln!(s, "- ID Laporan: {}", report_id);
-        let _ = writeln!(s, "- Waktu (UTC epoch): {}", ts_secs);
-        let _ = writeln!(s, "- Versi App: v{}", opts.app_version);
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- ID Laporan: {}", report_id),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- Waktu: {}", logging::format_utc_iso8601(ts_secs)),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- Versi App: {}",
+                    crate::manifest::format_component_version(&opts.app_version)
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
 
         if !clean_note.is_empty() {
             let note_single_line = clean_note.replace('\r', "").replace('\n', " ");
             let _ = writeln!(
                 s,
-                "- Catatan Pengguna: {}",
-                truncate_utf8_bytes(&note_single_line, note_cap)
+                "{}",
+                cap_list_line(
+                    &format!(
+                        "- Catatan Pengguna: {}",
+                        truncate_utf8_bytes(&note_single_line, note_cap)
+                    ),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
             );
         } else {
             let _ = writeln!(s, "- Catatan Pengguna: (tidak diisi)");
@@ -185,49 +374,117 @@ fn build_ringkasan_section(
 
         let _ = writeln!(
             s,
-            "- Windows: {} {} (Build {}) | Edisi N/KN: {}",
-            hw.windows_product,
-            hw.windows_display_version.as_deref().unwrap_or("-"),
-            hw.windows_build,
-            if hw.is_windows_n_kn { "Ya" } else { "Tidak" }
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- Windows: {} {} (Build {}) | Edisi N/KN: {}",
+                    hw.windows_product,
+                    hw.windows_display_version.as_deref().unwrap_or("-"),
+                    hw.windows_build,
+                    if hw.is_windows_n_kn { "Ya" } else { "Tidak" }
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
         let _ = writeln!(
             s,
-            "- CPU: {} ({}C/{}T) | RAM: {}",
-            hw.cpu_model, hw.physical_cores, hw.logical_cores, ram_str
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- WebView2: {} | Locale: {} | Zona Waktu: {}",
+                    hw.webview2_version.as_deref().unwrap_or("unknown"),
+                    hw.system_locale,
+                    hw.timezone
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
-        let _ = writeln!(s, "- GPU: {}", truncate_utf8_bytes(&gpu_list, 280));
-        let _ = writeln!(s, "- Disk DataRoot: {}", disk_str);
-        let _ = writeln!(s, "- Daya: {} | Plan: {}", ac_str, hw.power_plan);
-        let _ = writeln!(s, "- Komponen: {}", truncate_utf8_bytes(&comp_summary, 420));
         let _ = writeln!(
             s,
-            "- Model & Encoder: {} ({}) | Encoder: {} ({} fallback)",
-            speech_state.active_model.as_str(),
-            if speech_state.is_user_override {
-                "pilihan"
-            } else {
-                "otomatis"
-            },
-            encoder_label,
-            encoder_status.fallback_history.len()
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- CPU: {} ({}C/{}T) | RAM: {}",
+                    hw.cpu_model, hw.physical_cores, hw.logical_cores, ram_str
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(&format!("- GPU: {}", gpu_list), MAX_REPORT_LIST_LINE_CHARS)
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- Disk DataRoot: {}", disk_str),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- Daya: {} | Plan: {}", ac_str, hw.power_plan),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- Komponen: {}", comp_summary),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- Model & Encoder: {} ({}) | Encoder: {} ({} fallback)",
+                    speech_state.active_model.as_str(),
+                    if speech_state.is_user_override {
+                        "pilihan"
+                    } else {
+                        "otomatis"
+                    },
+                    encoder_label,
+                    encoder_status.fallback_history.len()
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
 
-        let top_errors: Vec<&ErrorEventRow> = recent_errors.iter().take(5).collect();
+        let top_errors: Vec<&GroupedError<'_>> = grouped_errors.iter().take(5).collect();
         if top_errors.is_empty() {
             let _ = writeln!(s, "- 5 Error Terakhir: tidak ada");
         } else {
-            let _ = writeln!(s, "- 5 Error Terakhir ({} tercatat):", recent_errors.len());
+            let _ = writeln!(s, "- 5 Error Terakhir ({} kejadian):", recent_errors.len());
             for err in top_errors {
-                let short_detail = truncate_utf8_bytes(
-                    &security::redact_sensitive_text(&err.detail_redacted)
-                        .replace(['\r', '\n'], " "),
-                    err_cap,
-                );
+                let ts_label = if err.count > 1 {
+                    format!(
+                        "×{} ({}..{})",
+                        err.count,
+                        logging::format_utc_iso8601(err.first_ts),
+                        logging::format_utc_iso8601(err.last_ts)
+                    )
+                } else {
+                    format_iso_with_ago(err.last_ts, ts_secs)
+                };
+                let short_detail = truncate_utf8_bytes(&err.detail, err_cap);
                 let _ = writeln!(
                     s,
-                    "  - [{}] ts={} stage={} | {}",
-                    err.code, err.ts as u64, err.stage, short_detail
+                    "{}",
+                    cap_list_line(
+                        &format!(
+                            "  - [{}] {} stage={} | {}",
+                            err.code, ts_label, err.stage, short_detail
+                        ),
+                        MAX_REPORT_LIST_LINE_CHARS
+                    )
                 );
             }
         }
@@ -240,9 +497,9 @@ fn build_ringkasan_section(
     // Extreme fallback truncation should fixed fields themselves exceed 4096 bytes.
     let hard = truncate_utf8_bytes(
         &format!(
-            "# ClipperHelper Diagnostics Report\n## RINGKASAN\n- ID Laporan: {}\n- Versi App: v{}\n- Catatan: {}\n",
+            "# ClipperHelper Diagnostics Report\n## RINGKASAN\n- ID Laporan: {}\n- Versi App: {}\n- Catatan: {}\n",
             report_id,
-            opts.app_version,
+            crate::manifest::format_component_version(&opts.app_version),
             truncate_utf8_bytes(&clean_note.replace('\n', " "), 200)
         ),
         RINGKASAN_MAX_BYTES,
@@ -252,6 +509,7 @@ fn build_ringkasan_section(
 
 #[allow(clippy::too_many_arguments)]
 fn assemble_detail_section(
+    ts_secs: u64,
     crash_record: Option<&CrashRecord>,
     snapshot: &ComponentDiagnosticsSnapshot,
     safe_settings: &std::collections::BTreeMap<String, String>,
@@ -272,25 +530,50 @@ fn assemble_detail_section(
         let _ = writeln!(s, "\n### Crash / Unclean Shutdown Terakhir");
         let _ = writeln!(
             s,
-            "- Waktu: {} | Versi: {} | Lokasi: {}",
-            crash.timestamp as u64,
-            crash.app_version,
-            crash.location.as_deref().unwrap_or("unknown")
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- Waktu: {} | Versi: {} | Lokasi: {}",
+                    format_iso_with_ago(crash.timestamp.max(0.0) as u64, ts_secs),
+                    crate::manifest::format_component_version(&crash.app_version),
+                    crash.location.as_deref().unwrap_or("unknown")
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
-        let _ = writeln!(s, "- Pesan: {}", crash.message_redacted);
+        let _ = writeln!(
+            s,
+            "{}",
+            cap_list_line(
+                &format!("- Pesan: {}", crash.message_redacted),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
+        );
         if !crash.backtrace_redacted.trim().is_empty() {
             let _ = writeln!(s, "```text\n{}\n```", crash.backtrace_redacted.trim());
         }
     }
 
+    let grouped_errors = group_error_events(errors);
+    let mut reasons = ReasonRegistry::from_snapshot_and_errors(snapshot, &grouped_errors);
+
     let _ = writeln!(s, "\n### Laporan Kapabilitas Komponen");
     for comp in &snapshot.components {
+        let active_ver_fmt = comp
+            .current_version
+            .as_deref()
+            .map(crate::manifest::format_component_version)
+            .unwrap_or_else(|| "tidak ada".to_string());
         let _ = writeln!(
             s,
-            "- {} (aktif: {}, sumber: {})",
-            comp.component,
-            comp.current_version.as_deref().unwrap_or("tidak ada"),
-            comp.active_source
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- {} (aktif: {}, sumber: {})",
+                    comp.component, active_ver_fmt, comp.active_source
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
         for v in &comp.versions {
             let cap_status = v
@@ -305,29 +588,35 @@ fn assemble_detail_section(
             let q_note = v
                 .quarantine_reason
                 .as_deref()
-                .map(|r| format!(" | karantina: {}", security::redact_sensitive_text(r)))
+                .map(|r| format!(" | karantina: {}", reasons.render_ref(r)))
                 .unwrap_or_default();
             let _ = writeln!(
                 s,
-                "  - ver={} status={} cap={}{}",
-                v.version, v.status, cap_status, q_note
+                "{}",
+                cap_list_line(
+                    &format!(
+                        "  - ver={} status={} cap={}{}",
+                        crate::manifest::format_component_version(&v.version),
+                        v.status,
+                        cap_status,
+                        q_note
+                    ),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
             );
             if let Some(rep) = &v.capability_report {
                 if let Some(ff) = &rep.ffmpeg {
                     let _ = writeln!(
                         s,
-                        "    ffmpeg: license={} ffprobe={} encoders=[{}]",
+                        "    ffmpeg: license={} ffprobe={} encoders_in_build=[{}]",
                         ff.effective_license,
                         ff.ffprobe_version,
                         ff.hardware_encoders_available.join(", ")
                     );
                 }
                 if !rep.reasons.is_empty() {
-                    let _ = writeln!(
-                        s,
-                        "    reasons: {}",
-                        security::redact_sensitive_text(&rep.reasons.join("; "))
-                    );
+                    let joined = rep.reasons.join("; ");
+                    let _ = writeln!(s, "    reasons: {}", reasons.render_ref(&joined));
                 }
             }
         }
@@ -335,13 +624,19 @@ fn assemble_detail_section(
     if snapshot.custom_ffmpeg.enabled {
         let _ = writeln!(
             s,
-            "- Custom FFmpeg aktif: {} (fallback={})",
-            snapshot
-                .custom_ffmpeg
-                .redacted_path
-                .as_deref()
-                .unwrap_or("(redacted)"),
-            snapshot.custom_ffmpeg.fallback_active
+            "{}",
+            cap_list_line(
+                &format!(
+                    "- Custom FFmpeg aktif: {} (fallback={})",
+                    snapshot
+                        .custom_ffmpeg
+                        .redacted_path
+                        .as_deref()
+                        .unwrap_or("(redacted)"),
+                    snapshot.custom_ffmpeg.fallback_active
+                ),
+                MAX_REPORT_LIST_LINE_CHARS
+            )
         );
     }
 
@@ -350,7 +645,14 @@ fn assemble_detail_section(
         let _ = writeln!(s, "(belum ada pengaturan tersimpan)");
     } else {
         for (k, v) in safe_settings {
-            let _ = writeln!(s, "- {} = {}", k, security::redact_report_envelope(v));
+            let _ = writeln!(
+                s,
+                "{}",
+                cap_list_line(
+                    &format!("- {} = {}", k, security::redact_report_envelope(v)),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
+            );
         }
     }
 
@@ -364,8 +666,18 @@ fn assemble_detail_section(
         for m in stage_medians {
             let _ = writeln!(
                 s,
-                "- {}.{} [{}]: median {:.3} unit/s ({} sampel)",
-                m.stage, m.variant, m.device_profile, m.median_rate_units_per_sec, m.sample_count
+                "{}",
+                cap_list_line(
+                    &format!(
+                        "- {}.{} [{}]: median {:.3} unit/s ({} sampel)",
+                        m.stage,
+                        m.variant,
+                        m.device_profile,
+                        m.median_rate_units_per_sec,
+                        m.sample_count
+                    ),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
             );
         }
     }
@@ -379,35 +691,66 @@ fn assemble_detail_section(
             let err_tag = j.error_code.as_deref().unwrap_or("-");
             let _ = writeln!(
                 s,
-                "- id={} kind={} status={} stage={} video_id={} err={}",
-                j.id,
-                j.kind,
-                j.status,
-                j.stage.as_deref().unwrap_or("-"),
-                vid,
-                err_tag
+                "{}",
+                cap_list_line(
+                    &format!(
+                        "- id={} kind={} status={} stage={} video_id={} err={}",
+                        j.id,
+                        j.kind,
+                        j.status,
+                        j.stage.as_deref().unwrap_or("-"),
+                        vid,
+                        err_tag
+                    ),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
             );
         }
     }
 
     let _ = writeln!(s, "\n### Riwayat Error ({})", errors.len());
-    if errors.is_empty() {
+    if grouped_errors.is_empty() {
         let _ = writeln!(s, "(tidak ada error tercatat)");
     } else {
-        for err in errors {
+        for g in grouped_errors {
+            let ts_label = if g.count > 1 {
+                format!(
+                    "×{} ({}..{})",
+                    g.count,
+                    logging::format_utc_iso8601(g.first_ts),
+                    logging::format_utc_iso8601(g.last_ts)
+                )
+            } else {
+                format_iso_with_ago(g.last_ts, ts_secs)
+            };
+            let detail_ref = reasons.render_ref(&g.detail);
             let _ = writeln!(
                 s,
-                "- [{}] ts={} stage={} key={}: {}",
-                err.code,
-                err.ts as u64,
-                err.stage,
-                err.message_key,
-                security::redact_sensitive_text(&err.detail_redacted)
+                "{}",
+                cap_list_line(
+                    &format!(
+                        "- [{}] {} stage={} key={}: {}",
+                        g.code, ts_label, g.stage, g.message_key, detail_ref
+                    ),
+                    MAX_REPORT_LIST_LINE_CHARS
+                )
             );
-            if include_stderr_tails && !err.stderr_tail_redacted.trim().is_empty() {
-                let tail = security::redact_sensitive_text(&err.stderr_tail_redacted);
-                let _ = writeln!(s, "  stderr: {}", tail.replace('\n', " | "));
+            if include_stderr_tails {
+                if let Some(tail) = &g.stderr_tail {
+                    let _ = writeln!(
+                        s,
+                        "  stderr: {}",
+                        truncate_utf8_bytes(&tail.replace('\n', " | "), 280)
+                    );
+                }
             }
+        }
+    }
+
+    if !reasons.entries.is_empty() {
+        let _ = writeln!(s, "\n### Referensi Alasan Panjang / Berulang");
+        for (id, body) in &reasons.entries {
+            let _ = writeln!(s, "[{}]: {}", id, body);
         }
     }
 
@@ -427,6 +770,7 @@ fn assemble_detail_section(
 
 #[allow(clippy::too_many_arguments)]
 fn fit_report_to_budget(
+    ts_secs: u64,
     ringkasan: &str,
     crash_record: Option<&CrashRecord>,
     snapshot: &ComponentDiagnosticsSnapshot,
@@ -443,6 +787,7 @@ fn fit_report_to_budget(
     );
 
     let full_detail = assemble_detail_section(
+        ts_secs,
         crash_record,
         snapshot,
         safe_settings,
@@ -474,6 +819,7 @@ fn fit_report_to_budget(
     ] {
         log_slice = &all_logs[all_logs.len().saturating_sub(keep_logs)..];
         let cand_detail = assemble_detail_section(
+            ts_secs,
             crash_record,
             snapshot,
             safe_settings,
@@ -497,6 +843,7 @@ fn fit_report_to_budget(
         for job_cap in [all_jobs.len(), 5, 0] {
             job_slice = &all_jobs[..all_jobs.len().min(job_cap)];
             let cand_detail = assemble_detail_section(
+                ts_secs,
                 crash_record,
                 snapshot,
                 safe_settings,
@@ -516,6 +863,7 @@ fn fit_report_to_budget(
 
     // 3. Last resort: drop crash backtrace / trim final string cleanly within max_bytes.
     let minimal_detail = assemble_detail_section(
+        ts_secs,
         None,
         snapshot,
         safe_settings,
@@ -555,9 +903,14 @@ pub fn build_diagnostics_report(
 ) -> DiagnosticsReportBundle {
     let report_id = generate_report_id();
     let ts_secs = unix_now_secs();
-    let free_disk = security::get_free_disk_space(ws_root).ok();
+    let disk_summary = security::get_disk_space_summary(ws_root).ok();
 
-    let all_errors_file = store.list_error_events(None, 200).unwrap_or_default();
+    let all_errors_file: Vec<ErrorEventRow> = store
+        .list_error_events(None, 200)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.stage != "app_lifecycle" && e.code != "app_lifecycle/unclean_shutdown")
+        .collect();
     let all_errors_clip: Vec<ErrorEventRow> = all_errors_file.iter().take(30).cloned().collect();
     let safe_settings = store.export_safe_settings_allowlist().unwrap_or_default();
     let stage_medians = store.list_stage_stat_medians().unwrap_or_default();
@@ -565,18 +918,18 @@ pub fn build_diagnostics_report(
         .list_recent_job_summaries(20, opts.include_video_ids)
         .unwrap_or_default();
     let logs_dir = ws_root.join("logs");
-    let logs_file = logging::read_recent_redacted_log_lines(&logs_dir, 800, 512 * 1024);
-    let logs_clip: Vec<String> = logs_file
-        .iter()
-        .skip(logs_file.len().saturating_sub(150))
-        .cloned()
-        .collect();
+    let logs_file = logging::read_recent_redacted_log_lines(
+        &logs_dir,
+        logging::REPORT_MAX_LOG_LINES,
+        512 * 1024,
+    );
+    let logs_clip: Vec<String> = logs_file.clone();
 
     let ringkasan = build_ringkasan_section(
         &report_id,
         ts_secs,
         ws_root,
-        free_disk,
+        disk_summary,
         hw,
         snapshot,
         speech_state,
@@ -586,6 +939,7 @@ pub fn build_diagnostics_report(
     );
 
     let (preview_text, preview_truncated) = fit_report_to_budget(
+        ts_secs,
         &ringkasan,
         opts.crash_record.as_ref(),
         snapshot,
@@ -598,6 +952,7 @@ pub fn build_diagnostics_report(
     );
 
     let (full_text, full_truncated) = fit_report_to_budget(
+        ts_secs,
         &ringkasan,
         opts.crash_record.as_ref(),
         snapshot,
@@ -648,6 +1003,9 @@ mod tests {
             windows_display_version: Some("24H2".into()),
             windows_build: "26100.123".into(),
             is_windows_n_kn: false,
+            webview2_version: Some("130.0.2849.46".into()),
+            system_locale: "id-ID".into(),
+            timezone: "UTC+07:00 (SE Asia Standard Time)".into(),
             ac_power: Some(true),
             power_plan: "Balanced".into(),
             fingerprint: crate::hardware::compute_hardware_fingerprint(&gpus, "26100.123"),
@@ -667,11 +1025,16 @@ mod tests {
             .set_setting("supabase_service_role_key", "NEVER_SHOULD_APPEAR_SECRET")
             .unwrap();
 
-        // Write oversized log lines (> 150 KB) to exercise clipboard ~100 KB truncation + notice
-        let big_log_line = "INFO stage=transcribe progress=45% buffer=0123456789abcdef0123456789abcdef user=C:\\Users\\RahmatClipper\\clip.mp4 email=rahmat@domain.id token=tok_secret_99 Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig1234567890 ".repeat(10);
+        // Write oversized log lines (> 150 KB across newest 80 lines) to exercise clipboard ~100 KB truncation + notice
+        let big_log_line = "stage=transcribe progress=45% buffer=0123456789abcdef0123456789abcdef user=C:\\Users\\RahmatClipper\\clip.mp4 email=rahmat@domain.id token=tok_secret_99 Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig1234567890 ".repeat(10);
         let mut big_log_content = String::new();
-        for i in 0..140 {
-            big_log_content.push_str(&format!("line={} {}\n", i, big_log_line));
+        for i in 0..80 {
+            big_log_content.push_str(&format!(
+                "[2026-11-26T10:00:{:02}Z] INFO clipper_helper_desktop_lib::stage: line={} {}\n",
+                i % 60,
+                i,
+                big_log_line
+            ));
         }
         std::fs::write(ws.join("logs/clipper.log"), &big_log_content).unwrap();
 
@@ -807,5 +1170,115 @@ mod tests {
             },
         );
         assert!(!without_id.preview_text.contains("dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn test_diagnostics_report_polish_and_user_note_redaction() {
+        let tmp = TempDir::new().unwrap();
+        let ws = security::ensure_workspace_with_root(tmp.path()).unwrap();
+        let store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+
+        // Repeated identical error (3x) and a long repeated reason (> 120 chars)
+        for _ in 0..3 {
+            store
+                .record_error_event(NewErrorEvent {
+                    code: "E_SERVER_UNAVAILABLE".into(),
+                    stage: "manifest_fetch".into(),
+                    job_id: None,
+                    message_key: "err.E_SERVER_UNAVAILABLE.not_found".into(),
+                    detail: "HTTP 404 Not Found fetching manifest payload".into(),
+                    stderr_tail: String::new(),
+                    app_version: "0.1.0".into(),
+                    component_versions_json: "{}".into(),
+                })
+                .unwrap();
+        }
+        // Unclean shutdown lifecycle event must NOT be counted in error_count
+        store
+            .record_error_event(NewErrorEvent {
+                code: "app_lifecycle/unclean_shutdown".into(),
+                stage: "app_lifecycle".into(),
+                job_id: None,
+                message_key: "crash.uncleanShutdown".into(),
+                detail: "Previous run terminated unexpectedly".into(),
+                stderr_tail: String::new(),
+                app_version: "0.1.0".into(),
+                component_versions_json: "{}".into(),
+            })
+            .unwrap();
+
+        let long_reason = "FFmpeg binary was rejected because it contains forbidden GPL filter boxes and x264 encoder components that conflict with LGPLv3 distribution policy";
+        for _ in 0..2 {
+            store
+                .record_error_event(NewErrorEvent {
+                    code: "E_VERIFY_FAILED".into(),
+                    stage: "install_verify".into(),
+                    job_id: None,
+                    message_key: "err.E_VERIFY_FAILED.body".into(),
+                    detail: long_reason.into(),
+                    stderr_tail: String::new(),
+                    app_version: "0.1.0".into(),
+                    component_versions_json: "{}".into(),
+                })
+                .unwrap();
+        }
+
+        let hw = mock_hw();
+        let resolver = ComponentResolver::new(ws.clone(), store.clone(), InUseRegistry::new());
+        let snapshot = resolver.diagnostics_snapshot().unwrap();
+        let speech_state = resolve_speech_model_state(&store, hw.ram_bytes_u64()).unwrap();
+        let encoder_status = get_encoder_status(&store, &hw).unwrap();
+
+        let bundle = build_diagnostics_report(
+            &ws,
+            &store,
+            &hw,
+            &snapshot,
+            &speech_state,
+            &encoder_status,
+            &DiagnosticsReportOptions {
+                user_note: "Saya di C:\\Users\\BudiSantoso\\Videos\\clip.mp4 email budi@contoh.co.id pakai Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig12345".into(),
+                include_video_ids: false,
+                app_version: "0.1.0".into(),
+                crash_record: None,
+            },
+        );
+
+        // User note PII/secrets redacted
+        for secret in ["BudiSantoso", "budi@contoh.co.id", "Bearer ", "eyJhbGci"] {
+            assert!(
+                !bundle.preview_text.contains(secret),
+                "Leaked '{}' from user_note!",
+                secret
+            );
+        }
+        assert!(bundle.preview_text.contains("%USERPROFILE%"));
+        assert!(bundle.preview_text.contains("[REDACTED_EMAIL]"));
+
+        // App lifecycle event excluded from error_count (3 + 2 = 5)
+        assert_eq!(bundle.error_count, 5);
+
+        // ISO-8601 UTC + GiB labels + WebView2/locale/timezone + grouped count + reason ref
+        assert!(bundle.preview_text.contains("16.00 GiB"));
+        assert!(bundle
+            .preview_text
+            .contains("WebView2: 130.0.2849.46 | Locale: id-ID | Zona Waktu: UTC+07:00"));
+        assert!(bundle.preview_text.contains("×3 ("));
+        assert!(bundle.preview_text.contains("[R1]"));
+        assert!(bundle
+            .preview_text
+            .contains("### Referensi Alasan Panjang / Berulang"));
+
+        // Every list line respects <= 300 chars cap
+        for line in bundle.preview_text.lines() {
+            if line.starts_with("- ") || line.starts_with("  - ") {
+                assert!(
+                    line.chars().count() <= MAX_REPORT_LIST_LINE_CHARS,
+                    "List line exceeded 300 chars ({}): {}",
+                    line.chars().count(),
+                    line
+                );
+            }
+        }
     }
 }

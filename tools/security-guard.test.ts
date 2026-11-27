@@ -73,7 +73,7 @@ describe('Security Baseline Guard', () => {
     }
   });
 
-  it('enforces least-privilege capabilities and rejects broad fs/shell permissions', () => {
+  it('enforces exact narrow capability set for dialog (dir open, .txt save) and opener ($LOCALDATA logs only)', () => {
     expect(fs.existsSync(capabilityPath)).toBe(true);
     const content = fs.readFileSync(capabilityPath, 'utf8');
     const cap = JSON.parse(content);
@@ -81,26 +81,67 @@ describe('Security Baseline Guard', () => {
     expect(cap.permissions, 'Permissions array must exist').toBeDefined();
     expect(Array.isArray(cap.permissions)).toBe(true);
 
-    // Disallow dangerous broad permissions (fs:*, shell:*, dialog:default) and inspect scopes
+    // Enforce the EXACT permission set — fail on any extra, broad, or unexpected capability.
+    expect(cap.permissions).toEqual([
+      'core:default',
+      'core:event:default',
+      {
+        identifier: 'opener:allow-open-path',
+        allow: [
+          { path: '$LOCALDATA/ClipperHelper/logs' },
+          { path: '$LOCALDATA/ClipperHelper-Dev/logs' },
+        ],
+      },
+      'dialog:allow-open',
+      'dialog:allow-save',
+    ]);
+
     for (const perm of cap.permissions) {
       const permName = typeof perm === 'string' ? perm : perm.identifier;
       expect(permName).not.toMatch(/^(fs|shell):/);
       expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
       expect(permName).not.toBe('dialog:default');
-      if (permName.startsWith('dialog:')) {
-        expect(['dialog:allow-open', 'dialog:allow-save']).toContain(permName);
-      }
-      if (permName === 'opener:allow-open-path') {
-        expect(typeof perm).toBe('object');
-        const allowed = (perm.allow ?? []).map((entry: { path?: string }) => entry.path);
-        expect(allowed).toEqual([
-          '$LOCALDATA/ClipperHelper/logs',
-          '$LOCALDATA/ClipperHelper-Dev/logs',
-        ]);
-      }
-      // Disallow dev commands in production default capabilities
+      expect(permName).not.toBe('opener:default');
+      expect(permName).not.toMatch(/opener:allow-(open-url|default-urls|reveal-item-in-dir)/);
       expect(permName).not.toMatch(/dev_/);
     }
+
+    // Defense-in-depth: verify frontend dialog plugin calls are strictly directory-open and .txt-save only.
+    const srcRoot = path.resolve(__dirname, '../apps/desktop/src');
+    const uiFiles: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== 'test' && entry.name !== 'ipc') walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry.name)) {
+          uiFiles.push(full);
+        }
+      }
+    };
+    walk(srcRoot);
+
+    const dialogUsers = uiFiles.filter((f) =>
+      fs.readFileSync(f, 'utf8').includes('@tauri-apps/plugin-dialog')
+    );
+    expect(dialogUsers.map((f) => path.basename(f)).sort()).toEqual([
+      'ComponentsView.tsx',
+      'DiagnosticsView.tsx',
+      'SettingsView.tsx',
+    ]);
+
+    for (const fileName of ['components/ComponentsView.tsx', 'components/SettingsView.tsx']) {
+      const src = fs.readFileSync(path.join(srcRoot, fileName), 'utf8');
+      expect(src).toMatch(/open\(\{\s*directory:\s*true,\s*multiple:\s*false/);
+      expect(src).not.toMatch(/\bsave\s*\(/);
+    }
+
+    const diagnosticsSrc = fs.readFileSync(
+      path.join(srcRoot, 'components/DiagnosticsView.tsx'),
+      'utf8'
+    );
+    expect(diagnosticsSrc).toMatch(/save\(\{[\s\S]*extensions:\s*\['txt'\]/);
+    expect(diagnosticsSrc).not.toMatch(/\bopen\s*\(/);
   });
 
   it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {

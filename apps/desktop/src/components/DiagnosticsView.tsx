@@ -9,7 +9,7 @@ import {
   ErrorEventRow,
 } from '../ipc/bindings';
 import { copyTextToClipboard } from '../utils/format';
-import { ErrorBanner, ErrorBannerModel } from './ErrorBanner';
+import { ErrorBanner, ErrorBannerModel, toErrorBannerModel } from './ErrorBanner';
 
 interface DiagnosticsViewProps {
   locale: SupportedLocale;
@@ -112,12 +112,7 @@ export function DiagnosticsView({
   };
 
   const bannerModel: ErrorBannerModel | null = cmdError
-    ? {
-        code: cmdError.code,
-        message: cmdError.message,
-        redactedDetail: cmdError.detail,
-        actions: [{ label: 'Tutup', onClick: () => setCmdError(null) }],
-      }
+    ? toErrorBannerModel(cmdError, locale, [{ label: 'Tutup', onClick: () => setCmdError(null) }])
     : null;
 
   return (
@@ -266,7 +261,13 @@ export function DiagnosticsView({
       <div className="bg-slate-900/70 border border-slate-700/70 rounded-xl p-5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-white">
-            {t('diagnostics.recentErrorsTitle', undefined, locale)} ({errors.length})
+            {t('diagnostics.recentErrorsTitle', undefined, locale)} (
+            {
+              errors.filter(
+                (e) => e.stage !== 'app_lifecycle' && e.code !== 'app_lifecycle/unclean_shutdown'
+              ).length
+            }
+            )
           </h3>
           <div className="flex items-center gap-2 text-xs">
             <label htmlFor="error-code-filter" className="text-slate-400">

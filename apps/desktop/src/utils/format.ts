@@ -1,8 +1,8 @@
-export function formatVersionBadge(version: string | null | undefined): string {
+export function formatComponentVersion(version: string | null | undefined): string {
   if (!version) return '';
   const trimmed = version.trim();
   if (!trimmed) return '';
-  return /^v/i.test(trimmed) ? trimmed : `v${trimmed}`;
+  return /^[A-Za-z]/.test(trimmed) ? trimmed : `v${trimmed}`;
 }
 
 export function formatBytesHuman(bytes: number): string {
@@ -30,6 +30,18 @@ export function formatEtaText(seconds: number | null | undefined): string {
   const mins = Math.floor(rounded / 60);
   const secs = rounded % 60;
   return `${mins} mnt ${secs} dtk`;
+}
+
+export function formatDurationHms(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
+    return '00:00';
+  }
+  const whole = Math.floor(seconds);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const s = whole % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
 export async function copyTextToClipboard(text: string): Promise<void> {

@@ -11,7 +11,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing::field::{Field, Visit};
+use tracing::level_filters::LevelFilter;
 use tracing::Subscriber;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
@@ -21,6 +23,83 @@ pub const LOG_RETENTION_DAYS: u64 = 7;
 pub const LOG_RETENTION_SECS: u64 = LOG_RETENTION_DAYS * 86_400;
 pub const LOG_MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
 pub const LOG_MAX_SINGLE_FILE_BYTES: u64 = 4 * 1024 * 1024; // Rotate every 4 MB
+pub const REPORT_MAX_LOG_LINES: usize = 80;
+pub const DEBUG_LOG_FILTER_ENV: &str = "CLIPPER_LOG";
+
+#[cfg(debug_assertions)]
+fn parse_level_filter(raw: &str) -> Option<LevelFilter> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "trace" => Some(LevelFilter::TRACE),
+        "debug" => Some(LevelFilter::DEBUG),
+        "info" => Some(LevelFilter::INFO),
+        "warn" | "warning" => Some(LevelFilter::WARN),
+        "error" => Some(LevelFilter::ERROR),
+        "off" => Some(LevelFilter::OFF),
+        _ => None,
+    }
+}
+
+/// Builds the default structured tracing filter:
+/// - `info` for our crates (`clipper_helper_desktop`, `clipper_helper_desktop_lib`)
+/// - `warn` for dependencies (`hyper`, `hyper_util`, `reqwest`, `tao`, `wry`, `tokio`, default)
+/// - `TRACE` / `DEBUG` enabled ONLY via `CLIPPER_LOG` env var in debug builds.
+pub fn build_log_targets(debug_override_env: Option<&str>) -> Targets {
+    let targets = Targets::new()
+        .with_default(LevelFilter::WARN)
+        .with_target("hyper", LevelFilter::WARN)
+        .with_target("hyper_util", LevelFilter::WARN)
+        .with_target("reqwest", LevelFilter::WARN)
+        .with_target("tao", LevelFilter::WARN)
+        .with_target("wry", LevelFilter::WARN)
+        .with_target("tokio", LevelFilter::WARN)
+        .with_target("clipper_helper_desktop_lib", LevelFilter::INFO)
+        .with_target("clipper_helper_desktop", LevelFilter::INFO);
+
+    #[cfg(debug_assertions)]
+    let targets = {
+        let mut targets = targets;
+        if let Some(raw) = debug_override_env {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                if let Some(lvl) = parse_level_filter(trimmed) {
+                    targets = targets
+                        .with_target("clipper_helper_desktop_lib", lvl)
+                        .with_target("clipper_helper_desktop", lvl);
+                } else {
+                    for part in trimmed.split(',') {
+                        let p = part.trim();
+                        if let Some((k, v)) = p.split_once('=') {
+                            if let Some(lvl) = parse_level_filter(v) {
+                                targets = targets.with_target(k.trim().to_string(), lvl);
+                            }
+                        } else if let Some(lvl) = parse_level_filter(p) {
+                            targets = targets.with_default(lvl);
+                        }
+                    }
+                }
+            }
+        }
+        targets
+    };
+
+    #[cfg(not(debug_assertions))]
+    let _ = debug_override_env;
+
+    targets
+}
+
+/// Convenience wrapper reading `CLIPPER_LOG` in debug builds only.
+pub fn build_runtime_log_targets() -> Targets {
+    #[cfg(debug_assertions)]
+    {
+        let env_val = std::env::var(DEBUG_LOG_FILTER_ENV).ok();
+        build_log_targets(env_val.as_deref())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        build_log_targets(None)
+    }
+}
 
 static LOG_WRITER_STATE: OnceLock<Mutex<Option<RotatingFileSink>>> = OnceLock::new();
 
@@ -197,9 +276,34 @@ pub fn flush_file_logging() {
     }
 }
 
-/// Formats an epoch-seconds timestamp compactly in UTC ISO-like form without pulling chrono.
+/// Formats Unix epoch seconds as strict ISO-8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+pub fn format_utc_iso8601(epoch_secs: u64) -> String {
+    let days_since_epoch = (epoch_secs / 86_400) as i64;
+    let rem = epoch_secs % 86_400;
+    let hour = rem / 3600;
+    let minute = (rem % 3600) / 60;
+    let second = rem % 60;
+
+    // Howard Hinnant civil-from-days algorithm (Euclidean calendar conversion).
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
 fn format_utc_timestamp(epoch_secs: u64) -> String {
-    format!("ts={}", epoch_secs)
+    format_utc_iso8601(epoch_secs)
 }
 
 /// `tracing` layer that formats events cleanly and writes redacted lines into `logs/`.
@@ -305,8 +409,106 @@ fn is_sensitive_field(name: &str) -> bool {
         || lower.contains("license")
 }
 
-/// Reads up to `max_lines` and `max_bytes` of the most recent log lines from `<logs_dir>/*.log`,
-/// guaranteeing every line is passed through `security::redact_sensitive_text`.
+/// Parses `[timestamp] LEVEL target: message` into `(level, target, body_without_ts)`.
+fn parse_log_parts(line: &str) -> Option<(&str, &str, &str)> {
+    let trimmed = line.trim();
+    let rest = if let Some(after_open) = trimmed.strip_prefix('[') {
+        let close_idx = after_open.find(']')?;
+        after_open[close_idx + 1..].trim_start()
+    } else {
+        trimmed
+    };
+    let mut split = rest.splitn(3, ' ');
+    let level = split.next()?;
+    let target_raw = split.next()?;
+    let target = target_raw.trim_end_matches(':');
+    if !matches!(level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR") {
+        return None;
+    }
+    Some((level, target, rest))
+}
+
+/// Returns true iff a log line belongs in Diagnostics reports:
+/// all `WARN`/`ERROR` lines, plus `INFO` lines emitted by our crates only.
+pub fn is_report_eligible_log_line(line: &str) -> bool {
+    let Some((level, target, _)) = parse_log_parts(line) else {
+        return false;
+    };
+    match level {
+        "ERROR" | "WARN" => true,
+        "INFO" => target.starts_with("clipper_helper_desktop"),
+        _ => false,
+    }
+}
+
+/// Filters log lines to report-eligible entries, collapses consecutive duplicate bodies with `(×N)`,
+/// keeps at most `max_lines` newest entries, and trims oldest entries if over `max_bytes`.
+pub fn select_report_log_lines(
+    raw_lines: &[String],
+    max_lines: usize,
+    max_bytes: usize,
+) -> Vec<String> {
+    struct Collapsed {
+        rendered: String,
+        dedup_key: String,
+        count: usize,
+    }
+
+    let mut collapsed: Vec<Collapsed> = Vec::new();
+    for raw in raw_lines {
+        let clean = security::redact_sensitive_text(raw.trim_end());
+        if clean.is_empty() || !is_report_eligible_log_line(&clean) {
+            continue;
+        }
+        let dedup_key = parse_log_parts(&clean)
+            .map(|(_, _, body)| body.to_string())
+            .unwrap_or_else(|| clean.clone());
+
+        if let Some(last) = collapsed.last_mut() {
+            if last.dedup_key == dedup_key {
+                last.count = last.count.saturating_add(1);
+                continue;
+            }
+        }
+        collapsed.push(Collapsed {
+            rendered: clean,
+            dedup_key,
+            count: 1,
+        });
+    }
+
+    let mut formatted: Vec<String> = collapsed
+        .into_iter()
+        .map(|entry| {
+            if entry.count > 1 {
+                format!("{} (×{})", entry.rendered, entry.count)
+            } else {
+                entry.rendered
+            }
+        })
+        .collect();
+
+    if formatted.len() > max_lines {
+        let start = formatted.len() - max_lines;
+        formatted = formatted.split_off(start);
+    }
+
+    let mut selected: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for line in formatted.into_iter().rev() {
+        let cost = line.len() + 1;
+        if !selected.is_empty() && used.saturating_add(cost) > max_bytes {
+            break;
+        }
+        used = used.saturating_add(cost);
+        selected.push(line);
+    }
+    selected.reverse();
+    selected
+}
+
+/// Reads up to `max_lines` and `max_bytes` of the most recent report-eligible redacted log lines
+/// from `<logs_dir>/*.log`.
 pub fn read_recent_redacted_log_lines(
     logs_dir: &Path,
     max_lines: usize,
@@ -347,37 +549,101 @@ pub fn read_recent_redacted_log_lines(
         };
         for line in content.lines() {
             let trimmed = line.trim_end();
-            if trimmed.is_empty() {
-                continue;
+            if !trimmed.is_empty() {
+                all_lines.push(trimmed.to_string());
             }
-            all_lines.push(security::redact_sensitive_text(trimmed));
         }
     }
 
-    if all_lines.len() > max_lines {
-        let start = all_lines.len() - max_lines;
-        all_lines = all_lines.split_off(start);
-    }
-
-    // Trim oldest lines if total byte budget is exceeded.
-    let mut selected: Vec<String> = Vec::new();
-    let mut used = 0usize;
-    for line in all_lines.into_iter().rev() {
-        let cost = line.len() + 1;
-        if !selected.is_empty() && used.saturating_add(cost) > max_bytes {
-            break;
-        }
-        used = used.saturating_add(cost);
-        selected.push(line);
-    }
-    selected.reverse();
-    selected
+    select_report_log_lines(&all_lines, max_lines, max_bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_default_log_filter_allows_our_info_and_blocks_dependency_info() {
+        let default_targets = build_log_targets(None);
+        assert!(default_targets
+            .would_enable("clipper_helper_desktop_lib::probe", &tracing::Level::INFO));
+        assert!(default_targets.would_enable("clipper_helper_desktop", &tracing::Level::INFO));
+        assert!(!default_targets.would_enable("clipper_helper_desktop_lib", &tracing::Level::DEBUG));
+        assert!(!default_targets.would_enable("clipper_helper_desktop_lib", &tracing::Level::TRACE));
+
+        for dep in [
+            "hyper::proto::h1",
+            "hyper_util::client",
+            "reqwest::connect",
+            "tao::platform_impl",
+            "wry::webview2",
+            "tokio::runtime",
+            "other_crate",
+        ] {
+            assert!(
+                !default_targets.would_enable(dep, &tracing::Level::INFO),
+                "Dependency {} INFO should be suppressed by default",
+                dep
+            );
+            assert!(
+                default_targets.would_enable(dep, &tracing::Level::WARN),
+                "Dependency {} WARN should be enabled",
+                dep
+            );
+        }
+
+        // In debug builds, CLIPPER_LOG=trace enables TRACE/DEBUG on our crates; ignored in release.
+        let with_env = build_log_targets(Some("trace"));
+        if cfg!(debug_assertions) {
+            assert!(with_env.would_enable("clipper_helper_desktop_lib", &tracing::Level::TRACE));
+            assert!(with_env.would_enable("clipper_helper_desktop_lib", &tracing::Level::DEBUG));
+        } else {
+            assert!(!with_env.would_enable("clipper_helper_desktop_lib", &tracing::Level::TRACE));
+            assert!(!with_env.would_enable("clipper_helper_desktop_lib", &tracing::Level::DEBUG));
+        }
+    }
+
+    #[test]
+    fn test_report_log_selection_filters_dep_info_caps_80_and_collapses_duplicates() {
+        let mut lines = vec![
+            "[2026-11-26T10:00:00Z] INFO hyper::client: noisy info".to_string(),
+            "[2026-11-26T10:00:01Z] INFO reqwest::connect: noisy connect".to_string(),
+            "[2026-11-26T10:00:02Z] DEBUG clipper_helper_desktop_lib: verbose debug".to_string(),
+            "[2026-11-26T10:00:03Z] TRACE tokio::task: verbose trace".to_string(),
+            "[2026-11-26T10:00:04Z] WARN reqwest::retry: retrying transfer".to_string(),
+            "[2026-11-26T10:00:05Z] WARN reqwest::retry: retrying transfer".to_string(),
+            "[2026-11-26T10:00:06Z] WARN reqwest::retry: retrying transfer".to_string(),
+        ];
+        for i in 0..90 {
+            lines.push(format!(
+                "[2026-11-26T10:01:{:02}Z] INFO clipper_helper_desktop_lib::app: step {}",
+                i % 60,
+                i
+            ));
+        }
+        lines.push(
+            "[2026-11-26T10:02:00Z] ERROR clipper_helper_desktop_lib::updater: boom".to_string(),
+        );
+
+        let selected = select_report_log_lines(&lines, REPORT_MAX_LOG_LINES, 128 * 1024);
+        assert_eq!(selected.len(), 80, "must cap at newest 80 lines");
+        assert!(!selected.iter().any(|l| l.contains("noisy info")
+            || l.contains("verbose debug")
+            || l.contains("verbose trace")));
+        assert!(selected
+            .last()
+            .unwrap()
+            .contains("ERROR clipper_helper_desktop_lib::updater: boom"));
+
+        // With higher line limit, verify consecutive duplicate collapse
+        let collapsed = select_report_log_lines(&lines[..7], REPORT_MAX_LOG_LINES, 64 * 1024);
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(
+            collapsed[0],
+            "[2026-11-26T10:00:04Z] WARN reqwest::retry: retrying transfer (×3)"
+        );
+    }
 
     #[test]
     fn test_rotating_sink_redacts_secrets_and_prunes_size_budget() {
@@ -388,7 +654,7 @@ mod tests {
         let mut sink = RotatingFileSink::open_with_limits(&logs_dir, 200, 450, 7 * 86_400).unwrap();
         for i in 0..12 {
             sink.write_line(&format!(
-                "line={} user=C:\\Users\\Alice\\test.mp4 url=https://a.test/x?token=secret{} email=a{}@b.com",
+                "[2026-11-26T10:00:00Z] INFO clipper_helper_desktop_lib: line={} user=C:\\Users\\Alice\\test.mp4 url=https://a.test/x?token=secret{} email=a{}@b.com",
                 i, i, i
             ))
             .unwrap();

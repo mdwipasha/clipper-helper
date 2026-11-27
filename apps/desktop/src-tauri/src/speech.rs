@@ -2,7 +2,8 @@
 //! (ARCHITECTURE §8; PROGRESS_AND_ETA §4; docs/benchmarks/S3-speech.md; M1.1d-lite Part 3).
 //!
 //! - Defaults cleanly without any up-front benchmark:
-//!   `RAM >= 8 GiB` -> `small-q5_1`; otherwise (including unknown RAM) -> `base`.
+//!   `RAM >= 6.5 GiB` reported physical RAM (an "8 GB" Windows laptop reports ~7.4 GiB) -> `small-q5_1`,
+//!   otherwise (including unknown RAM) -> `base`.
 //! - Users can override cleanly in Pengaturan (`tiny` / `base` / `small-q5_1` / `small` / `medium`).
 //! - Records measured transcription RTF in `stage_stats`; if `small-q5_1` exceeds `1.5` RTF
 //!   twice consecutively, raises a non-blocking suggestion to switch to a lighter model
@@ -13,7 +14,9 @@ use specta::Type;
 
 use crate::store::{LocalStore, StoreError};
 
-pub const EIGHT_GIB_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Minimum reported physical RAM (`6.5 GiB` = 6,979,321,856 bytes) to default to `small-q5_1`.
+/// Nominal "8 GB" Windows laptops commonly report ~7.4 GiB usable physical memory.
+pub const MIN_RAM_BYTES_FOR_SMALL_Q5_1: u64 = (13 * 1024 * 1024 * 1024) / 2;
 pub const SMALL_Q5_1_SLOW_RTF_THRESHOLD: f64 = 1.5;
 pub const CONSECUTIVE_SLOW_RUNS_TO_SUGGEST: u32 = 2;
 
@@ -123,10 +126,10 @@ pub struct RtfRecordOutcome {
 }
 
 /// Safe default speech model rule without benchmark:
-/// `RAM >= 8 GiB` -> `small-q5_1`, otherwise (including `None`) -> `base`.
+/// `RAM >= 6.5 GiB` reported total -> `small-q5_1`, otherwise (including `None`) -> `base`.
 pub fn recommended_speech_model(ram_bytes: Option<u64>) -> SpeechModel {
     match ram_bytes {
-        Some(bytes) if bytes >= EIGHT_GIB_BYTES => SpeechModel::SmallQ5_1,
+        Some(bytes) if bytes >= MIN_RAM_BYTES_FOR_SMALL_Q5_1 => SpeechModel::SmallQ5_1,
         _ => SpeechModel::Base,
     }
 }
@@ -287,16 +290,24 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn gib_to_bytes(gib: f64) -> u64 {
+        (gib * (1024.0 * 1024.0 * 1024.0)) as u64
+    }
+
     #[test]
     fn test_recommended_speech_model_table() {
         let cases: &[(Option<u64>, SpeechModel)] = &[
             (None, SpeechModel::Base),
             (Some(0), SpeechModel::Base),
-            (Some(4 * 1024 * 1024 * 1024), SpeechModel::Base),
-            (Some(EIGHT_GIB_BYTES - 1), SpeechModel::Base),
-            (Some(EIGHT_GIB_BYTES), SpeechModel::SmallQ5_1),
-            (Some(16 * 1024 * 1024 * 1024), SpeechModel::SmallQ5_1),
-            (Some(32 * 1024 * 1024 * 1024), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(3.7)), SpeechModel::Base),
+            (Some(gib_to_bytes(5.8)), SpeechModel::Base),
+            (Some(MIN_RAM_BYTES_FOR_SMALL_Q5_1 - 1), SpeechModel::Base),
+            (Some(MIN_RAM_BYTES_FOR_SMALL_Q5_1), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(6.5)), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(7.4)), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(7.9)), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(15.6)), SpeechModel::SmallQ5_1),
+            (Some(gib_to_bytes(31.6)), SpeechModel::SmallQ5_1),
         ];
 
         for (ram, expected) in cases {

@@ -29,6 +29,13 @@ describe('ErrorBanner (shared component)', () => {
     expect(screen.getByText('E_VERIFY_FAILED')).toBeInTheDocument();
     expect(screen.getByText(/gagal lolos verifikasi/)).toBeInTheDocument();
 
+    // Technical detail stays collapsed until "Detail teknis" is toggled
+    expect(screen.queryByTestId('shared-error-banner-technical-detail')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Detail teknis' }));
+    expect(screen.getByTestId('shared-error-banner-technical-detail')).toHaveTextContent(
+      '--enable-gpl'
+    );
+
     await user.click(screen.getByRole('button', { name: 'Coba Lagi' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
 

@@ -796,6 +796,11 @@ impl SidecarSupervisor {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_fake_sidecar_bin() -> PathBuf {
+    tests::fake_sidecar_path()
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -806,7 +811,7 @@ mod tests {
     use std::sync::Arc;
 
     /// Locate the fake-sidecar executable.
-    fn fake_sidecar_path() -> PathBuf {
+    pub(super) fn fake_sidecar_path() -> PathBuf {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let manifest_bin = manifest_dir
             .join("target")

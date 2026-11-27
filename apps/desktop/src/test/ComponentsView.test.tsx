@@ -186,9 +186,9 @@ describe('ComponentsView', () => {
     const modelRow = screen.getByTestId('component-row-ggml-small-q5_1.bin');
     expect(modelRow).toHaveTextContent('Hash terverifikasi');
 
-    // Detail drawer toggles raw capability info ("Encoders in build")
+    // Detail drawer toggles raw capability info ("encoders_in_build")
     await user.click(screen.getByRole('button', { name: 'Detail' }));
-    expect(ffmpegRow).toHaveTextContent('Encoders in build: h264_nvenc, h264_mf');
+    expect(ffmpegRow).toHaveTextContent('encoders_in_build: h264_nvenc, h264_mf');
 
     await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
     expect(commands.fetchComponentsManifest).toHaveBeenCalledTimes(1);
@@ -245,5 +245,46 @@ describe('ComponentsView', () => {
     expect(notice).toHaveTextContent('bootstrap.json');
     expect(notice).toHaveTextContent('dimulai ulang');
     expect(notice).toHaveTextContent('tidak dipindahkan otomatis');
+  });
+
+  it('keeps neutral offline banner (no error banner) when manifest fetch returns E_NET_OFFLINE and recovers on Retry', async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(commands.fetchComponentsManifest)
+      .mockResolvedValueOnce({
+        status: 'error',
+        error: {
+          code: 'E_NET_OFFLINE',
+          message_key: 'err.E_NET_OFFLINE.body',
+          message: 'Connection refused',
+          detail: 'tcp connect error',
+          disk_bounds: null,
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'ok',
+        data: {
+          sequence: 2,
+          channel: 'stable',
+          generated_at: '2026-11-25T00:00:00Z',
+          components: [],
+        },
+      });
+
+    render(
+      <ComponentsView
+        locale="id"
+        overview={buildOverview()}
+        onRefreshOverview={onRefresh}
+        onOpenDiagnostics={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
+    expect(screen.getByTestId('components-offline-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('shared-error-banner')).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
   });
 });

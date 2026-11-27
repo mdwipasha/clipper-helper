@@ -93,6 +93,12 @@ fn lookup_stage_prior(stage: &str, variant: &str) -> PriorRangeSpec {
             high_sec_per_unit: 0.45,
             init_seconds: 2.0,
         },
+        ("download", "yt-dlp") => PriorRangeSpec {
+            // S1 benchmark prior: 1.66x RT (~0.602 s per range-second) + 10 s startup
+            low_sec_per_unit: 0.45,
+            high_sec_per_unit: 1.0 / 1.66,
+            init_seconds: 10.0,
+        },
         _ => PriorRangeSpec {
             low_sec_per_unit: 0.5,
             high_sec_per_unit: 1.8,

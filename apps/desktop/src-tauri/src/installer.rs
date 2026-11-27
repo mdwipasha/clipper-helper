@@ -126,7 +126,10 @@ pub enum InstallError {
     #[error("Archive verification/extraction error: {0}")]
     Archive(#[from] ArchiveError),
 
-    #[error("Capability verification failed for {component} v{version}: {reason}")]
+    #[error(
+        "Capability verification failed for {component} ({}): {reason}",
+        crate::manifest::format_component_version(version)
+    )]
     CapabilityFailed {
         component: String,
         version: String,
@@ -160,6 +163,13 @@ impl InstallError {
             InstallError::ComponentMissing { .. } => "E_COMPONENT_MISSING",
             InstallError::Security(se) => se.error_code(),
             _ => "E_VERIFY_FAILED",
+        }
+    }
+
+    pub fn message_key(&self) -> String {
+        match self {
+            InstallError::Network(ne) => ne.message_key().to_string(),
+            _ => format!("err.{}.body", self.error_code()),
         }
     }
 }
@@ -821,9 +831,9 @@ where
             )?;
 
             tracing::warn!(
-                "Component {} v{} failed capability verification ({}); quarantined and rolled back to {:?}",
+                "Component {} ({}) failed capability verification ({}); quarantined and rolled back to {:?}",
                 entry.component,
-                entry.version,
+                crate::manifest::format_component_version(&entry.version),
                 reason,
                 rolled_back_to
             );
@@ -1419,9 +1429,9 @@ pub fn reconcile_startup(
         let check_err = quick_verify_row(ws_root, &curr);
         if let Err(reason) = check_err {
             tracing::error!(
-                "Startup quick check failed for active {} v{}: {}",
+                "Startup quick check failed for active {} ({}): {}",
                 comp,
-                curr.version,
+                crate::manifest::format_component_version(&curr.version),
                 reason
             );
             let files: Vec<ExtractedFileRecord> =

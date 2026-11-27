@@ -1,5 +1,6 @@
 import { SupportedLocale, t } from '@clipper-helper/i18n';
 import { useState } from 'react';
+import type { AppCommandError } from '../ipc/bindings';
 import { copyTextToClipboard } from '../utils/format';
 
 export interface ErrorBannerAction {
@@ -14,6 +15,24 @@ export interface ErrorBannerModel {
   message: string;
   redactedDetail?: string;
   actions?: ErrorBannerAction[];
+}
+
+export function resolveFriendlyErrorBody(err: AppCommandError, locale: SupportedLocale): string {
+  const translated = t(err.message_key, undefined, locale);
+  return translated !== err.message_key ? translated : err.message;
+}
+
+export function toErrorBannerModel(
+  err: AppCommandError,
+  locale: SupportedLocale,
+  actions?: ErrorBannerAction[]
+): ErrorBannerModel {
+  return {
+    code: err.code,
+    message: resolveFriendlyErrorBody(err, locale),
+    redactedDetail: err.detail || err.message,
+    actions,
+  };
 }
 
 export interface ErrorBannerProps {
@@ -32,6 +51,7 @@ export function ErrorBanner({
   testId = 'shared-error-banner',
 }: ErrorBannerProps) {
   const [copied, setCopied] = useState(false);
+  const [techExpanded, setTechExpanded] = useState(false);
 
   const resolvedTitle =
     error.title ??
@@ -41,10 +61,12 @@ export function ErrorBanner({
       return translated === key ? t('err.E_UNKNOWN.title', undefined, locale) : translated;
     })();
 
+  const technicalText = error.redactedDetail?.trim() ? error.redactedDetail.trim() : null;
+
   const singleErrorPayload = [
     `[${error.code}] ${resolvedTitle}`,
     error.message,
-    error.redactedDetail && error.redactedDetail !== error.message ? error.redactedDetail : null,
+    technicalText && technicalText !== error.message ? technicalText : null,
   ]
     .filter(Boolean)
     .join('\n');
@@ -100,6 +122,19 @@ export function ErrorBanner({
             : t('errorBanner.copyDetail', undefined, locale)}
         </button>
 
+        {technicalText && (
+          <button
+            type="button"
+            aria-expanded={techExpanded}
+            onClick={() => setTechExpanded((prev) => !prev)}
+            className="bg-slate-900/60 hover:bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1.5 rounded text-xs transition"
+          >
+            {techExpanded
+              ? t('errorBanner.hideTechnicalDetail', undefined, locale)
+              : t('errorBanner.technicalDetail', undefined, locale)}
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onOpenDiagnostics}
@@ -108,6 +143,15 @@ export function ErrorBanner({
           {t('errorBanner.openDiagnostics', undefined, locale)}
         </button>
       </div>
+
+      {techExpanded && technicalText && (
+        <pre
+          data-testid={`${testId}-technical-detail`}
+          className="bg-black/60 border border-rose-900/70 rounded p-2.5 text-[11px] font-mono text-rose-200/90 whitespace-pre-wrap break-words max-h-40 overflow-auto"
+        >
+          {technicalText}
+        </pre>
+      )}
     </div>
   );
 }

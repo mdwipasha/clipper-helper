@@ -48,6 +48,8 @@ impl NetError {
             NetError::ManifestStale { .. } => "E_MANIFEST_STALE",
             NetError::Timeout(_) => "E_NET_TIMEOUT",
             NetError::Offline(_) => "E_NET_OFFLINE",
+            NetError::HttpError(status, _) if *status >= 400 => "E_SERVER_UNAVAILABLE",
+            NetError::HttpError(_, _) => "E_SERVER_UNAVAILABLE",
             NetError::DiskFull(_) => "E_DISK_FULL",
             NetError::DiskLow(_) => "E_DISK_LOW",
             NetError::VerificationFailed(comp, _, _) => {
@@ -58,20 +60,67 @@ impl NetError {
                 }
             }
             NetError::SizeExceeded { .. } | NetError::SizeMismatch { .. } => "E_VERIFY_FAILED",
-            _ => "E_NET_OFFLINE",
+            NetError::UrlInvalid(_)
+            | NetError::HostNotAllowed(_)
+            | NetError::HttpsRequired(_)
+            | NetError::RedirectForbidden(_) => "E_MANIFEST_INVALID",
+            NetError::AlreadyDownloading(_) | NetError::Cancelled | NetError::Io(_) => {
+                "E_NET_OFFLINE"
+            }
+        }
+    }
+
+    /// Returns a specific i18n message key per error class, including HTTP status classes.
+    pub fn message_key(&self) -> &'static str {
+        match self {
+            NetError::HttpError(404 | 410, _) => "err.E_SERVER_UNAVAILABLE.not_found",
+            NetError::HttpError(401 | 403, _) => "err.E_SERVER_UNAVAILABLE.auth",
+            NetError::HttpError(429, _) => "err.E_SERVER_UNAVAILABLE.rate_limited",
+            NetError::HttpError(status, _) if *status >= 500 => {
+                "err.E_SERVER_UNAVAILABLE.server_error"
+            }
+            NetError::HttpError(_, _) => "err.E_SERVER_UNAVAILABLE.body",
+            NetError::ManifestInvalid(_) => "err.E_MANIFEST_INVALID.body",
+            NetError::ManifestStale { .. } => "err.E_MANIFEST_STALE.body",
+            NetError::Timeout(_) => "err.E_NET_TIMEOUT.body",
+            NetError::Offline(_) => "err.E_NET_OFFLINE.body",
+            NetError::DiskFull(_) => "err.E_DISK_FULL.body",
+            NetError::DiskLow(_) => "err.E_DISK_LOW.body",
+            NetError::VerificationFailed(comp, _, _) => {
+                if comp.ends_with(".bin") {
+                    "err.E_MODEL_DOWNLOAD_FAILED.body"
+                } else {
+                    "err.E_VERIFY_FAILED.body"
+                }
+            }
+            NetError::SizeExceeded { .. } | NetError::SizeMismatch { .. } => {
+                "err.E_VERIFY_FAILED.body"
+            }
+            NetError::UrlInvalid(_)
+            | NetError::HostNotAllowed(_)
+            | NetError::HttpsRequired(_)
+            | NetError::RedirectForbidden(_) => "err.E_MANIFEST_INVALID.body",
+            NetError::AlreadyDownloading(_) | NetError::Cancelled | NetError::Io(_) => {
+                "err.E_NET_OFFLINE.body"
+            }
         }
     }
 }
 
 /// Maps a reqwest::Error to the appropriate NetError taxonomy variant.
+/// Only connect/DNS/TLS failures and timeouts map to `E_NET_OFFLINE` / `E_NET_TIMEOUT`;
+/// any HTTP status >= 400 maps to `NetError::HttpError` -> `E_SERVER_UNAVAILABLE`.
 pub fn map_reqwest_error(e: reqwest::Error) -> NetError {
     if e.is_timeout() {
         NetError::Timeout(e.to_string())
-    } else if e.is_connect() {
-        NetError::Offline(e.to_string())
     } else if let Some(status) = e.status() {
-        NetError::HttpError(status.as_u16(), status.to_string())
+        if status.as_u16() >= 400 {
+            NetError::HttpError(status.as_u16(), status.to_string())
+        } else {
+            NetError::Offline(e.to_string())
+        }
     } else {
+        // Connect, DNS, TLS, and transfer stream failures map cleanly to Offline.
         NetError::Offline(e.to_string())
     }
 }
@@ -298,6 +347,21 @@ mod tests {
                 .error_code(),
             "E_VERIFY_FAILED"
         );
+        for (status, expected_key) in [
+            (404u16, "err.E_SERVER_UNAVAILABLE.not_found"),
+            (410, "err.E_SERVER_UNAVAILABLE.not_found"),
+            (401, "err.E_SERVER_UNAVAILABLE.auth"),
+            (403, "err.E_SERVER_UNAVAILABLE.auth"),
+            (429, "err.E_SERVER_UNAVAILABLE.rate_limited"),
+            (500, "err.E_SERVER_UNAVAILABLE.server_error"),
+            (502, "err.E_SERVER_UNAVAILABLE.server_error"),
+            (503, "err.E_SERVER_UNAVAILABLE.server_error"),
+            (418, "err.E_SERVER_UNAVAILABLE.body"),
+        ] {
+            let err = NetError::HttpError(status, format!("HTTP {}", status));
+            assert_eq!(err.error_code(), "E_SERVER_UNAVAILABLE");
+            assert_eq!(err.message_key(), expected_key);
+        }
     }
 
     #[cfg(not(debug_assertions))]

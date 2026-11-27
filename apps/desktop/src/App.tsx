@@ -18,7 +18,7 @@ import {
   SettingsOverview,
   WorkspaceStatus,
 } from './ipc/bindings';
-import { copyTextToClipboard, formatVersionBadge } from './utils/format';
+import { copyTextToClipboard, formatComponentVersion } from './utils/format';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
@@ -90,6 +90,16 @@ export function App() {
     }
   };
 
+  const handleUseDefaultDataRoot = async () => {
+    setIpcError(null);
+    const res = await commands.useDefaultDataRoot();
+    if (res.status === 'ok') {
+      await loadInitialState();
+    } else {
+      setIpcError(res.error.message);
+    }
+  };
+
   const navItems: { id: NavTab; label: string }[] = [
     { id: 'home', label: t('nav.home', undefined, locale) },
     { id: 'components', label: t('nav.components', undefined, locale) },
@@ -110,7 +120,7 @@ export function App() {
                 {t('app.name', undefined, locale)}
               </h1>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                {appInfo ? formatVersionBadge(appInfo.version) : '…'} ·{' '}
+                {appInfo ? formatComponentVersion(appInfo.version) : '…'} ·{' '}
                 {appInfo?.platform ?? 'windows'}
               </p>
             </div>
@@ -173,8 +183,44 @@ export function App() {
           </div>
         )}
 
+        {/* Actionable screen when bootstrap.json points to an absent/unreachable drive */}
+        {wsStatus && !wsStatus.is_initialized && wsStatus.configured_root_unreachable && (
+          <div
+            data-testid="unreachable-dataroot-screen"
+            role="alert"
+            className="bg-amber-950/70 border border-amber-700/80 rounded-xl p-5 space-y-3 text-xs text-amber-100"
+          >
+            <h2 className="text-base font-semibold text-amber-300">
+              {t('dataroot.unreachableTitle', undefined, locale)}
+            </h2>
+            <p className="text-amber-100/90 leading-relaxed">
+              {t(
+                'dataroot.unreachableBody',
+                { path: wsStatus.unreachable_root_redacted ?? '(unknown)' },
+                locale
+              )}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => void handleUseDefaultDataRoot()}
+                className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold px-3.5 py-2 rounded-lg transition"
+              >
+                {t('dataroot.useDefault', undefined, locale)}
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadInitialState()}
+                className="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-100 font-medium px-3.5 py-2 rounded-lg transition"
+              >
+                {t('components.retry', undefined, locale)}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Shared ErrorBanner for Workspace Init or IPC failure */}
-        {wsStatus && !wsStatus.is_initialized && (
+        {wsStatus && !wsStatus.is_initialized && !wsStatus.configured_root_unreachable && (
           <ErrorBanner
             testId="workspace-error-banner"
             locale={locale}

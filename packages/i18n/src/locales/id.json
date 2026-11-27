@@ -28,7 +28,9 @@
   "errorBanner": {
     "copyDetail": "Salin detail error",
     "copiedDetail": "Tersalin",
-    "openDiagnostics": "Buka Diagnostik"
+    "openDiagnostics": "Buka Diagnostik",
+    "technicalDetail": "Detail teknis",
+    "hideTechnicalDetail": "Sembunyikan detail teknis"
   },
   "crash": {
     "bannerText": "Aplikasi sebelumnya berhenti tiba-tiba — Salin laporan",
@@ -38,12 +40,36 @@
   },
   "home": {
     "title": "Beranda",
-    "subtitle": "Jalur cepat beta lokal: pasang komponen yang dibutuhkan lalu laporkan kendala lewat tab Diagnostik.",
+    "subtitle": "Tempel link video YouTube untuk diperiksa sebelum memilih rentang klip.",
     "componentsReady": "Komponen inti siap digunakan.",
     "componentsMissing": "Beberapa komponen wajib belum terpasang.",
     "goComponents": "Kelola Komponen",
     "goDiagnostics": "Buka Diagnostik",
-    "goSettings": "Pengaturan Model & Encoder"
+    "goSettings": "Pengaturan Model & Encoder",
+    "urlLabel": "Link Video YouTube",
+    "urlPlaceholder": "https://www.youtube.com/watch?v=...",
+    "checkLinkButton": "Cek link",
+    "checkingButton": "Memeriksa link…",
+    "cancelProbe": "Batal",
+    "elapsedSeconds": "Memeriksa video… {seconds} dtk",
+    "probeCancelled": "Pemeriksaan link dibatalkan.",
+    "resultHeading": "Video Siap Diproses",
+    "channelLabel": "Channel",
+    "durationLabel": "Durasi",
+    "statusLabel": "Status",
+    "statusVod": "Video VOD",
+    "statusRecordedLive": "Rekaman livestream",
+    "previewModeLabel": "Pratinjau",
+    "previewAvailable": "Pratinjau: tersedia",
+    "previewTimecodeOnly": "Pratinjau: hanya timecode",
+    "suggestedStartLabel": "Mulai disarankan: {time}",
+    "videoIdLabel": "ID Video",
+    "nextButton": "Lanjut",
+    "comingSoonHint": "Segera hadir",
+    "recentTitle": "Proyek terakhir",
+    "recentEmpty": "Belum ada proyek. Tempel link YouTube di atas lalu klik Cek link.",
+    "deleteProject": "Hapus",
+    "retryButton": "Coba Lagi"
   },
   "components": {
     "title": "Manajer Komponen",
@@ -108,39 +134,47 @@
     },
     "E_NET_OFFLINE": {
       "title": "Koneksi terputus",
-      "body": "Periksa koneksi internet kamu dan coba lagi."
+      "body": "Aplikasi tidak dapat terhubung ke server karena jaringan terputus atau server belum terjangkau. Tidak ada file lokal yang diubah. Periksa koneksi internet kamu lalu klik Coba Lagi."
     },
     "E_NET_TIMEOUT": {
       "title": "Waktu koneksi habis",
-      "body": "Permintaan atau unduhan melebihi batas waktu. Silakan coba lagi."
+      "body": "Permintaan atau unduhan terhenti karena waktu koneksi habis. Proses dihentikan dengan aman tanpa merusak file. Periksa kestabilan internet lalu klik Coba Lagi."
     },
     "E_DISK_LOW": {
       "title": "Ruang penyimpanan hampir penuh",
-      "body": "Ruang disk tersisa menipis. Kosongkan ruang atau pilih lokasi data lain."
+      "body": "Ruang penyimpanan di lokasi data hampir habis. Aplikasi menghentikan penulisan sementara agar file tidak rusak. Kosongkan ruang disk atau pilih lokasi data lain di Pengaturan."
     },
     "E_DISK_FULL": {
       "title": "Ruang disk tidak mencukupi",
-      "body": "Ruang penyimpanan tidak cukup untuk menyelesaikan operasi ini."
+      "body": "Ruang penyimpanan tidak mencukupi untuk mengunduh atau menulis file. Tidak ada data yang tertimpa. Kosongkan ruang disk atau klik Pilih lokasi data lain."
     },
     "E_COMPONENT_MISSING": {
       "title": "Komponen tidak ditemukan",
-      "body": "File komponen hilang atau rusak (kemungkinan dihapus/dikarantina oleh antivirus). Klik Perbaiki untuk mengunduh ulang."
+      "body": "Komponen pemrosesan yang dibutuhkan tidak ditemukan atau rusak (sering kali dikarantina oleh antivirus). Aplikasi menahan proses ini agar aman. Klik Perbaiki di tab Komponen untuk mengunduh ulang."
     },
     "E_MODEL_DOWNLOAD_FAILED": {
       "title": "Unduhan model gagal",
-      "body": "Gagal mengunduh atau memverifikasi file model suara. Silakan coba lagi."
+      "body": "Gagal mengunduh atau memverifikasi file model suara. Model lama (jika ada) tetap dipertahankan. Silakan klik Coba Lagi untuk melanjutkan unduhan."
     },
     "E_VERIFY_FAILED": {
-      "title": "Verifikasi gagal",
-      "body": "Komponen atau hasil tidak lolos pemeriksaan integritas atau kapabilitas."
+      "title": "Verifikasi komponen ditolak",
+      "body": "Versi komponen ini ditolak karena tidak memenuhi syarat keamanan atau lisensi. Versi sebelumnya tetap dipakai dan file baru dikarantina. Klik Perbaiki untuk memasang versi resmi."
     },
     "E_MANIFEST_INVALID": {
-      "title": "Verifikasi manifest gagal",
-      "body": "Verifikasi tanda tangan digital atau skema manifest komponen gagal. Pembaruan mungkin telah diubah atau rusak."
+      "title": "Verifikasi daftar komponen gagal",
+      "body": "Daftar pembaruan resmi (manifest) tidak lolos pemeriksaan tanda tangan keamanan. Aplikasi menolaknya dan mempertahankan komponen yang ada. Klik Coba Lagi atau perbarui aplikasi."
     },
     "E_MANIFEST_STALE": {
-      "title": "Rollback manifest ditolak",
-      "body": "Urutan manifest komponen lebih lama daripada versi yang terakhir diterima. Pembaruan ditolak."
+      "title": "Pembaruan kedaluwarsa ditolak",
+      "body": "Server mengirim daftar pembaruan dengan urutan lebih lama daripada versi yang sudah diterima. Aplikasi memblokirnya untuk mencegah penurunan versi. Klik Coba Lagi nanti atau laporkan lewat Diagnostik."
+    },
+    "E_SERVER_UNAVAILABLE": {
+      "title": "Server tidak tersedia",
+      "body": "Server komponen sedang bermasalah atau mengembalikan respons error. Komponen lokal kamu tidak diubah. Coba Lagi beberapa saat lagi.",
+      "not_found": "Berkas tidak ada di server. Komponen lokal tidak diubah. Coba muat ulang daftar komponen atau laporkan ke pengembang.",
+      "auth": "Akses ke berkas di server ditolak. Komponen lokal tidak diubah. Periksa pembaruan aplikasi atau coba lagi nanti.",
+      "rate_limited": "Terlalu banyak permintaan ke server saat ini. Komponen lokal tidak diubah. Tunggu beberapa menit lalu klik Coba Lagi.",
+      "server_error": "Server pembaruan sedang mengalami gangguan sementara. Komponen lokal tidak diubah. Silakan klik Coba Lagi beberapa saat lagi."
     },
     "E_ENCODER_UNAVAILABLE": {
       "title": "Encoder video tidak tersedia",
@@ -150,9 +184,41 @@
       "title": "Gagal merender video",
       "body": "FFmpeg mengalami kesalahan saat merender video."
     },
+    "E_YT_URL_INVALID": {
+      "title": "Link YouTube tidak valid",
+      "body": "Masukkan link satu video YouTube yang valid (bukan playlist atau halaman lain).",
+      "collection": "Link playlist, channel, atau pencarian tidak didukung. Tempel link satu video YouTube.",
+      "too_long": "Link terlalu panjang (maksimal 2048 karakter). Periksa kembali link yang kamu tempel.",
+      "host": "Domain link tidak didukung. Gunakan link youtube.com atau youtu.be yang valid."
+    },
+    "E_YT_UNAVAILABLE": {
+      "title": "Video YouTube tidak dapat diakses",
+      "body": "Video ini tidak tersedia untuk diunduh saat ini.",
+      "members_only": "Video ini khusus anggota channel (members-only) dan tidak dapat diunduh tanpa akses keanggotaan.",
+      "age_restricted": "Video ini dibatasi usia dan memerlukan akun yang masuk, sehingga tidak dapat diproses aplikasi ini.",
+      "region_blocked": "Video ini tidak tersedia di wilayah (negara) jaringan kamu.",
+      "private": "Video ini bersifat pribadi (private) atau dibatasi pemiliknya.",
+      "deleted": "Video ini sudah dihapus oleh pemiliknya atau tidak lagi tersedia di YouTube.",
+      "unknown": "Video tidak tersedia atau tidak dapat diakses secara publik."
+    },
+    "E_YT_LIVE_NOT_ENDED": {
+      "title": "Livestream belum selesai",
+      "body": "Siaran langsung atau premiere ini belum selesai. Tunggu hingga rekaman selesai diproses lalu coba lagi.",
+      "ongoing_live": "Siaran langsung sedang berjalan dan belum selesai. Tunggu hingga live berakhir untuk membuat klip.",
+      "premiere_not_started": "Video premiere ini belum dimulai. Tunggu hingga penayangan selesai lalu coba lagi.",
+      "post_live": "Siaran langsung baru saja berakhir dan rekamannya masih diproses YouTube. Coba beberapa menit lagi."
+    },
     "E_YT_BOT_CHECK": {
       "title": "Verifikasi anti-bot terdeteksi",
-      "body": "YouTube meminta verifikasi 'bukan bot'. Tunggu beberapa menit atau ganti jaringan/VPN."
+      "body": "YouTube meminta verifikasi 'bukan bot' pada jaringan ini. Tunggu beberapa menit atau ganti koneksi/VPN lalu coba lagi."
+    },
+    "E_YT_RATE_LIMITED": {
+      "title": "Terlalu banyak permintaan ke YouTube",
+      "body": "YouTube membatasi permintaan sementara (HTTP 429/403). Tunggu beberapa menit lalu klik Coba Lagi."
+    },
+    "E_YT_EXTRACT_FAILED": {
+      "title": "Gagal membaca informasi video",
+      "body": "Tidak dapat mengekstrak informasi dari video YouTube ini. Coba lagi nanti atau buka Diagnostik untuk menyalin laporan."
     },
     "E_PREVIEW_CONFIG": {
       "title": "Konfigurasi pratinjau bermasalah",
@@ -165,5 +231,10 @@
   },
   "warning": {
     "custom_ffmpeg": "Peringatan: FFmpeg kustom sedang aktif. Validasi integritas SHA-256 dinonaktifkan khusus untuk FFmpeg."
+  },
+  "dataroot": {
+    "unreachableTitle": "Folder data tidak ditemukan — sambungkan drive atau gunakan lokasi bawaan",
+    "unreachableBody": "Lokasi data ({path}) tidak dapat dijangkau. Sambungkan kembali drive tersebut lalu Coba Lagi, atau gunakan lokasi bawaan di drive utama (data lama kamu tidak dihapus).",
+    "useDefault": "Gunakan lokasi bawaan"
   }
 }
