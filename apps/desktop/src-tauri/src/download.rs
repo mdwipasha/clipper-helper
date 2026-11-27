@@ -1157,7 +1157,7 @@ impl ProbeHandleCache {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::installer::InUseRegistry;
     use tempfile::TempDir;
