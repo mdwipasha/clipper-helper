@@ -455,7 +455,7 @@ pub fn validate_composition(comp: &CompositionV1) -> Result<(), CompositionError
         st.font_family.as_str(),
         "Montserrat" | "Poppins" | "Inter" | "Anton"
     ) || !matches!(st.weight, 400 | 600 | 700 | 800)
-        || !matches!(st.max_lines, 1 | 2 | 3)
+        || !matches!(st.max_lines, 1..=3)
         || !validate_hex_color(&st.color)
         || !validate_hex_color(&st.outline_color)
         || !validate_hex_color(&st.highlight_color)

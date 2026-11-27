@@ -127,8 +127,7 @@ pub fn parse_progress_line(
         raw_chunk
             .split('\r')
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .next_back()?
+            .rfind(|s| !s.is_empty())?
     } else {
         raw_chunk.trim()
     };

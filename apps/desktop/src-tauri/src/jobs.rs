@@ -449,9 +449,14 @@ impl JobCoordinator {
         if let Ok(entries) = std::fs::read_dir(&tmp_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() && std::fs::remove_dir_all(&path).is_ok() {
-                    report.cleaned_temp_dirs += 1;
-                } else if path.is_file() && std::fs::remove_file(&path).is_ok() {
+                let removed = if path.is_dir() {
+                    std::fs::remove_dir_all(&path).is_ok()
+                } else if path.is_file() {
+                    std::fs::remove_file(&path).is_ok()
+                } else {
+                    false
+                };
+                if removed {
                     report.cleaned_temp_dirs += 1;
                 }
             }

@@ -161,6 +161,7 @@ fn emit_cancelled(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_failed(
     tracker: &Arc<Mutex<JobEventTracker>>,
     job_id: &str,

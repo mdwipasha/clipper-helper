@@ -1789,6 +1789,7 @@ fn validated_project_range_ms(
     Ok((start_ms, end_ms))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_generate_pipeline_task(
     app: &tauri::AppHandle,
     ws_root: PathBuf,
