@@ -398,6 +398,7 @@ interface Composition {
   sources: Array<{
     id: string; provider: 'youtube' | 'local_file'; videoId: string;   // local_file: content fingerprint
     path: string;                               // POSIX-style, relative to workspace root; must match ^(cache|projects)/[A-Za-z0-9._/-]+$ (see ARCHITECTURE §9)
+    previewPath?: string;                       // Optional POSIX-style relative path to WebView2-native H.264/AAC proxy (cache/proxies/...) when source path uses VP9/AV1/Opus
     absoluteStartMs: number;                    // where this file starts in the original VOD; working definition: absoluteStartMs = requestedStartMs (S1c verified relative audio sync; M1 sync test gates absolute alignment)
     durationMs: number; width: number; height: number; fps: number;
   }>;
@@ -504,12 +505,12 @@ create table projects (
 );
 create table jobs (
   id text primary key, project_id text, kind text,              -- generate|captions|export|model_download|component_update|app_update
-  status text,                                                  -- queued|running|paused|succeeded|failed|cancelled
+  status text,                                                  -- queued|running|paused|succeeded|failed|cancelled|interrupted
   stage text, progress_json text, error_code text, error_detail text,
   idempotency_key text, attempt integer default 0, created_at integer, started_at integer, finished_at integer
 );
 create table artifacts (
-  id text primary key, project_id text, kind text,              -- source|audio|transcript(SourceTranscript)|proxy|waveform|output
+  id text primary key, project_id text, kind text,              -- source|audio|transcript(SourceTranscript)|preview_proxy|waveform|output
   cache_key text unique, path text, size_bytes integer, sha256 text, created_at integer, last_used_at integer, pinned integer default 0
 );
 create table stage_stats (                                      -- ETA calibration

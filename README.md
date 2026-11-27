@@ -27,10 +27,12 @@ pnpm install
 # 2. Run the desktop app in development mode (launches Vite + Tauri 2 window)
 pnpm tauri dev
 
-# 3. Run all workspace TypeScript unit tests & security guard
+# 3. Build workspace packages & run all TypeScript unit tests + security guard
+pnpm run build
 pnpm test
 
-# 4. Run Rust unit tests and clippy
+# 4. Build fake-sidecar helper, run Rust unit tests, and check clippy
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p fake-sidecar
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 
