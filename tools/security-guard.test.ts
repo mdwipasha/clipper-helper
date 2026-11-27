@@ -92,6 +92,10 @@ describe('Security Baseline Guard', () => {
           { path: '$LOCALDATA/ClipperHelper-Dev/logs' },
         ],
       },
+      {
+        identifier: 'opener:allow-open-url',
+        allow: [{ url: 'https://www.youtube.com/watch?v=*' }],
+      },
       'dialog:allow-open',
       'dialog:allow-save',
     ]);
@@ -102,8 +106,12 @@ describe('Security Baseline Guard', () => {
       expect(permName).not.toMatch(/fs:all|shell:all|allow-all/);
       expect(permName).not.toBe('dialog:default');
       expect(permName).not.toBe('opener:default');
-      expect(permName).not.toMatch(/opener:allow-(open-url|default-urls|reveal-item-in-dir)/);
+      expect(permName).not.toMatch(/opener:allow-(default-urls|reveal-item-in-dir)/);
       expect(permName).not.toMatch(/dev_/);
+      if (permName === 'opener:allow-open-url') {
+        expect(typeof perm).toBe('object');
+        expect(perm.allow).toEqual([{ url: 'https://www.youtube.com/watch?v=*' }]);
+      }
     }
 
     // Defense-in-depth: verify frontend dialog plugin calls are strictly directory-open and .txt-save only.
@@ -142,6 +150,18 @@ describe('Security Baseline Guard', () => {
     );
     expect(diagnosticsSrc).toMatch(/save\(\{[\s\S]*extensions:\s*\['txt'\]/);
     expect(diagnosticsSrc).not.toMatch(/\bopen\s*\(/);
+
+    // Defense-in-depth: verify frontend openUrl calls strictly use validated YouTube watch URL builder
+    const openerUsers = uiFiles.filter((f) =>
+      fs.readFileSync(f, 'utf8').includes('@tauri-apps/plugin-opener')
+    );
+    expect(openerUsers.map((f) => path.basename(f))).toEqual(['RangePickerView.tsx']);
+    const rangePickerSrc = fs.readFileSync(
+      path.join(srcRoot, 'components/RangePickerView.tsx'),
+      'utf8'
+    );
+    expect(rangePickerSrc).toContain('buildAllowedYouTubeWatchUrl(');
+    expect(rangePickerSrc).toMatch(/openUrl\(watchUrl\)/);
   });
 
   it('asserts dev commands and dev panel are strictly gated to debug assertions and DEV environment', () => {
@@ -165,6 +185,46 @@ describe('Security Baseline Guard', () => {
     const appContent = fs.readFileSync(appTsxPath, 'utf8');
     expect(appContent).toContain('import.meta.env.DEV');
     expect(appContent).toMatch(/import\.meta\.env\.DEV\s*&&\s*<DevPanel\s*\/>/);
+
+    // Check ComponentsView gates Debug Manifest URL behind import.meta.env.DEV
+    const componentsTsxPath = path.resolve(
+      __dirname,
+      '../apps/desktop/src/components/ComponentsView.tsx'
+    );
+    const componentsContent = fs.readFileSync(componentsTsxPath, 'utf8');
+    expect(componentsContent).toMatch(
+      /import\.meta\.env\.DEV\s*&&\s*overview\?\.manifest_url_config\.can_override_in_ui/
+    );
+
+    // Inspect exact Rust release command list for zero debug-only commands
+    const releaseBlockMatch = libContent.match(
+      /#\[cfg\(not\(debug_assertions\)\)\]\s+pub fn create_specta_builder\(\)[\s\S]*?\.commands\(tauri_specta::collect_commands!\[([\s\S]*?)\]\)/
+    );
+    expect(releaseBlockMatch, 'Release collect_commands block must exist').toBeTruthy();
+    const releaseCmds = releaseBlockMatch![1]!
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(releaseCmds.length).toBeGreaterThan(10);
+    for (const cmd of releaseCmds) {
+      expect(cmd.startsWith('commands::')).toBe(true);
+      expect(cmd).not.toMatch(/dev_|debug_/i);
+    }
+
+    // Check built production frontend bundle (apps/desktop/dist/assets) excludes debug controls
+    const distAssetsDir = path.resolve(__dirname, '../apps/desktop/dist/assets');
+    if (fs.existsSync(distAssetsDir)) {
+      const jsFiles = fs.readdirSync(distAssetsDir).filter((f) => f.endsWith('.js'));
+      expect(jsFiles.length).toBeGreaterThan(0);
+      for (const jsFile of jsFiles) {
+        const bundle = fs.readFileSync(path.join(distAssetsDir, jsFile), 'utf8');
+        expect(bundle).not.toContain('Debug Manifest URL');
+        expect(bundle).not.toContain('debug-manifest-url');
+        expect(bundle).not.toContain('Force timecode-only');
+        expect(bundle).not.toContain('dev_run_fake_sidecar');
+        expect(bundle).not.toContain('[DEV] Debug Panel');
+      }
+    }
   });
 
   it('asserts dev commands are absent from release binary if built', () => {

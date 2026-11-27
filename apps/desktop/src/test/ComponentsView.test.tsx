@@ -193,6 +193,26 @@ describe('ComponentsView', () => {
     await user.click(screen.getAllByRole('button', { name: 'Coba Lagi' })[0]!);
     expect(commands.fetchComponentsManifest).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+
+    // Verify action translates English core verification banner into Indonesian
+    vi.mocked(commands.verifyComponent).mockResolvedValueOnce({
+      status: 'ok',
+      data: {
+        component: 'ffmpeg',
+        version: '9.0.2',
+        intact: true,
+        repaired: false,
+        error_code: null,
+        message: 'All files passed full SHA-256 and capability verification',
+        capability_report: null,
+      },
+    });
+    await user.click(screen.getAllByRole('button', { name: 'Verifikasi' })[0]!);
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Semua berkas lolos pemeriksaan integritas SHA-256 dan kemampuan komponen/)
+      ).toBeInTheDocument();
+    });
   });
 
   it('shows blocking insufficient disk banner and allows choosing custom DataRoot with restart warning', async () => {

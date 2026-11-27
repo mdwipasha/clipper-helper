@@ -1,358 +1,361 @@
 /**
- * ClipperHelper Embed Bridge (Spike S2 / M1)
- * 
- * Host-agnostic YouTube embed bridge running on an authentic HTTPS origin
- * (Vercel, Cloudflare Pages, or custom domain).
- * 
- * Solves Error 153-class failures by supplying a genuine origin and
- * 'strict-origin-when-cross-origin' referrer to YouTube IFrame API.
- * 
- * Relays player state, timestamps, and errors to the Tauri host application via postMessage.
+ * ClipperHelper Hardened Embed Bridge (Protocol v1)
+ *
+ * Host-agnostic YouTube embed relay running on an HTTPS origin with strict
+ * handshake, origin allowlist, parent source validation, bounded schemas,
+ * rate limiting, and explicit targetOrigin enforcement (NEVER '*').
  */
-
 (function () {
   'use strict';
 
-  // State
-  let player = null;
-  let isPlayerReady = false;
-  let timeUpdateInterval = null;
-  let currentVideoId = null;
+  const PROTOCOL_VERSION = 1;
+  const BRIDGE_VERSION = '1.0.0';
+  const MAX_MESSAGE_BYTES = 2048;
+  const RATE_LIMIT_WINDOW_MS = 1000;
+  const RATE_LIMIT_MAX_MESSAGES = 60;
+  const MAX_TIME_SECONDS = 86400;
+  const MIN_RATE = 0.25;
+  const MAX_RATE = 2.0;
+  const VIDEO_ID_REGEX = /^[A-Za-z0-9_-]{11}$/;
+  const NONCE_REGEX = /^[A-Za-z0-9_-]{4,64}$/;
 
-  // DOM Elements
+  const PROD_ALLOWED_ORIGINS = [
+    'tauri://localhost',
+    'http://tauri.localhost',
+    'https://tauri.localhost',
+  ];
+
+  const INBOUND_TYPES = new Set([
+    'hello',
+    'load',
+    'play',
+    'pause',
+    'seek',
+    'setRate',
+    'mute',
+  ]);
+
+  let player = null;
+  let apiReady = false;
+  let pendingLoad = null;
+  let timeUpdateTimer = null;
+  let handshakeCompleted = false;
+  let validatedOrigin = null;
+  let validatedSource = null;
+  let inboundTimestamps = [];
+
   const loadingOverlay = document.getElementById('loading-overlay');
   const errorOverlay = document.getElementById('error-overlay');
   const errorTitle = document.getElementById('error-title');
   const errorMessage = document.getElementById('error-message');
-  const errorCode = document.getElementById('error-code');
+  const errorCodeEl = document.getElementById('error-code');
 
-  // Parse URL Parameters
-  const urlParams = new URLSearchParams(window.location.search);
-  const initialVideoId = urlParams.get('v') || urlParams.get('videoId');
-  const initialStart = parseFloat(urlParams.get('start') || '0');
-  const initialEnd = urlParams.has('end') ? parseFloat(urlParams.get('end')) : undefined;
-  const initialAutoplay = urlParams.get('autoplay') === '1' ? 1 : 0;
-  const showControls = urlParams.get('controls') === '0' ? 0 : 1;
+  const PROD_HOSTS = ['clipper-bridge.vercel.app'];
 
-  /**
-   * Post message to parent window (Tauri app)
-   */
-  function postToParent(type, data = {}) {
-    if (window.parent && window.parent !== window) {
-      const message = {
-        source: 'clipper-bridge',
-        version: '1.0.0',
-        type: type,
-        timestamp: Date.now(),
-        ...data
-      };
-      // Send to parent using '*' to support custom schemes (tauri://, http://tauri.localhost, etc.)
-      window.parent.postMessage(message, '*');
+  function isDevDeploymentHost() {
+    const host = (window.location && window.location.hostname) || '';
+    if (host === 'localhost' || host === '127.0.0.1') return true;
+    return host.endsWith('.vercel.app') && !PROD_HOSTS.includes(host);
+  }
+
+  function isAllowedOrigin(origin) {
+    if (typeof origin !== 'string' || !origin) return false;
+    if (PROD_ALLOWED_ORIGINS.includes(origin)) return true;
+    if (isDevDeploymentHost()) {
+      return /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(origin);
+    }
+    return false;
+  }
+
+  function isRateLimited(nowMs) {
+    inboundTimestamps = inboundTimestamps.filter((ts) => nowMs - ts < RATE_LIMIT_WINDOW_MS);
+    if (inboundTimestamps.length >= RATE_LIMIT_MAX_MESSAGES) {
+      return true;
+    }
+    inboundTimestamps.push(nowMs);
+    return false;
+  }
+
+  function postValidated(payload) {
+    if (!handshakeCompleted || !validatedOrigin || !validatedSource) {
+      return false;
+    }
+    if (validatedOrigin === '*') {
+      return false;
+    }
+    validatedSource.postMessage(
+      Object.assign(
+        {
+          source: 'clipper-bridge',
+          protocolVersion: PROTOCOL_VERSION,
+          version: BRIDGE_VERSION,
+        },
+        payload
+      ),
+      validatedOrigin
+    );
+    return true;
+  }
+
+  function setOverlayError(title, message, codeText) {
+    if (loadingOverlay) loadingOverlay.classList.add('hidden');
+    if (errorOverlay) errorOverlay.classList.remove('hidden');
+    if (errorTitle) errorTitle.textContent = title;
+    if (errorMessage) errorMessage.textContent = message;
+    if (errorCodeEl) errorCodeEl.textContent = codeText;
+  }
+
+  function clearOverlays(loading) {
+    if (errorOverlay) errorOverlay.classList.add('hidden');
+    if (loadingOverlay) {
+      if (loading) {
+        loadingOverlay.classList.remove('hidden');
+      } else {
+        loadingOverlay.classList.add('hidden');
+      }
     }
   }
 
-  /**
-   * YouTube API State Mapping
-   */
-  const STATE_NAMES = {
-    '-1': 'UNSTARTED',
-    '0': 'ENDED',
-    '1': 'PLAYING',
-    '2': 'PAUSED',
-    '3': 'BUFFERING',
-    '5': 'CUED'
-  };
-
-  /**
-   * Start high-frequency time update polling while playing
-   * (Emits ~16 events/s [60ms] for fluid scrubber synchronization)
-   */
-  function startTimeUpdates() {
-    stopTimeUpdates();
-    sendTimeUpdate();
-    timeUpdateInterval = setInterval(sendTimeUpdate, 60);
-  }
-
   function stopTimeUpdates() {
-    if (timeUpdateInterval) {
-      clearInterval(timeUpdateInterval);
-      timeUpdateInterval = null;
+    if (timeUpdateTimer !== null) {
+      clearInterval(timeUpdateTimer);
+      timeUpdateTimer = null;
     }
   }
 
   function sendTimeUpdate() {
-    if (player && typeof player.getCurrentTime === 'function') {
-      try {
-        const currentTime = player.getCurrentTime() || 0;
-        const duration = player.getDuration() || 0;
-        postToParent('timeUpdate', {
-          currentTime: Number(currentTime.toFixed(3)),
-          duration: Number(duration.toFixed(3))
-        });
-      } catch (e) {
-        // Player may be unmounting or transitioning
-      }
+    if (!player || typeof player.getCurrentTime !== 'function') return;
+    try {
+      const current = Number(player.getCurrentTime() || 0);
+      const duration = Number(player.getDuration() || 0);
+      const rate =
+        typeof player.getPlaybackRate === 'function' ? Number(player.getPlaybackRate() || 1) : 1;
+      postValidated({
+        type: 'time',
+        current: Number.isFinite(current) ? Number(current.toFixed(3)) : 0,
+        duration: Number.isFinite(duration) ? Number(duration.toFixed(3)) : 0,
+        rate: Number.isFinite(rate) ? rate : 1,
+        ts: Date.now(),
+      });
+    } catch (_err) {
+      // Ignore transient getter errors during player initialization
     }
   }
 
-  /**
-   * Display error card on embed failure
-   */
-  function showError(title, message, codeStr) {
-    loadingOverlay.classList.add('hidden');
-    errorOverlay.classList.remove('hidden');
-    errorTitle.textContent = title;
-    errorMessage.textContent = message;
-    errorCode.textContent = codeStr;
+  function startTimeUpdates() {
+    stopTimeUpdates();
+    sendTimeUpdate();
+    // 100ms (~10 Hz, within measured 4-17 Hz envelope)
+    timeUpdateTimer = setInterval(sendTimeUpdate, 100);
   }
 
-  function clearError() {
-    errorOverlay.classList.add('hidden');
+  function mapYouTubeState(stateCode) {
+    if (typeof stateCode !== 'number') return 'loading';
+    switch (stateCode) {
+      case 1:
+        return 'playing';
+      case 2:
+        return 'paused';
+      case 3:
+        return 'buffering';
+      case 0:
+        return 'ended';
+      case 5:
+        return 'cued';
+      default:
+        return 'loading';
+    }
   }
 
-  /**
-   * Initialize YouTube Player
-   */
-  function initPlayer(videoId, startSec = 0, endSec = undefined, autoplay = 0) {
-    currentVideoId = videoId;
-    clearError();
-    loadingOverlay.classList.remove('hidden');
-
-    const playerVars = {
-      enablejsapi: 1,
-      origin: window.location.origin,
-      playsinline: 1,
-      rel: 0,
-      modestbranding: 1,
-      iv_load_policy: 3,
-      controls: showControls,
-      autoplay: autoplay
-    };
-
-    if (startSec > 0) {
-      playerVars.start = Math.floor(startSec);
-    }
-    if (typeof endSec === 'number' && endSec > startSec) {
-      playerVars.end = Math.ceil(endSec);
+  function loadYouTubeVideo(videoId, startSeconds) {
+    clearOverlays(true);
+    if (!apiReady || !window.YT || typeof window.YT.Player !== 'function') {
+      pendingLoad = { videoId: videoId, startSeconds: startSeconds };
+      postValidated({ type: 'state', state: 'loading' });
+      return;
     }
 
-    if (player) {
-      // Re-use existing player
-      if (autoplay === 1) {
-        player.loadVideoById({
-          videoId: videoId,
-          startSeconds: startSec,
-          endSeconds: endSec
-        });
-      } else {
-        player.cueVideoById({
-          videoId: videoId,
-          startSeconds: startSec,
-          endSeconds: endSec
-        });
-      }
+    if (player && typeof player.cueVideoById === 'function') {
+      player.cueVideoById({
+        videoId: videoId,
+        startSeconds: startSeconds,
+      });
+      postValidated({ type: 'state', state: 'loading' });
       return;
     }
 
     player = new window.YT.Player('player', {
-      videoId: videoId || undefined,
-      playerVars: playerVars,
+      videoId: videoId,
+      playerVars: {
+        enablejsapi: 1,
+        origin: window.location.origin,
+        playsinline: 1,
+        rel: 0,
+        modestbranding: 1,
+        iv_load_policy: 3,
+        controls: 1,
+        autoplay: 0,
+        start: Math.floor(startSeconds),
+      },
       events: {
-        onReady: onPlayerReady,
-        onStateChange: onPlayerStateChange,
-        onPlaybackRateChange: onPlaybackRateChange,
-        onError: onPlayerError
-      }
+        onReady: function () {
+          clearOverlays(false);
+          postValidated({ type: 'state', state: 'ready' });
+          sendTimeUpdate();
+        },
+        onStateChange: function (ev) {
+          const state = mapYouTubeState(ev && ev.data);
+          if (state === 'playing') {
+            clearOverlays(false);
+            startTimeUpdates();
+          } else {
+            stopTimeUpdates();
+            sendTimeUpdate();
+          }
+          postValidated({ type: 'state', state: state });
+        },
+        onPlaybackRateChange: function () {
+          sendTimeUpdate();
+        },
+        onError: function (ev) {
+          stopTimeUpdates();
+          const code = ev && typeof ev.data === 'number' ? ev.data : 5;
+          setOverlayError(
+            'Pratinjau tidak dapat dimuat',
+            'Video menolak embed atau mengalami gangguan pemutaran.',
+            'YT_' + String(code)
+          );
+          postValidated({ type: 'error', code: code });
+        },
+      },
     });
   }
 
-  function onPlayerReady(event) {
-    isPlayerReady = true;
-    loadingOverlay.classList.add('hidden');
-
-    const duration = player.getDuration() || 0;
-    postToParent('playerReady', {
-      videoId: currentVideoId,
-      duration: Number(duration.toFixed(3))
-    });
-
-    sendTimeUpdate();
-  }
-
-  function onPlayerStateChange(event) {
-    const stateCode = event.data;
-    const stateName = STATE_NAMES[String(stateCode)] || 'UNKNOWN';
-
-    if (stateCode === window.YT.PlayerState.PLAYING) {
-      loadingOverlay.classList.add('hidden');
-      startTimeUpdates();
-    } else {
-      stopTimeUpdates();
-      sendTimeUpdate(); // final frame update
+  function measurePayloadBytes(raw) {
+    if (typeof raw === 'string') return raw.length;
+    try {
+      return JSON.stringify(raw).length;
+    } catch (_err) {
+      return MAX_MESSAGE_BYTES + 1;
     }
-
-    postToParent('stateChange', {
-      state: stateName,
-      code: stateCode,
-      currentTime: player && typeof player.getCurrentTime === 'function' ? Number(player.getCurrentTime().toFixed(3)) : 0,
-      duration: player && typeof player.getDuration === 'function' ? Number(player.getDuration().toFixed(3)) : 0
-    });
   }
 
-  function onPlaybackRateChange(event) {
-    postToParent('playbackRateChange', {
-      rate: event.data
-    });
-  }
+  function handleInboundMessage(event) {
+    if (!event) return;
+    if (!isAllowedOrigin(event.origin)) return;
+    if (!window.parent || event.source !== window.parent) return;
 
-  function onPlayerError(event) {
-    stopTimeUpdates();
-    loadingOverlay.classList.add('hidden');
+    if (isRateLimited(Date.now())) return;
+    if (measurePayloadBytes(event.data) > MAX_MESSAGE_BYTES) return;
 
-    const code = event.data;
-    let errCode = 'E_YT_UNKNOWN';
-    let errTitle = 'Kesalahan Pemutaran Video';
-    let errMsg = 'Terjadi kesalahan saat memutar video YouTube.';
-
-    switch (code) {
-      case 2:
-        errCode = 'E_YT_INVALID_PARAM';
-        errTitle = 'Parameter Video Tidak Valid';
-        errMsg = 'ID video mengandung karakter tidak valid atau format URL salah.';
-        break;
-      case 5:
-        errCode = 'E_YT_HTML5_ERROR';
-        errTitle = 'Kesalahan Pemutar HTML5';
-        errMsg = 'Pemutar HTML5 YouTube mengalami kesalahan pada sistem browser ini.';
-        break;
-      case 100:
-        errCode = 'E_YT_NOT_FOUND';
-        errTitle = 'Video Tidak Ditemukan';
-        errMsg = 'Video telah dihapus, dijadikan privat, atau tidak tersedia.';
-        break;
-      case 101:
-      case 150:
-        errCode = 'E_YT_EMBED_RESTRICTED';
-        errTitle = 'Pemutaran Embed Ditolak Pemilik';
-        errMsg = 'Pemilik video menonaktifkan pemutaran di luar YouTube. Gunakan mode Storyboard/Thumbnail untuk memilih potongan klip.';
-        break;
-    }
-
-    showError(errTitle, errMsg, `${errCode} (Code ${code})`);
-
-    postToParent('error', {
-      code: code,
-      errorType: errCode,
-      title: errTitle,
-      message: errMsg
-    });
-  }
-
-  /**
-   * Handle incoming messages from Parent Window
-   */
-  window.addEventListener('message', function (event) {
-    // Validate message payload structure
     const data = event.data;
-    if (!data || typeof data !== 'object') return;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+    if (typeof data.type !== 'string' || !INBOUND_TYPES.has(data.type)) return;
 
-    // Accept messages with type or action
-    const action = data.action || data.type;
-    if (!action) return;
+    if (data.type === 'hello') {
+      if (data.v !== PROTOCOL_VERSION) return;
+      if (typeof data.nonce !== 'string' || !NONCE_REGEX.test(data.nonce)) return;
+      handshakeCompleted = true;
+      validatedOrigin = event.origin;
+      validatedSource = event.source;
+      postValidated({
+        type: 'ready',
+        v: PROTOCOL_VERSION,
+        nonce: data.nonce,
+      });
+      return;
+    }
 
-    switch (action) {
-      case 'ping':
-        postToParent('pong', { echo: data.payload });
-        break;
+    // All non-hello messages are rejected until hello handshake succeeds from the validated parent.
+    if (!handshakeCompleted || event.origin !== validatedOrigin || event.source !== validatedSource) {
+      return;
+    }
 
-      case 'loadVideo':
-      case 'cueVideo':
-        if (data.videoId) {
-          const start = typeof data.startSeconds === 'number' ? data.startSeconds : (data.start || 0);
-          const end = typeof data.endSeconds === 'number' ? data.endSeconds : data.end;
-          const autoplay = data.autoplay ? 1 : 0;
-          initPlayer(data.videoId, start, end, autoplay);
+    switch (data.type) {
+      case 'load': {
+        if (typeof data.videoId !== 'string' || !VIDEO_ID_REGEX.test(data.videoId)) return;
+        const startSeconds =
+          data.startSeconds === undefined ? 0 : Number(data.startSeconds);
+        if (!Number.isFinite(startSeconds) || startSeconds < 0 || startSeconds > MAX_TIME_SECONDS) {
+          return;
         }
+        loadYouTubeVideo(data.videoId, startSeconds);
         break;
+      }
 
-      case 'play':
+      case 'play': {
         if (player && typeof player.playVideo === 'function') {
           player.playVideo();
         }
         break;
+      }
 
-      case 'pause':
+      case 'pause': {
         if (player && typeof player.pauseVideo === 'function') {
           player.pauseVideo();
         }
         break;
+      }
 
-      case 'seekTo':
+      case 'seek': {
+        if (typeof data.seconds !== 'number' || !Number.isFinite(data.seconds)) return;
+        if (data.seconds < 0 || data.seconds > MAX_TIME_SECONDS) return;
         if (player && typeof player.seekTo === 'function') {
-          const seconds = typeof data.seconds === 'number' ? data.seconds : parseFloat(data.time || '0');
-          const allowSeekAhead = data.allowSeekAhead !== false;
-          player.seekTo(seconds, allowSeekAhead);
+          player.seekTo(data.seconds, true);
           sendTimeUpdate();
         }
         break;
+      }
 
-      case 'setVolume':
-        if (player && typeof player.setVolume === 'function') {
-          const vol = Math.max(0, Math.min(100, data.volume || 0));
-          player.setVolume(vol);
-        }
-        break;
-
-      case 'mute':
-        if (player && typeof player.mute === 'function') {
-          player.mute();
-        }
-        break;
-
-      case 'unMute':
-        if (player && typeof player.unMute === 'function') {
-          player.unMute();
-        }
-        break;
-
-      case 'setPlaybackRate':
+      case 'setRate': {
+        if (typeof data.rate !== 'number' || !Number.isFinite(data.rate)) return;
+        if (data.rate < MIN_RATE || data.rate > MAX_RATE) return;
         if (player && typeof player.setPlaybackRate === 'function') {
-          player.setPlaybackRate(data.rate || 1.0);
+          player.setPlaybackRate(data.rate);
         }
         break;
+      }
 
-      case 'getCurrentTime':
-        sendTimeUpdate();
+      case 'mute': {
+        const muted =
+          typeof data.bool === 'boolean'
+            ? data.bool
+            : typeof data.muted === 'boolean'
+              ? data.muted
+              : null;
+        if (muted === null) return;
+        if (player) {
+          if (muted && typeof player.mute === 'function') {
+            player.mute();
+          } else if (!muted && typeof player.unMute === 'function') {
+            player.unMute();
+          }
+        }
         break;
+      }
 
       default:
-        // Unknown command
         break;
     }
-  });
+  }
 
-  /**
-   * Load YouTube IFrame API
-   */
+  window.addEventListener('message', handleInboundMessage);
+
   window.onYouTubeIframeAPIReady = function () {
-    if (initialVideoId) {
-      initPlayer(initialVideoId, initialStart, initialEnd, initialAutoplay);
-    } else {
+    apiReady = true;
+    if (pendingLoad) {
+      const next = pendingLoad;
+      pendingLoad = null;
+      loadYouTubeVideo(next.videoId, next.startSeconds);
+    } else if (loadingOverlay) {
       loadingOverlay.classList.add('hidden');
     }
   };
 
-  // Inject IFrame API script tag (YouTube IFrame API loader is hosted at youtube.com)
-  const tag = document.createElement('script');
-  tag.src = 'https://www.youtube.com/iframe_api';
-  tag.async = true;
-  const firstScriptTag = document.getElementsByTagName('script')[0];
-  firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-  // Announce bridge readiness to parent immediately
-  postToParent('bridgeReady', {
-    hasInitialVideo: Boolean(initialVideoId),
-    initialVideoId: initialVideoId || null
-  });
-
+  if (typeof document !== 'undefined' && document.head && !window.__CLIPPER_SKIP_YT_SCRIPT__) {
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.async = true;
+    document.head.appendChild(tag);
+  }
 })();

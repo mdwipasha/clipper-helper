@@ -95,21 +95,43 @@ export function ComponentsView({
     };
   }, []);
 
+  const effectiveOverrideUrl = import.meta.env.DEV ? overrideUrl.trim() || null : null;
+
+  const formatVerifyOutcomeMessage = (outcome: { component: string; message: string }): string => {
+    const msg = outcome.message;
+    if (msg.includes('All files passed full SHA-256')) {
+      return t('components.verifySuccessComponent', { component: outcome.component }, locale);
+    }
+    if (msg.includes('Model passed full SHA-256')) {
+      return t('components.verifySuccessModel', { component: outcome.component }, locale);
+    }
+    if (msg.includes('Model re-downloaded and hash verified')) {
+      return t('components.repairSuccessModel', { component: outcome.component }, locale);
+    }
+    if (msg.includes('Component repaired and verified')) {
+      return t('components.repairSuccessComponent', { component: outcome.component }, locale);
+    }
+    if (msg.includes('Quarantined version passed capability verification')) {
+      return t('components.retryQuarantineSuccess', { component: outcome.component }, locale);
+    }
+    return `${outcome.component}: ${msg}`;
+  };
+
   const handleFetchManifest = useCallback(async () => {
     setBusy(true);
     setManifestError(null);
     setActionError(null);
     try {
-      const res = await commands.fetchComponentsManifest(overrideUrl.trim() || null);
+      const res = await commands.fetchComponentsManifest(effectiveOverrideUrl);
       if (res.status === 'ok') {
-        await onRefreshOverview(overrideUrl.trim() || null);
+        await onRefreshOverview(effectiveOverrideUrl);
       } else {
         setManifestError(res.error);
       }
     } finally {
       setBusy(false);
     }
-  }, [onRefreshOverview, overrideUrl]);
+  }, [effectiveOverrideUrl, onRefreshOverview]);
 
   const handleInstallAll = async () => {
     setBusy(true);
@@ -120,7 +142,11 @@ export function ComponentsView({
       const res = await commands.installAllRequiredComponents();
       if (res.status === 'ok') {
         setStatusMessage(
-          `Selesai: ${res.data.installed_count} komponen dipasang, ${res.data.skipped_count} sudah mutakhir.`
+          t(
+            'components.installAllSummary',
+            { installed: res.data.installed_count, skipped: res.data.skipped_count },
+            locale
+          )
         );
         const failed = res.data.outcomes.find((o) => !o.ok);
         if (failed) {
@@ -133,10 +159,10 @@ export function ComponentsView({
             disk_bounds: null,
           });
         }
-        await onRefreshOverview(overrideUrl.trim() || null);
+        await onRefreshOverview(effectiveOverrideUrl);
       } else {
         setActionError(res.error);
-        await onRefreshOverview(overrideUrl.trim() || null);
+        await onRefreshOverview(effectiveOverrideUrl);
       }
     } finally {
       setBusy(false);
@@ -150,8 +176,8 @@ export function ComponentsView({
     try {
       const res = await commands.repairComponent(component, version);
       if (res.status === 'ok') {
-        setStatusMessage(`${component}: ${res.data.message}`);
-        await onRefreshOverview(overrideUrl.trim() || null);
+        setStatusMessage(formatVerifyOutcomeMessage(res.data));
+        await onRefreshOverview(effectiveOverrideUrl);
       } else {
         setActionError(res.error);
       }
@@ -167,8 +193,8 @@ export function ComponentsView({
     try {
       const res = await commands.retryQuarantinedComponent(component, version);
       if (res.status === 'ok') {
-        setStatusMessage(`${component}: ${res.data.message}`);
-        await onRefreshOverview(overrideUrl.trim() || null);
+        setStatusMessage(formatVerifyOutcomeMessage(res.data));
+        await onRefreshOverview(effectiveOverrideUrl);
       } else {
         setActionError(res.error);
       }
@@ -184,8 +210,19 @@ export function ComponentsView({
     try {
       const res = await commands.verifyComponent(component);
       if (res.status === 'ok') {
-        setStatusMessage(`${component}: ${res.data.message}`);
-        await onRefreshOverview(overrideUrl.trim() || null);
+        if (res.data.intact) {
+          setStatusMessage(formatVerifyOutcomeMessage(res.data));
+        } else {
+          const code = res.data.error_code ?? 'E_VERIFY_FAILED';
+          setActionError({
+            code,
+            message_key: `err.${code}.body`,
+            message: `${component}: ${res.data.message}`,
+            detail: `${component}: ${res.data.message}`,
+            disk_bounds: null,
+          });
+        }
+        await onRefreshOverview(effectiveOverrideUrl);
       } else {
         setActionError(res.error);
       }
@@ -205,7 +242,7 @@ export function ComponentsView({
     const res = await commands.selectCustomDataRoot(chosen);
     if (res.status === 'ok') {
       setDataRootOutcome(res.data);
-      await onRefreshOverview(overrideUrl.trim() || null);
+      await onRefreshOverview(effectiveOverrideUrl);
     } else {
       setActionError(res.error);
     }
@@ -297,7 +334,7 @@ export function ComponentsView({
           </div>
         </div>
 
-        {overview?.manifest_url_config.can_override_in_ui && (
+        {import.meta.env.DEV && overview?.manifest_url_config.can_override_in_ui && (
           <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800 text-xs">
             <label htmlFor="debug-manifest-url" className="text-slate-400">
               Debug Manifest URL:

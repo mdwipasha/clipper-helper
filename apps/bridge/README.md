@@ -1,114 +1,78 @@
 # ClipperHelper Embed Bridge
 
-Host-agnostic static YouTube embed bridge for ClipperHelper (Spike S2 / Milestone 1).
+Host-agnostic static YouTube embed bridge for ClipperHelper (`D-13`, `SECURITY.md §9`, `S2-preview.md`).
 
-Runs on an authentic HTTPS origin (e.g. `https://<project>.vercel.app` or `https://player.clipperhelper.com`) to provide YouTube with a valid HTTP Referer (`strict-origin-when-cross-origin`), eliminating **Error 153**-class embed restrictions when embedded within the Tauri desktop application.
+Provides an authentic HTTPS origin (`https://clipper-bridge.vercel.app`, moving to an owned custom domain in M5) and sends `Referrer-Policy: strict-origin-when-cross-origin` to YouTube's IFrame Player API (`https://www.youtube.com/iframe_api`), eliminating Error 153-class failures inside Tauri WebView2.
 
----
+## 1. Files
 
-## 1. Directory Structure
+- `index.html` — Static HTML container declaring `<meta name="clipper-bridge-protocol" content="1">` and `<meta name="clipper-bridge-version" content="1.0.0">` with zero inline scripts/styles and zero analytics.
+- `style.css` — External dark canvas styles (no `'unsafe-inline'`).
+- `bridge.js` — Hardened Protocol v1 `postMessage` relay (plain JS, zero runtime dependencies).
+- `vercel.json` — Production Vercel security headers (`frame-ancestors` strictly restricted to `https://tauri.localhost`, `http://tauri.localhost`, `tauri://localhost`; no `'unsafe-inline'`; no `localhost`).
+- `vercel.dev.json` — Separate local/DEV preview Vercel config adding `http://localhost:*` / `http://127.0.0.1:*` to `frame-ancestors`.
+- `_headers` — Identical production headers for Cloudflare Pages or compatible static hosts.
 
-```
-apps/bridge/
-├── index.html        # Clean HTML5 player container with error & loading states
-├── bridge.js         # YouTube IFrame API wrapper & postMessage IPC relay
-├── style.css         # Dark theme responsive canvas (zero scrollbars)
-├── vercel.json       # Vercel deployment config (CSP frame-ancestors, headers)
-├── _headers          # Cloudflare Pages deployment config (identical headers)
-├── package.json      # Minimal workspace descriptor & local serve scripts
-└── README.md         # Deployment & IPC specification
-```
+## 2. Protocol v1 (`postMessage`)
 
----
+- **Size & rate limits:** Maximum message payload `2048` bytes; sliding window rate limit `60` messages/sec; unknown message types are dropped.
+- **Handshake:** Bridge ignores all non-`hello` commands until it receives `hello{v:1, nonce}` from an allowlisted Tauri origin (`tauri://localhost`, `http://tauri.localhost`, `https://tauri.localhost`) where `event.source === window.parent`. Every outbound message uses that validated parent origin as `targetOrigin` (never `'*'`).
 
-## 2. Deployment Instructions
+### Host → Bridge
+| `type` | Fields | Constraints |
+|---|---|---|
+| `hello` | `{ v: 1, nonce: string }` | Must arrive from allowlisted origin & `window.parent`; `nonce` matches `/^[A-Za-z0-9_-]{4,64}$/` |
+| `load` | `{ videoId: string, startSeconds?: number }` | `videoId` matches `/^[A-Za-z0-9_-]{11}$/`; `0 <= startSeconds <= 86400` |
+| `play` | `{}` | — |
+| `pause` | `{}` | — |
+| `seek` | `{ seconds: number }` | `0 <= seconds <= 86400` |
+| `setRate` | `{ rate: number }` | `0.25 <= rate <= 2.0` |
+| `mute` | `{ bool: boolean }` | Boolean required |
 
-### Option A: Vercel (Current)
-1. Deploy via Vercel CLI from this directory:
-   ```bash
-   cd apps/bridge
-   vercel --prod
+### Bridge → Host
+| `type` | Fields | Meaning |
+|---|---|---|
+| `ready` | `{ v: 1, protocolVersion: 1, version: '1.0.0', nonce: string }` | Handshake acknowledged; host verifies `v === 1` |
+| `state` | `{ state: 'loading' \| 'ready' \| 'playing' \| 'paused' \| 'buffering' \| 'ended' \| 'cued' }` | Player lifecycle/playback transition |
+| `time` | `{ current: number, duration: number, rate: number, ts: number }` | Sampled current/duration/rate with host wall clock `ts` |
+| `error` | `{ code: number }` | Raw YouTube API error code (`2`, `5`, `100`, `101`, `150`, `153`) |
+
+## 3. Deploying & Rolling Back (Vercel / Cloudflare Pages)
+
+### Production Deployment (Git-Connected Vercel Project)
+1. In Vercel Dashboard, import the repository (`mdwipasha/clipper-helper`).
+2. Set **Root Directory** to `apps/bridge`.
+3. Set **Framework Preset** to `Other` (no build command needed; static files served directly).
+4. Keep **Output Directory** as `.` (`apps/bridge`).
+5. Production pushes to `main` automatically deploy [`vercel.json`](./vercel.json), which locks `frame-ancestors` strictly to the three Tauri origins (`https://tauri.localhost`, `http://tauri.localhost`, `tauri://localhost`).
+6. Verify headers after deploy:
+   ```powershell
+   curl.exe -I https://clipper-bridge.vercel.app
    ```
-   Or link the repository in the Vercel dashboard and set the **Root Directory** to `apps/bridge`.
-2. The included [`vercel.json`](./vercel.json) automatically applies all required security headers:
-   - `Content-Security-Policy`: restricts `frame-ancestors` to `'self'`, `https://tauri.localhost`, `http://tauri.localhost`, `tauri://localhost`, `http://localhost:*`, and `http://127.0.0.1:*`.
-   - `Referrer-Policy: strict-origin-when-cross-origin` (required for YouTube IFrame API).
-   - `X-Content-Type-Options: nosniff`.
-3. Provide the resulting HTTPS URL (e.g. `https://clipper-bridge.vercel.app`) to configure `frame-src` in the Tauri desktop application.
+   Confirm `Referrer-Policy: strict-origin-when-cross-origin`, `X-Content-Type-Options: nosniff`, `Permissions-Policy`, and no `'unsafe-inline'` or `localhost` in `Content-Security-Policy`.
 
-### Option B: Cloudflare Pages (Future / Host-Agnostic)
-1. Connect repo to Cloudflare Pages with build directory `apps/bridge`.
-2. The included [`_headers`](./_headers) file is automatically read by Cloudflare Pages to provide identical headers.
+### Separate Development / Local Preview Deployment
+- Production `https://clipper-bridge.vercel.app` strictly rejects `http://localhost:1420` (`pnpm tauri dev`).
+- **Important (Vercel Preview SSO):** Because `apps/bridge` is linked to the `clipper-bridge` Vercel project, running `vercel --local-config vercel.dev.json` creates a **Preview** deployment on `clipper-bridge`. By default, Vercel Deployment Protection blocks Preview URLs with `HTTP 302 -> vercel.com/sso-api` and `X-Frame-Options: DENY`. Either:
+  1. Disable **Vercel Authentication** for Preview Deployments in Vercel (*Settings → Deployment Protection*), then run:
+     ```powershell
+     cd apps\bridge
+     vercel --local-config vercel.dev.json
+     ```
+  2. Or deploy to a separate dev Vercel project (`--prod`) using `vercel.dev.json`.
+- Then run `pnpm tauri dev` from the **same** PowerShell session with `$env:CLIPPER_BRIDGE_URL` set to that public dev URL:
+  ```powershell
+  $env:CLIPPER_BRIDGE_URL = "https://<your-public-dev-bridge>.vercel.app"
+  pnpm tauri dev
+  ```
+- **To test directly against production `https://clipper-bridge.vercel.app`**, build and launch the bundled app (which runs at `http://tauri.localhost`, matching `vercel.json` `frame-ancestors`):
+  ```powershell
+  $env:CLIPPER_MIN_MANIFEST_SEQUENCE = "1"
+  pnpm --filter @clipper-helper/desktop tauri build --no-bundle
+  .\apps\desktop\src-tauri\target\release\clipper-helper-desktop.exe
+  ```
+- **Never** merge `vercel.dev.json` origins into production `vercel.json`.
 
-### Option C: Custom Domain
-1. Map a CNAME (e.g. `player.clipperhelper.com`) in Vercel or Cloudflare Pages.
-2. Zero code changes required.
-
----
-
-## 3. URL Parameters
-
-The bridge supports initial configuration via URL query string:
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `v` or `videoId` | string | `null` | YouTube 11-character video ID (e.g. `dQw4w9WgXcQ`) |
-| `start` | number | `0` | Initial playback start offset in seconds |
-| `end` | number | `undefined` | Optional playback end boundary in seconds |
-| `autoplay` | `0` \| `1` | `0` | Autoplay on load |
-| `controls` | `0` \| `1` | `1` | Show native YouTube controls |
-
-Example:
-```
-https://<bridge-domain>/?v=dQw4w9WgXcQ&start=30&end=90&autoplay=0
-```
-
----
-
-## 4. `postMessage` IPC Protocol
-
-The bridge and parent window (Tauri WebView2) communicate via `window.postMessage`.
-
-### 4.1 Inbound Commands (Parent $\to$ Bridge)
-
-Send to `iframe.contentWindow.postMessage(command, '*')`:
-
-| Command / `type` | Payload | Description |
-|---|---|---|
-| `loadVideo` | `{ videoId: string, startSeconds?: number, endSeconds?: number, autoplay?: boolean }` | Load and play video |
-| `cueVideo` | `{ videoId: string, startSeconds?: number, endSeconds?: number }` | Cue video without autoplay |
-| `play` | `{}` | Resume playback |
-| `pause` | `{}` | Pause playback |
-| `seekTo` | `{ seconds: number, allowSeekAhead?: boolean }` | Seek to timestamp |
-| `setVolume` | `{ volume: number }` (0–100) | Adjust audio volume |
-| `mute` | `{}` | Mute audio |
-| `unMute` | `{}` | Unmute audio |
-| `setPlaybackRate` | `{ rate: number }` (0.25–2.0) | Set playback speed |
-| `getCurrentTime` | `{}` | Request immediate `timeUpdate` |
-| `ping` | `{ payload?: any }` | Heartbeat check |
-
-### 4.2 Outbound Events (Bridge $\to$ Parent)
-
-Listen via `window.addEventListener('message', ...)`:
-
-All messages emitted by the bridge carry `{ source: 'clipper-bridge', version: '1.0.0', type: string, ... }`:
-
-| Event `type` | Data Fields | Emitted When |
-|---|---|---|
-| `bridgeReady` | `hasInitialVideo: boolean`, `initialVideoId: string\|null` | Bridge script loads and is ready for commands |
-| `playerReady` | `videoId: string`, `duration: number` | YouTube player has finished initializing |
-| `stateChange` | `state: string`, `code: number`, `currentTime: number`, `duration: number` | Playback state changes (`PLAYING`, `PAUSED`, `BUFFERING`, `ENDED`, etc.) |
-| `timeUpdate` | `currentTime: number`, `duration: number` | Emitted every ~60 ms while playing for smooth scrubber sync |
-| `playbackRateChange`| `rate: number` | Playback rate changed |
-| `error` | `code: number`, `errorType: string`, `title: string`, `message: string` | YouTube API reports error (e.g. `E_YT_EMBED_RESTRICTED` on error 101/150) |
-| `pong` | `echo: any` | Response to `ping` |
-
----
-
-## 5. Local Testing
-
-To test locally:
-```powershell
-python -m http.server 3000 -d apps/bridge
-# Open http://localhost:3000/?v=dQw4w9WgXcQ in browser
-```
+### Rollback
+1. Open the Vercel project's **Deployments** tab, locate the previous known-good deployment, and click **Promote to Production** (instant edge rollback, zero rebuild wait).
+2. Or revert the breaking commit on `main` via `git revert <sha>` and let Git-connected Vercel auto-redeploy.

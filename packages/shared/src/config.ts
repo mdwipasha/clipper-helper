@@ -36,12 +36,22 @@ export const FlagsConfigSchema = z.object({
 
 export type FlagsConfig = z.infer<typeof FlagsConfigSchema>;
 
+export const PreviewConfigSchema = z.object({
+  bridge_url: z.string().url(),
+  bridge_protocol_version: z.number().int().positive(),
+  control_video_id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  ready_timeout_ms: z.number().int().positive(),
+});
+
+export type PreviewConfig = z.infer<typeof PreviewConfigSchema>;
+
 export const AppConfigSchema = z.object({
   min_app_version: z.string(),
   maintenance: MaintenanceConfigSchema,
   limits: LimitsConfigSchema,
   ticket: TicketConfigSchema,
   flags: FlagsConfigSchema,
+  preview: PreviewConfigSchema,
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -74,5 +84,11 @@ export const SEED_APP_CONFIG: AppConfig = {
   },
   flags: {
     caption_lead_offset_ms: 0,
+  },
+  preview: {
+    bridge_url: 'https://clipper-bridge.vercel.app',
+    bridge_protocol_version: 1,
+    control_video_id: 'WufkeDaJisQ',
+    ready_timeout_ms: 6000,
   },
 };

@@ -295,6 +295,59 @@ export const commands = {
     }
   },
   /**
+   * Fetches a single project record by ID (used when reopening from "Proyek terakhir").
+   */
+  async getProject(projectId: string): Promise<Result<ProjectRecord | null, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_project', { projectId }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Persists validated clip range boundaries (`range_start_ms`, `range_end_ms`) and sets
+   * `status = 'ranged'` for the project.
+   */
+  async updateProjectRange(
+    projectId: string,
+    rangeStartMs: number,
+    rangeEndMs: number
+  ): Promise<Result<ProjectRecord, AppCommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('update_project_range', { projectId, rangeStartMs, rangeEndMs }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * Returns preview bridge URL/protocol/control video/timeout/range limits configuration.
+   * In release builds, `bridge_url` is fixed to `https://clipper-bridge.vercel.app` and
+   * `can_force_timecode_only` is strictly `false`.
+   */
+  async getPreviewConfig(): Promise<PreviewConfigResponse> {
+    return await TAURI_INVOKE('get_preview_config');
+  },
+  /**
+   * Records non-PII preview diagnostics (`mode`, `bridge_ready_ms`, `fallback_reason`,
+   * `yt_error_code`), updates allowlisted aggregate counters in `settings`, and logs
+   * typed preview errors (`E_PREVIEW_CONFIG`, `E_YT_UNAVAILABLE`) to `error_events`.
+   */
+  async recordPreviewEvent(
+    input: PreviewEventInput
+  ): Promise<Result<PreviewCountersSnapshot, AppCommandError>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('record_preview_event', { input }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
    * Deletes a project record from SQLite and removes its `projects/<id>` workspace directory.
    */
   async deleteProject(projectId: string): Promise<Result<boolean, AppCommandError>> {
@@ -311,251 +364,6 @@ export const commands = {
   async openLogsFolder(): Promise<Result<null, AppCommandError>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('open_logs_folder') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Returns internal system information for the dev panel.
-   */
-  async devGetSystemInfo(): Promise<Result<DevSystemInfo, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_get_system_info') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: resets the dev workspace, clearing files and re-running migrations.
-   */
-  async devResetWorkspace(): Promise<Result<null, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_reset_workspace') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Runs the fake-sidecar with the requested mode and returns stdout lines.
-   */
-  async devRunFakeSidecar(mode: string): Promise<Result<DevSidecarRunResult, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_run_fake_sidecar', { mode }) };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: starts or verifies the local dev-server serving test fixtures.
-   */
-  async devStartFixtureServer(): Promise<Result<DevFixtureServerStatus, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_start_fixture_server') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: inspects the status of the local fixture server.
-   */
-  async devGetFixtureServerStatus(): Promise<DevFixtureServerStatus> {
-    return await TAURI_INVOKE('dev_get_fixture_server_status');
-  },
-  /**
-   * Debug-only: stops the local fixture server if running.
-   */
-  async devStopFixtureServer(): Promise<Result<DevFixtureServerStatus, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_stop_fixture_server') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: fetches and cryptographically verifies the component manifest.
-   */
-  async devFetchManifest(
-    manifestUrl: string,
-    sigUrl: string
-  ): Promise<Result<DevManifestInfo, DevManifestError>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_fetch_manifest', { manifestUrl, sigUrl }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: downloads and verifies a raw component payload from the manifest with live progress.
-   */
-  async devDownloadComponent(
-    component: string,
-    version: string,
-    url: string,
-    sizeBytes: number,
-    sha256: string,
-    archive: string
-  ): Promise<Result<null, string>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_download_component', {
-          component,
-          version,
-          url,
-          sizeBytes,
-          sha256,
-          archive,
-        }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: runs the complete M1.1c atomic install pipeline (download -> verify -> safe extract ->
-   * atomic rename -> promote -> supervised capability check -> quarantine+rollback on failure -> GC).
-   */
-  async devInstallComponent(
-    component: string,
-    version: string
-  ): Promise<Result<DevInstallOutcome, DevCommandError>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_install_component', { component, version }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: returns complete per-component versions, capabilities, and custom FFmpeg state.
-   */
-  async devGetComponentDiagnostics(): Promise<
-    Result<ComponentDiagnosticsSnapshot, DevCommandError>
-  > {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_get_component_diagnostics') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: switches a component back to `previous` or rolls forward/backward to `target_version`.
-   */
-  async devRollbackComponent(
-    component: string,
-    targetVersion: string | null
-  ): Promise<Result<string, string>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_rollback_component', { component, targetVersion }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: runs version garbage collection (`keep_previous = 2`) skipping in-use versions.
-   */
-  async devGcComponent(component: string): Promise<Result<GcOutcome, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_gc_component', { component }) };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: executes full SHA-256 verification and live capability probe on the active version.
-   */
-  async devVerifyComponent(component: string): Promise<Result<VerifyRepairOutcome, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_verify_component', { component }) };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: retries strict capability verification on an already-extracted quarantined version.
-   */
-  async devRetryQuarantinedComponent(
-    component: string,
-    version: string
-  ): Promise<Result<VerifyRepairOutcome, DevCommandError>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_retry_quarantined_component', { component, version }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: re-downloads and verifies a missing or damaged component from the active manifest.
-   */
-  async devRepairComponent(
-    component: string,
-    version: string | null
-  ): Promise<Result<VerifyRepairOutcome, DevCommandError>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('dev_repair_component', { component, version }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: resets the persisted manifest sequence floor so seq 1 -> 2 -> 3 presets can replay
-   * without wiping the workspace. Never compiled into release builds.
-   */
-  async devResetManifestSequenceFloor(): Promise<Result<number, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_reset_manifest_sequence_floor') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: validates custom `ffmpeg.exe` + `ffprobe.exe` on a local fixed drive and verifies
-   * capabilities in WARN mode (sets persistent warning flag).
-   */
-  async devSetCustomFfmpeg(path: string): Promise<Result<CustomFfmpegStatus, DevCommandError>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_set_custom_ffmpeg', { path }) };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  /**
-   * Debug-only: clears the custom FFmpeg path override and restores managed FFmpeg resolution.
-   */
-  async devClearCustomFfmpeg(): Promise<Result<CustomFfmpegStatus, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('dev_clear_custom_ffmpeg') };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: 'error', error: e as any };
@@ -706,59 +514,6 @@ export type DataRootChangeOutcome = {
   is_onedrive: boolean;
   requires_restart: boolean;
 };
-export type DevCommandError = { code: string; message: string };
-export type DevFixtureServerStatus = {
-  state: string;
-  port: number | null;
-  url: string | null;
-  error: string | null;
-};
-export type DevInstallOutcome = {
-  ok: boolean;
-  component: string;
-  version: string;
-  kind: string;
-  already_installed: boolean;
-  quarantined: boolean;
-  rolled_back_to: string | null;
-  error_code: string | null;
-  message: string;
-  capability_report: CapabilityReportView | null;
-};
-export type DevManifestComponent = {
-  component: string;
-  version: string;
-  platform: string;
-  url: string;
-  size_bytes: number;
-  sha256: string;
-  archive: string;
-  files_count: number;
-  is_downloaded: boolean;
-};
-export type DevManifestError = { code: string; message: string };
-export type DevManifestInfo = {
-  sequence: number;
-  channel: string;
-  generated_at: string;
-  signature_valid: boolean;
-  components: DevManifestComponent[];
-};
-export type DevSidecarRunResult = {
-  exit_code: number;
-  lines: string[];
-  stderr_tail: string;
-  elapsed_ms: number;
-};
-export type DevSystemInfo = {
-  schema_version: number;
-  workspace_root: string;
-  redacted_workspace_root: string;
-  free_disk_space_formatted: string;
-  free_disk_space_bytes: number;
-  platform: string;
-  arch: string;
-};
 export type DiagnosticsReportBundle = {
   report_id: string;
   ringkasan_bytes: number;
@@ -836,13 +591,6 @@ export type FfmpegCapabilities = {
   missing_protocols: string[];
   missing_formats: string[];
 };
-export type GcOutcome = {
-  component: string;
-  removed_versions: string[];
-  deferred_versions: string[];
-  skipped_in_use: string[];
-  kept_versions: string[];
-};
 export type GpuAdapterInfo = { name: string; driver_version: string | null; vendor: string | null };
 export type HardwareProfile = {
   cpu_model: string;
@@ -876,6 +624,38 @@ export type ManifestOverview = {
   components: ManifestComponentItem[];
 };
 export type ManifestUrlConfig = { url: string; sig_url: string; can_override_in_ui: boolean };
+/**
+ * Preview bridge configuration and range limits exposed to the frontend.
+ */
+export type PreviewConfigResponse = {
+  bridge_url: string;
+  bridge_protocol_version: number;
+  control_video_id: string;
+  ready_timeout_ms: number;
+  max_range_seconds: number;
+  download_prior_rt_factor: number;
+  download_prior_startup_seconds: number;
+  can_force_timecode_only: boolean;
+};
+/**
+ * Non-sensitive aggregate preview telemetry counters stored locally in SQLite `settings`.
+ */
+export type PreviewCountersSnapshot = {
+  embed_disabled_count: number;
+  fallback_count: number;
+  config_error_count: number;
+};
+/**
+ * Structured preview diagnostics & counter increment payload recorded cleanly without PII/URLs.
+ */
+export type PreviewEventInput = {
+  mode: string;
+  bridge_ready_ms: number | null;
+  fallback_reason: string | null;
+  yt_error_code: number | null;
+  counter_kind: string | null;
+  record_error_code: string | null;
+};
 export type PreviewMode = 'embed' | 'timecode_only';
 /**
  * Typed video metadata extracted from `yt-dlp -J`. Never includes format URLs.
@@ -927,6 +707,8 @@ export type ProjectRecord = {
   live_status: string | null;
   preview_mode: string;
   suggested_start_seconds: number | null;
+  range_start_ms: number | null;
+  range_end_ms: number | null;
   status: string;
   created_at: number;
   updated_at: number;

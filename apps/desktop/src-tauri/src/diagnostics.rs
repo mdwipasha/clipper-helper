@@ -640,6 +640,52 @@ fn assemble_detail_section(
         );
     }
 
+    let _ = writeln!(s, "\n### Preview");
+    let preview_mode = safe_settings
+        .get("preview_last_mode")
+        .map(String::as_str)
+        .unwrap_or("-");
+    let preview_ready_ms = safe_settings
+        .get("preview_last_bridge_ready_ms")
+        .map(String::as_str)
+        .unwrap_or("-");
+    let preview_fallback_reason = safe_settings
+        .get("preview_last_fallback_reason")
+        .map(String::as_str)
+        .unwrap_or("-");
+    let preview_yt_err = safe_settings
+        .get("preview_last_yt_error_code")
+        .map(String::as_str)
+        .unwrap_or("-");
+    let embed_disabled_count = safe_settings
+        .get("embed_disabled_count")
+        .map(String::as_str)
+        .unwrap_or("0");
+    let fallback_count = safe_settings
+        .get("fallback_count")
+        .map(String::as_str)
+        .unwrap_or("0");
+    let config_error_count = safe_settings
+        .get("config_error_count")
+        .map(String::as_str)
+        .unwrap_or("0");
+    let _ = writeln!(
+        s,
+        "{}",
+        cap_list_line(
+            &format!(
+                "- mode={} | bridge_ready_ms={} | fallback_reason={} | yt_error_code={}",
+                preview_mode, preview_ready_ms, preview_fallback_reason, preview_yt_err
+            ),
+            MAX_REPORT_LIST_LINE_CHARS
+        )
+    );
+    let _ = writeln!(
+        s,
+        "- counters: embed_disabled_count={} fallback_count={} config_error_count={}",
+        embed_disabled_count, fallback_count, config_error_count
+    );
+
     let _ = writeln!(s, "\n### Pengaturan (Allowlist Non-Sensitif)");
     if safe_settings.is_empty() {
         let _ = writeln!(s, "(belum ada pengaturan tersimpan)");
@@ -1280,5 +1326,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_preview_section_and_counters_appear_in_report() {
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().to_path_buf();
+        let store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        store
+            .record_preview_telemetry(
+                "timecode_only",
+                Some(640),
+                Some("embed_disabled"),
+                Some(150),
+                Some("embed_disabled"),
+            )
+            .unwrap();
+        store
+            .record_preview_telemetry(
+                "timecode_only",
+                Some(900),
+                Some("config_error_153"),
+                Some(153),
+                Some("config_error"),
+            )
+            .unwrap();
+
+        let hw = mock_hw();
+        let resolver = ComponentResolver::new(ws.clone(), store.clone(), InUseRegistry::new());
+        let snapshot = resolver.diagnostics_snapshot().unwrap();
+        let speech_state = resolve_speech_model_state(&store, hw.ram_bytes_u64()).unwrap();
+        let encoder_status = get_encoder_status(&store, &hw).unwrap();
+
+        let bundle = build_diagnostics_report(
+            &ws,
+            &store,
+            &hw,
+            &snapshot,
+            &speech_state,
+            &encoder_status,
+            &DiagnosticsReportOptions {
+                user_note: String::new(),
+                include_video_ids: false,
+                app_version: "0.1.0".into(),
+                crash_record: None,
+            },
+        );
+
+        assert!(bundle.full_text.contains("### Preview"));
+        assert!(bundle.full_text.contains("mode=timecode_only"));
+        assert!(bundle.full_text.contains("bridge_ready_ms=900"));
+        assert!(bundle
+            .full_text
+            .contains("fallback_reason=config_error_153"));
+        assert!(bundle.full_text.contains("yt_error_code=153"));
+        assert!(bundle
+            .full_text
+            .contains("embed_disabled_count=1 fallback_count=0 config_error_count=1"));
     }
 }

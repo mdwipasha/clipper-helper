@@ -19,11 +19,12 @@ interface HomeViewProps {
   overview: ComponentsOverview | null;
   settings: SettingsOverview | null;
   onNavigate: (tab: NavTab) => void;
+  onOpenProject?: (project: ProjectRecord) => void;
 }
 
 const RETRYABLE_PROBE_CODES = new Set(['E_NET_OFFLINE', 'E_NET_TIMEOUT', 'E_YT_RATE_LIMITED']);
 
-export function HomeView({ locale, overview, settings, onNavigate }: HomeViewProps) {
+export function HomeView({ locale, overview, settings, onNavigate, onOpenProject }: HomeViewProps) {
   const [urlInput, setUrlInput] = useState('');
   const [isProbing, setIsProbing] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -345,15 +346,11 @@ export function HomeView({ locale, overview, settings, onNavigate }: HomeViewPro
             <div className="flex items-center gap-3 pt-1">
               <button
                 type="button"
-                disabled
-                aria-disabled="true"
-                className="bg-indigo-600/40 text-slate-300 text-xs font-medium px-4 py-2 rounded-lg cursor-not-allowed"
+                onClick={() => onOpenProject?.(probeResult.project)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-4 py-2 rounded-lg transition"
               >
                 {t('home.nextButton', undefined, locale)}
               </button>
-              <span className="text-xs text-slate-400">
-                {t('home.comingSoonHint', undefined, locale)}
-              </span>
             </div>
           </div>
         )}
@@ -373,7 +370,11 @@ export function HomeView({ locale, overview, settings, onNavigate }: HomeViewPro
                 data-testid={`recent-project-${proj.id}`}
                 className="py-2.5 flex items-center justify-between gap-3"
               >
-                <div className="min-w-0 space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => onOpenProject?.(proj)}
+                  className="min-w-0 flex-1 text-left space-y-0.5 hover:text-indigo-200 transition"
+                >
                   <div className="text-sm font-medium text-slate-100 truncate">{proj.title}</div>
                   <div className="text-xs text-slate-400 flex flex-wrap gap-2">
                     <span>{proj.channel}</span>
@@ -386,7 +387,7 @@ export function HomeView({ locale, overview, settings, onNavigate }: HomeViewPro
                         : t('home.previewTimecodeOnly', undefined, locale)}
                     </span>
                   </div>
-                </div>
+                </button>
                 <button
                   type="button"
                   disabled={deletingId === proj.id}

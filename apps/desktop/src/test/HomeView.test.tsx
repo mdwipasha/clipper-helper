@@ -35,6 +35,8 @@ function buildSampleProject(overrides?: Partial<ProjectRecord>): ProjectRecord {
     live_status: 'not_live',
     preview_mode: 'embed',
     suggested_start_seconds: null,
+    range_start_ms: null,
+    range_end_ms: null,
     status: 'probed',
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
@@ -165,7 +167,16 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
       data: [resEmbed.project],
     });
 
-    render(<HomeView locale="id" overview={null} settings={null} onNavigate={onNavigate} />);
+    const onOpenProject = vi.fn();
+    render(
+      <HomeView
+        locale="id"
+        overview={null}
+        settings={null}
+        onNavigate={onNavigate}
+        onOpenProject={onOpenProject}
+      />
+    );
 
     await user.type(
       screen.getByLabelText('Link Video YouTube'),
@@ -182,8 +193,9 @@ describe('HomeView (M1.2 intake + probe + recent projects)', () => {
     expect(card).toHaveTextContent('Mulai disarankan: 01:35');
 
     const lanjutBtn = screen.getByRole('button', { name: 'Lanjut' });
-    expect(lanjutBtn).toBeDisabled();
-    expect(card).toHaveTextContent('Segera hadir');
+    expect(lanjutBtn).toBeEnabled();
+    await user.click(lanjutBtn);
+    expect(onOpenProject).toHaveBeenCalledWith(resEmbed.project);
 
     // Now test timecode_only preview label
     vi.mocked(commands.probeYoutubeUrl).mockResolvedValueOnce({
