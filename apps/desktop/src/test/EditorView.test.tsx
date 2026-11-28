@@ -709,4 +709,40 @@ describe('EditorView & EditorTimeline UI', () => {
     unmount();
     expect(commands.saveComposition).toHaveBeenCalled();
   });
+
+  it('recovers from WebView2 repeated-frame seeks using rVFC mediaTime seek-and-verify', async () => {
+    const user = userEvent.setup();
+    render(
+      <EditorView
+        locale="id"
+        project={makeProject()}
+        workspaceRoot={null}
+        onBackHome={vi.fn()}
+        onChangeRange={vi.fn()}
+        onOpenDiagnostics={vi.fn()}
+        onProjectUpdated={vi.fn()}
+      />
+    );
+
+    const video = (await screen.findByTestId('editor-video')) as HTMLVideoElement;
+    // Initial playhead is at 5.000s (frame 300 at 60fps). Step +1 frame via button.
+    await user.click(screen.getByTestId('btn-playhead-next-frame'));
+    expect(video.currentTime).toBeGreaterThan(301 / 60);
+    expect(video.currentTime).toBeLessThan(302 / 60);
+
+    // Simulate WebView2 presenting a repeated frame on first rVFC callback (still at 5.000s)
+    const firstSeekTime = video.currentTime;
+    await act(async () => {
+      vfcCallback?.(100, { mediaTime: 5.0 });
+    });
+
+    // Seek-and-verify nudged currentTime forward and re-armed rVFC
+    expect(video.currentTime).toBeGreaterThan(firstSeekTime);
+
+    // Second rVFC callback confirms frame advanced to 5.016667s -> readout updates from mediaTime
+    await act(async () => {
+      vfcCallback?.(116, { mediaTime: 5.0 + 1 / 60 });
+    });
+    expect(screen.getByTestId('editor-playhead-time')).toHaveTextContent('00:05.017');
+  });
 });

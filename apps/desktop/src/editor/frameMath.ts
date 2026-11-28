@@ -59,6 +59,42 @@ export function stepByFrames(
   return Math.max(0, Math.min(safeDur, nextMs));
 }
 
+/**
+ * Computes a WebView2/Chromium-safe seek target in seconds for an exact frame index.
+ * Seeking to `(frameIndex + 0.25) * frameDuration` avoids sub-ms float truncation
+ * (e.g. `33 ms < 33.333 ms` at 60/30 fps) that otherwise lands on the previous frame.
+ */
+export function frameToSeekSec(
+  frameIndex: number,
+  fps: RationalFps,
+  durationMs: number
+): number {
+  const maxSec = Math.max(0, durationMs) / 1000;
+  if (!Number.isFinite(frameIndex) || frameIndex <= 0) return 0;
+  const n = normalizeRationalFps(fps.num, fps.den);
+  const frameDurSec = n.den / n.num;
+  const target = (frameIndex + 0.25) * frameDurSec;
+  return Math.max(0, Math.min(maxSec, target));
+}
+
+export function stepByFramesTarget(
+  currentSec: number,
+  deltaFrames: number,
+  fps: RationalFps,
+  durationMs: number
+): { targetIndex: number; targetSec: number; targetMs: number } {
+  const safeDur = Math.max(0, Math.round(durationMs));
+  const maxSec = safeDur / 1000;
+  const clampedSec = Number.isFinite(currentSec) ? Math.max(0, Math.min(maxSec, currentSec)) : 0;
+  const n = normalizeRationalFps(fps.num, fps.den);
+  const curIdx = Math.max(0, Math.round((clampedSec * n.num) / n.den));
+  const maxIdx = Math.max(0, Math.floor((safeDur * n.num) / (1000 * n.den)));
+  const targetIndex = Math.max(0, Math.min(maxIdx, curIdx + Math.round(deltaFrames)));
+  const targetSec = frameToSeekSec(targetIndex, n, safeDur);
+  const targetMs = Math.min(safeDur, frameToMs(targetIndex, n));
+  return { targetIndex, targetSec, targetMs };
+}
+
 export function effectiveMinClipMs(durationMs: number, minClipMs = DEFAULT_MIN_CLIP_MS): number {
   return Math.min(Math.max(1, Math.round(durationMs)), Math.max(1, Math.round(minClipMs)));
 }

@@ -27,7 +27,12 @@ import {
   redoEditorCommand,
   undoEditorCommand,
 } from '../editor/editorState';
-import { DEFAULT_MIN_CLIP_MS, snapMsToFrame, stepByFrames } from '../editor/frameMath';
+import {
+  DEFAULT_MIN_CLIP_MS,
+  frameDurationMs,
+  snapMsToFrame,
+  stepByFramesTarget,
+} from '../editor/frameMath';
 import {
   AppCommandError,
   commands,
@@ -119,6 +124,8 @@ export function EditorView({
   const savingInFlightRef = useRef<boolean>(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loopSelectionRef = useRef<boolean>(true);
+  const mediaTimeSecRef = useRef<number>(0);
+  const stepVerifyCancelRef = useRef<(() => void) | null>(null);
 
   editorStateRef.current = editorState;
   loopSelectionRef.current = loopSelection;
@@ -160,6 +167,7 @@ export function EditorView({
       });
       setEditorState(initial);
       const trim = getTrimBounds(initial.composition);
+      mediaTimeSecRef.current = trim.inMs / 1000;
       setPlayheadMs(trim.inMs);
       setSaveStatus('saved');
       setSaveError(null);
@@ -392,23 +400,139 @@ export function EditorView({
     drawOverviewFrame(true);
   }, [drawOverviewFrame]);
 
-  // Seek helper
+  // Cancel any pending rVFC seek-and-verify operation
+  const cancelPendingStepVerify = useCallback(() => {
+    if (stepVerifyCancelRef.current) {
+      stepVerifyCancelRef.current();
+      stepVerifyCancelRef.current = null;
+    }
+  }, []);
+
+  // Seek helper (used for timeline clicks, Home/End, +/-1s jumps)
   const seekToMs = useCallback(
     (rawMs: number) => {
       if (!editorState) return;
+      cancelPendingStepVerify();
       const snapped = snapMsToFrame(
         rawMs,
         editorState.bounds.fps,
         editorState.bounds.sourceDurationMs
       );
+      const sec = snapped / 1000;
+      mediaTimeSecRef.current = sec;
       setPlayheadMs(snapped);
-      const vid = videoRef.current;
+      const vid = videoRef.current as VideoWithFrameCallback | null;
       if (vid) {
-        vid.currentTime = snapped / 1000;
+        if (typeof vid.requestVideoFrameCallback === 'function') {
+          let cancelled = false;
+          const handle = vid.requestVideoFrameCallback((_now, metadata) => {
+            if (cancelled) return;
+            stepVerifyCancelRef.current = null;
+            if (typeof metadata?.mediaTime === 'number' && Number.isFinite(metadata.mediaTime)) {
+              mediaTimeSecRef.current = metadata.mediaTime;
+              setPlayheadMs(
+                Math.min(editorState.bounds.sourceDurationMs, Math.round(metadata.mediaTime * 1000))
+              );
+              drawOverviewFrame(true);
+            }
+          });
+          stepVerifyCancelRef.current = () => {
+            cancelled = true;
+            vid.cancelVideoFrameCallback?.(handle);
+          };
+        }
+        vid.currentTime = sec;
       }
       drawOverviewFrame(true);
     },
-    [drawOverviewFrame, editorState]
+    [cancelPendingStepVerify, drawOverviewFrame, editorState]
+  );
+
+  // Frame-accurate step with WebView2 rVFC metadata.mediaTime seek-and-verify
+  const stepFrames = useCallback(
+    (deltaFrames: number) => {
+      const st = editorStateRef.current;
+      if (!st || deltaFrames === 0) return;
+      cancelPendingStepVerify();
+
+      const prevSec = mediaTimeSecRef.current;
+      const { targetIndex, targetSec, targetMs } = stepByFramesTarget(
+        prevSec,
+        deltaFrames,
+        st.bounds.fps,
+        st.bounds.sourceDurationMs
+      );
+      const frameDurSec = frameDurationMs(st.bounds.fps) / 1000;
+      const durSec = st.bounds.sourceDurationMs / 1000;
+
+      // Optimistic readout update (later refined by rVFC metadata.mediaTime if available)
+      mediaTimeSecRef.current = targetMs / 1000;
+      setPlayheadMs(targetMs);
+
+      const vid = videoRef.current as VideoWithFrameCallback | null;
+      if (!vid) {
+        drawOverviewFrame(true);
+        return;
+      }
+
+      if (typeof vid.requestVideoFrameCallback !== 'function') {
+        vid.currentTime = targetSec;
+        drawOverviewFrame(true);
+        return;
+      }
+
+      let cancelled = false;
+      let currentHandle: number | null = null;
+      let currentTargetSec = targetSec;
+      let attempts = 0;
+
+      const armVerify = () => {
+        if (cancelled) return;
+        attempts += 1;
+        currentHandle = vid.requestVideoFrameCallback((_now, metadata) => {
+          if (cancelled) return;
+          const mt =
+            typeof metadata?.mediaTime === 'number' && Number.isFinite(metadata.mediaTime)
+              ? metadata.mediaTime
+              : vid.currentTime;
+
+          const stuckForward =
+            deltaFrames > 0 &&
+            currentTargetSec < durSec - frameDurSec * 0.1 &&
+            mt <= prevSec + frameDurSec * 0.25;
+          const stuckBackward =
+            deltaFrames < 0 &&
+            targetIndex > 0 &&
+            mt >= prevSec - frameDurSec * 0.25;
+
+          if ((stuckForward || stuckBackward) && attempts < 3) {
+            currentTargetSec = Math.max(
+              0,
+              Math.min(durSec, currentTargetSec + (deltaFrames > 0 ? 0.5 : -0.5) * frameDurSec)
+            );
+            armVerify();
+            vid.currentTime = currentTargetSec;
+            return;
+          }
+
+          stepVerifyCancelRef.current = null;
+          mediaTimeSecRef.current = mt;
+          setPlayheadMs(Math.min(st.bounds.sourceDurationMs, Math.round(mt * 1000)));
+          drawOverviewFrame(true);
+        });
+      };
+
+      stepVerifyCancelRef.current = () => {
+        cancelled = true;
+        if (currentHandle !== null) {
+          vid.cancelVideoFrameCallback?.(currentHandle);
+        }
+      };
+
+      armVerify();
+      vid.currentTime = currentTargetSec;
+    },
+    [cancelPendingStepVerify, drawOverviewFrame]
   );
 
   const togglePlayPause = useCallback(async () => {
@@ -444,9 +568,12 @@ export function EditorView({
     let rafHandle: number | null = null;
 
     const handleFrameTime = (seconds: number) => {
+      mediaTimeSecRef.current = seconds;
       const rawMs = Math.round(seconds * 1000);
       if (loopSelectionRef.current && !vid.paused && rawMs >= currentTrim.outMs) {
-        vid.currentTime = currentTrim.inMs / 1000;
+        const loopSec = currentTrim.inMs / 1000;
+        mediaTimeSecRef.current = loopSec;
+        vid.currentTime = loopSec;
         setPlayheadMs(currentTrim.inMs);
       } else {
         setPlayheadMs(rawMs);
@@ -470,6 +597,7 @@ export function EditorView({
     };
 
     const onPlay = () => {
+      cancelPendingStepVerify();
       setIsPlaying(true);
       if (typeof vid.requestVideoFrameCallback === 'function') {
         scheduleVfc();
@@ -489,16 +617,23 @@ export function EditorView({
     };
 
     const onTimeUpdate = () => {
+      if (vid.paused && typeof vid.requestVideoFrameCallback === 'function') {
+        return;
+      }
       handleFrameTime(vid.currentTime);
     };
 
     const onSeeked = () => {
-      setPlayheadMs(Math.round(vid.currentTime * 1000));
+      if (typeof vid.requestVideoFrameCallback !== 'function') {
+        mediaTimeSecRef.current = vid.currentTime;
+        setPlayheadMs(Math.round(vid.currentTime * 1000));
+      }
       drawOverviewFrame(true);
     };
 
     const onLoadedData = () => {
       if (vid.currentTime === 0 && currentTrim.inMs > 0) {
+        mediaTimeSecRef.current = currentTrim.inMs / 1000;
         vid.currentTime = currentTrim.inMs / 1000;
       }
       drawOverviewFrame(true);
@@ -511,6 +646,7 @@ export function EditorView({
     vid.addEventListener('loadeddata', onLoadedData);
     return () => {
       stopped = true;
+      cancelPendingStepVerify();
       vid.removeEventListener('play', onPlay);
       vid.removeEventListener('pause', onPause);
       vid.removeEventListener('timeupdate', onTimeUpdate);
@@ -568,18 +704,20 @@ export function EditorView({
         void togglePlayPause();
       } else if (ev.key === 'ArrowLeft') {
         ev.preventDefault();
-        const st = editorStateRef.current;
-        const next = ev.shiftKey
-          ? snapMsToFrame(playheadMs - 1000, st.bounds.fps, st.bounds.sourceDurationMs)
-          : stepByFrames(playheadMs, -1, st.bounds.fps, st.bounds.sourceDurationMs);
-        seekToMs(next);
+        if (ev.shiftKey) {
+          const st = editorStateRef.current;
+          seekToMs(snapMsToFrame(playheadMs - 1000, st.bounds.fps, st.bounds.sourceDurationMs));
+        } else {
+          stepFrames(-1);
+        }
       } else if (ev.key === 'ArrowRight') {
         ev.preventDefault();
-        const st = editorStateRef.current;
-        const next = ev.shiftKey
-          ? snapMsToFrame(playheadMs + 1000, st.bounds.fps, st.bounds.sourceDurationMs)
-          : stepByFrames(playheadMs, 1, st.bounds.fps, st.bounds.sourceDurationMs);
-        seekToMs(next);
+        if (ev.shiftKey) {
+          const st = editorStateRef.current;
+          seekToMs(snapMsToFrame(playheadMs + 1000, st.bounds.fps, st.bounds.sourceDurationMs));
+        } else {
+          stepFrames(1);
+        }
       } else if (lower === 'i' && !mod) {
         ev.preventDefault();
         dispatchCommand({
@@ -605,7 +743,7 @@ export function EditorView({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dispatchCommand, handleRedo, handleUndo, playheadMs, seekToMs, togglePlayPause]);
+  }, [dispatchCommand, handleRedo, handleUndo, playheadMs, seekToMs, stepFrames, togglePlayPause]);
 
   // Interactive crop drag on 9:16 preview or overview box
   const cropCss = useMemo(() => {
@@ -1184,16 +1322,7 @@ export function EditorView({
                   <button
                     type="button"
                     data-testid="btn-playhead-prev-frame"
-                    onClick={() =>
-                      seekToMs(
-                        stepByFrames(
-                          playheadMs,
-                          -1,
-                          editorState.bounds.fps,
-                          editorState.bounds.sourceDurationMs
-                        )
-                      )
-                    }
+                    onClick={() => stepFrames(-1)}
                     className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
                   >
                     {t('editor.transport.prevFrame', undefined, locale)}
@@ -1201,16 +1330,7 @@ export function EditorView({
                   <button
                     type="button"
                     data-testid="btn-playhead-next-frame"
-                    onClick={() =>
-                      seekToMs(
-                        stepByFrames(
-                          playheadMs,
-                          1,
-                          editorState.bounds.fps,
-                          editorState.bounds.sourceDurationMs
-                        )
-                      )
-                    }
+                    onClick={() => stepFrames(1)}
                     className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
                   >
                     {t('editor.transport.nextFrame', undefined, locale)}

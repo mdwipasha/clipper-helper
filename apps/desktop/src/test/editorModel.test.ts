@@ -24,9 +24,11 @@ import {
   formatFrameTimecodeMs,
   frameDurationMs,
   frameToMs,
+  frameToSeekSec,
   msToNearestFrame,
   snapMsToFrame,
   stepByFrames,
+  stepByFramesTarget,
 } from '../editor/frameMath';
 
 function makeComposition(overrides?: Partial<Composition>): Composition {
@@ -120,6 +122,33 @@ describe('frameMath (rational fps, snapping, stepping, clamping)', () => {
       inMs: 10_000,
       outMs: 11_000,
     });
+  });
+
+  it('computes WebView2-safe seek targets inside frame intervals to avoid 60fps PTS truncation repeats', () => {
+    const fps60 = { num: 60, den: 1 };
+    const fps5994 = { num: 60_000, den: 1001 };
+
+    // Frame 2 PTS = 2/60 = 0.033333...s (integer 33ms would fall BEFORE PTS!)
+    // frameToSeekSec adds +0.25 frame margin -> strictly inside [2/60, 3/60)
+    const sec2 = frameToSeekSec(2, fps60, 10_000);
+    expect(sec2).toBeGreaterThan(2 / 60);
+    expect(sec2).toBeLessThan(3 / 60);
+
+    // Stepping 12 consecutive frames from 0 never hits a previous frame PTS boundary
+    let curSec = 0;
+    for (let f = 1; f <= 12; f += 1) {
+      const next = stepByFramesTarget(curSec, 1, fps60, 10_000);
+      expect(next.targetIndex).toBe(f);
+      expect(next.targetSec).toBeGreaterThan(f / 60);
+      expect(next.targetSec).toBeLessThan((f + 0.5) / 60);
+      curSec = f / 60;
+    }
+
+    // Same invariant holds for 59.94 fps
+    const ntscStep = stepByFramesTarget(1001 / 60_000, 1, fps5994, 10_000);
+    expect(ntscStep.targetIndex).toBe(2);
+    expect(ntscStep.targetSec).toBeGreaterThan((2 * 1001) / 60_000);
+    expect(ntscStep.targetSec).toBeLessThan((3 * 1001) / 60_000);
   });
 });
 
