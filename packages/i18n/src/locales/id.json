@@ -407,7 +407,15 @@
       "maxWarning": "Durasi terpilih melebihi batas maksimal ({maxSeconds} dtk).",
       "scrubAria": "Timeline posisi klip",
       "handleInAria": "Geser titik masuk",
-      "handleOutAria": "Geser titik keluar"
+      "handleOutAria": "Geser titik keluar",
+      "nudgeInMinusSec": "Masuk −1 dtk",
+      "nudgeInMinusFrame": "Masuk −1f",
+      "nudgeInPlusFrame": "Masuk +1f",
+      "nudgeInPlusSec": "Masuk +1 dtk",
+      "nudgeOutMinusSec": "Keluar −1 dtk",
+      "nudgeOutMinusFrame": "Keluar −1f",
+      "nudgeOutPlusFrame": "Keluar +1f",
+      "nudgeOutPlusSec": "Keluar +1 dtk"
     },
     "filmstrip": {
       "generating": "Membuat filmstrip ({percent}%) · {eta}",

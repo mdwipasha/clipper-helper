@@ -407,7 +407,15 @@
       "maxWarning": "Selected duration exceeds maximum limit ({maxSeconds} s).",
       "scrubAria": "Timeline position",
       "handleInAria": "Drag In handle",
-      "handleOutAria": "Drag Out handle"
+      "handleOutAria": "Drag Out handle",
+      "nudgeInMinusSec": "In −1s",
+      "nudgeInMinusFrame": "In −1f",
+      "nudgeInPlusFrame": "In +1f",
+      "nudgeInPlusSec": "In +1s",
+      "nudgeOutMinusSec": "Out −1s",
+      "nudgeOutMinusFrame": "Out −1f",
+      "nudgeOutPlusFrame": "Out +1f",
+      "nudgeOutPlusSec": "Out +1s"
     },
     "filmstrip": {
       "generating": "Generating filmstrip ({percent}%) · {eta}",

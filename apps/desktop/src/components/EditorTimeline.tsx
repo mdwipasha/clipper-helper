@@ -356,7 +356,7 @@ export function EditorTimeline({
             onClick={() => onNudgeSecond('in', -1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            In −1s
+            {t('editor.trim.nudgeInMinusSec', undefined, locale)}
           </button>
           <button
             type="button"
@@ -364,7 +364,7 @@ export function EditorTimeline({
             onClick={() => onNudgeFrame('in', -1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            In −1f
+            {t('editor.trim.nudgeInMinusFrame', undefined, locale)}
           </button>
           <button
             type="button"
@@ -372,7 +372,7 @@ export function EditorTimeline({
             onClick={() => onNudgeFrame('in', 1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            In +1f
+            {t('editor.trim.nudgeInPlusFrame', undefined, locale)}
           </button>
           <button
             type="button"
@@ -380,7 +380,7 @@ export function EditorTimeline({
             onClick={() => onNudgeSecond('in', 1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            In +1s
+            {t('editor.trim.nudgeInPlusSec', undefined, locale)}
           </button>
         </div>
 
@@ -391,7 +391,7 @@ export function EditorTimeline({
             onClick={() => onNudgeSecond('out', -1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            Out −1s
+            {t('editor.trim.nudgeOutMinusSec', undefined, locale)}
           </button>
           <button
             type="button"
@@ -399,7 +399,7 @@ export function EditorTimeline({
             onClick={() => onNudgeFrame('out', -1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            Out −1f
+            {t('editor.trim.nudgeOutMinusFrame', undefined, locale)}
           </button>
           <button
             type="button"
@@ -407,7 +407,7 @@ export function EditorTimeline({
             onClick={() => onNudgeFrame('out', 1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            Out +1f
+            {t('editor.trim.nudgeOutPlusFrame', undefined, locale)}
           </button>
           <button
             type="button"
@@ -415,7 +415,7 @@ export function EditorTimeline({
             onClick={() => onNudgeSecond('out', 1)}
             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-mono"
           >
-            Out +1s
+            {t('editor.trim.nudgeOutPlusSec', undefined, locale)}
           </button>
           <button
             type="button"
