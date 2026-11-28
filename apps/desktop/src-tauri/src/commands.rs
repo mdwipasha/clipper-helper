@@ -2886,7 +2886,11 @@ mod tests {
 
         // Simulate crash mid-subsequent write: orphan .tmp file on disk + reopened DB handle
         let proj_dir = ws.join("projects").join(&proj.id);
-        std::fs::write(proj_dir.join("composition.json.tmp"), b"{corrupt partial crash").unwrap();
+        std::fs::write(
+            proj_dir.join("composition.json.tmp"),
+            b"{corrupt partial crash",
+        )
+        .unwrap();
         drop(store);
 
         let reopened_store = LocalStore::open(&ws.join("clipper.db")).unwrap();

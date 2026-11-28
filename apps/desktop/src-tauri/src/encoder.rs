@@ -18,6 +18,10 @@ pub const SETTING_PREFERRED_ENCODER: &str = "preferred_encoder";
 pub const SETTING_ENCODER_FINGERPRINT: &str = "encoder_fingerprint";
 pub const SETTING_ENCODER_FALLBACK_HISTORY: &str = "encoder_fallback_history";
 
+/// Failures during the first N seconds of encoded media time (or matching S4 init
+/// stderr patterns) trigger automatic fallback to the next encoder in the chain.
+pub const EARLY_ENCODER_FAILURE_WINDOW_SECS: f64 = 5.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoEncoder {
@@ -262,15 +266,21 @@ fn append_fallback_history(store: &LocalStore, new_entries: &[EncoderFallbackEnt
     }
 }
 
-/// Lazily selects or probes the encoder chain (`h264_nvenc -> h264_qsv -> h264_amf -> h264_mf`).
-/// Re-probes cleanly whenever hardware/driver fingerprint changed or cached encoder fails.
-pub fn select_or_probe_encoder(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncoderCandidatePlan {
+    pub candidates: Vec<VideoEncoder>,
+    pub cached_encoder: Option<VideoEncoder>,
+    pub fingerprint_changed: bool,
+}
+
+/// Computes the ordered list of candidate encoders for an export run:
+/// remembered encoder first when the hardware/driver fingerprint matches,
+/// else the full lazy chain `h264_nvenc -> h264_qsv -> h264_amf -> h264_mf`.
+pub fn ordered_encoder_candidates(
     store: &LocalStore,
     hw: &HardwareProfile,
-    prober: &dyn EncoderProber,
-    app_version: &str,
-) -> Result<EncoderSelectionResult, Box<EncoderUnavailableError>> {
-    let cached_enc = store
+) -> EncoderCandidatePlan {
+    let cached_encoder = store
         .get_setting(SETTING_PREFERRED_ENCODER)
         .ok()
         .flatten()
@@ -279,12 +289,12 @@ pub fn select_or_probe_encoder(
         .get_setting(SETTING_ENCODER_FINGERPRINT)
         .ok()
         .flatten();
-    let fingerprint_changed = match (cached_enc, cached_fp.as_deref()) {
+    let fingerprint_changed = match (cached_encoder, cached_fp.as_deref()) {
         (Some(_), Some(fp)) => fp != hw.fingerprint,
         _ => false,
     };
 
-    let candidates: Vec<VideoEncoder> = if let Some(cached) = cached_enc {
+    let candidates = if let Some(cached) = cached_encoder {
         if !fingerprint_changed {
             let mut list = vec![cached];
             for enc in VideoEncoder::ordered_chain() {
@@ -300,68 +310,97 @@ pub fn select_or_probe_encoder(
         VideoEncoder::ordered_chain().to_vec()
     };
 
-    let mut attempts: Vec<EncoderProbeFailure> = Vec::new();
-    let mut fallback_records: Vec<EncoderFallbackEntry> = Vec::new();
-
-    for (idx, enc) in candidates.iter().enumerate() {
-        match prober.probe_encoder(*enc) {
-            Ok(()) => {
-                let _ = store.set_setting(SETTING_PREFERRED_ENCODER, enc.as_ffmpeg_name());
-                let _ = store.set_setting(SETTING_ENCODER_FINGERPRINT, &hw.fingerprint);
-
-                let used_cached = cached_enc == Some(*enc) && !fingerprint_changed && idx == 0;
-                let fallback_occurred = !attempts.is_empty();
-                let fallback_message = if fallback_occurred {
-                    let prev_names: Vec<&str> = attempts
-                        .iter()
-                        .map(|a| a.encoder.as_ffmpeg_name())
-                        .collect();
-                    for a in &attempts {
-                        fallback_records.push(EncoderFallbackEntry {
-                            from: a.encoder.as_ffmpeg_name().to_string(),
-                            to: Some(enc.as_ffmpeg_name().to_string()),
-                            reason_kind: a.kind,
-                            summary: a.summary.clone(),
-                        });
-                    }
-                    append_fallback_history(store, &fallback_records);
-                    Some(format!(
-                        "Encoder {} unavailable ({}); automatically fell back to {}",
-                        prev_names.join(", "),
-                        attempts
-                            .last()
-                            .map(|a| a.summary.as_str())
-                            .unwrap_or("probe failed"),
-                        enc.as_ffmpeg_name()
-                    ))
-                } else {
-                    None
-                };
-
-                return Ok(EncoderSelectionResult {
-                    selected: *enc,
-                    used_cached,
-                    fingerprint_changed,
-                    fallback_occurred,
-                    fallback_message,
-                    attempts,
-                });
-            }
-            Err(fail) => {
-                attempts.push(fail);
-            }
-        }
+    EncoderCandidatePlan {
+        candidates,
+        cached_encoder,
+        fingerprint_changed,
     }
+}
 
-    for a in &attempts {
-        fallback_records.push(EncoderFallbackEntry {
-            from: a.encoder.as_ffmpeg_name().to_string(),
-            to: None,
-            reason_kind: a.kind,
-            summary: a.summary.clone(),
+/// Persists the first working encoder + hardware/driver fingerprint so subsequent exports
+/// start directly with the verified encoder.
+pub fn persist_working_encoder(store: &LocalStore, hw: &HardwareProfile, encoder: VideoEncoder) {
+    let _ = store.set_setting(SETTING_PREFERRED_ENCODER, encoder.as_ffmpeg_name());
+    let _ = store.set_setting(SETTING_ENCODER_FINGERPRINT, &hw.fingerprint);
+}
+
+/// Returns `true` when an FFmpeg render failure happened during initialization / matches an
+/// S4 encoder stderr pattern OR occurred within the first `EARLY_ENCODER_FAILURE_WINDOW_SECS`.
+pub fn is_early_or_init_encoder_failure(
+    failure: &EncoderProbeFailure,
+    encoded_media_secs: f64,
+) -> bool {
+    if failure.kind != EncoderFailureKind::Unknown {
+        return true;
+    }
+    !encoded_media_secs.is_finite() || encoded_media_secs <= EARLY_ENCODER_FAILURE_WINDOW_SECS
+}
+
+/// Records an encoder fallback event in both `encoder_fallback_history` (shown in Pengaturan &
+/// Diagnostik) and SQLite `error_events`, returning the visible Indonesian status message
+/// `"Encoder X gagal, mencoba Y"` when a next candidate exists.
+pub fn record_runtime_encoder_fallback(
+    store: &LocalStore,
+    from: VideoEncoder,
+    to: Option<VideoEncoder>,
+    failure: &EncoderProbeFailure,
+    job_id: Option<&str>,
+    app_version: &str,
+) -> Option<String> {
+    append_fallback_history(
+        store,
+        &[EncoderFallbackEntry {
+            from: from.as_ffmpeg_name().to_string(),
+            to: to.map(|e| e.as_ffmpeg_name().to_string()),
+            reason_kind: failure.kind,
+            summary: failure.summary.clone(),
+        }],
+    );
+
+    if let Some(next) = to {
+        let notice = format!(
+            "Encoder {} gagal, mencoba {}",
+            from.as_ffmpeg_name(),
+            next.as_ffmpeg_name()
+        );
+        let _ = store.record_error_event(NewErrorEvent {
+            code: "E_RENDER_FAILED".to_string(),
+            stage: "render_fallback".to_string(),
+            job_id: job_id.map(str::to_string),
+            message_key: "err.E_RENDER_FAILED.body".to_string(),
+            detail: format!("{}: {}", notice, failure.summary),
+            stderr_tail: failure.stderr_tail_redacted.clone(),
+            app_version: app_version.to_string(),
+            component_versions_json: "{}".to_string(),
         });
+        Some(notice)
+    } else {
+        None
     }
-    append_fallback_history(store, &fallback_records);
+}
+
+/// Builds `E_ENCODER_UNAVAILABLE` after all candidate encoders have been exhausted,
+/// recording `error_events` and fallback history.
+pub fn build_encoder_unavailable_error(
+    store: &LocalStore,
+    hw: &HardwareProfile,
+    attempts: Vec<EncoderProbeFailure>,
+    job_id: Option<&str>,
+    app_version: &str,
+    record_history: bool,
+) -> Box<EncoderUnavailableError> {
+    if record_history {
+        let fallback_records: Vec<EncoderFallbackEntry> = attempts
+            .iter()
+            .map(|a| EncoderFallbackEntry {
+                from: a.encoder.as_ffmpeg_name().to_string(),
+                to: None,
+                reason_kind: a.kind,
+                summary: a.summary.clone(),
+            })
+            .collect();
+        append_fallback_history(store, &fallback_records);
+    }
 
     let mut actions = if hw.is_windows_n_kn {
         vec![
@@ -383,7 +422,7 @@ pub fn select_or_probe_encoder(
         .map(|a| format!("{}: {}", a.encoder.as_ffmpeg_name(), a.summary))
         .collect();
     let msg = format!(
-        "No working video encoder found after testing chain ({}). {}",
+        "Semua encoder video tidak tersedia ({}). Perbarui driver GPU atau pasang Media Feature Pack untuk Windows N/KN. Detail: {}",
         VideoEncoder::ordered_chain()
             .iter()
             .map(|e| e.as_ffmpeg_name())
@@ -407,8 +446,13 @@ pub fn select_or_probe_encoder(
 
     let _ = store.record_error_event(NewErrorEvent {
         code: "E_ENCODER_UNAVAILABLE".to_string(),
-        stage: "render_probe".to_string(),
-        job_id: None,
+        stage: if job_id.is_some() {
+            "render"
+        } else {
+            "render_probe"
+        }
+        .to_string(),
+        job_id: job_id.map(str::to_string),
         message_key: "err.E_ENCODER_UNAVAILABLE.body".to_string(),
         detail: msg.clone(),
         stderr_tail,
@@ -416,14 +460,86 @@ pub fn select_or_probe_encoder(
         component_versions_json: "{}".to_string(),
     });
 
-    Err(Box::new(EncoderUnavailableError {
+    Box::new(EncoderUnavailableError {
         code: "E_ENCODER_UNAVAILABLE".to_string(),
         message_key: "err.E_ENCODER_UNAVAILABLE.body".to_string(),
         message: msg,
         is_windows_n_kn: hw.is_windows_n_kn,
         actions,
         attempts,
-    }))
+    })
+}
+
+/// Lazily selects or probes the encoder chain (`h264_nvenc -> h264_qsv -> h264_amf -> h264_mf`).
+/// Re-probes cleanly whenever hardware/driver fingerprint changed or cached encoder fails.
+pub fn select_or_probe_encoder(
+    store: &LocalStore,
+    hw: &HardwareProfile,
+    prober: &dyn EncoderProber,
+    app_version: &str,
+) -> Result<EncoderSelectionResult, Box<EncoderUnavailableError>> {
+    let plan = ordered_encoder_candidates(store, hw);
+    let mut attempts: Vec<EncoderProbeFailure> = Vec::new();
+    let mut fallback_records: Vec<EncoderFallbackEntry> = Vec::new();
+
+    for (idx, enc) in plan.candidates.iter().enumerate() {
+        match prober.probe_encoder(*enc) {
+            Ok(()) => {
+                persist_working_encoder(store, hw, *enc);
+
+                let used_cached =
+                    plan.cached_encoder == Some(*enc) && !plan.fingerprint_changed && idx == 0;
+                let fallback_occurred = !attempts.is_empty();
+                let fallback_message = if fallback_occurred {
+                    let prev_names: Vec<&str> = attempts
+                        .iter()
+                        .map(|a| a.encoder.as_ffmpeg_name())
+                        .collect();
+                    for a in &attempts {
+                        fallback_records.push(EncoderFallbackEntry {
+                            from: a.encoder.as_ffmpeg_name().to_string(),
+                            to: Some(enc.as_ffmpeg_name().to_string()),
+                            reason_kind: a.kind,
+                            summary: a.summary.clone(),
+                        });
+                    }
+                    append_fallback_history(store, &fallback_records);
+                    Some(format!(
+                        "Encoder {} gagal ({}), mencoba {}",
+                        prev_names.join(", "),
+                        attempts
+                            .last()
+                            .map(|a| a.summary.as_str())
+                            .unwrap_or("probe failed"),
+                        enc.as_ffmpeg_name()
+                    ))
+                } else {
+                    None
+                };
+
+                return Ok(EncoderSelectionResult {
+                    selected: *enc,
+                    used_cached,
+                    fingerprint_changed: plan.fingerprint_changed,
+                    fallback_occurred,
+                    fallback_message,
+                    attempts,
+                });
+            }
+            Err(fail) => {
+                attempts.push(fail);
+            }
+        }
+    }
+
+    Err(build_encoder_unavailable_error(
+        store,
+        hw,
+        attempts,
+        None,
+        app_version,
+        true,
+    ))
 }
 
 #[cfg(test)]
@@ -629,5 +745,62 @@ mod tests {
             .list_error_events(Some("E_ENCODER_UNAVAILABLE"), 10)
             .unwrap();
         assert_eq!(recorded.len(), 1);
+    }
+
+    #[test]
+    fn test_runtime_encoder_fallback_records_notice_history_and_error_event() {
+        let dir = TempDir::new().unwrap();
+        let store = LocalStore::open(&dir.path().join("rt_fb.db")).unwrap();
+        let hw = sample_hw("31.0.15.4633", false);
+
+        // Remembered encoder starts first when fingerprint matches
+        persist_working_encoder(&store, &hw, VideoEncoder::H264Amf);
+        let plan = ordered_encoder_candidates(&store, &hw);
+        assert_eq!(plan.cached_encoder, Some(VideoEncoder::H264Amf));
+        assert!(!plan.fingerprint_changed);
+        assert_eq!(plan.candidates[0], VideoEncoder::H264Amf);
+
+        // Fingerprint change resets candidate order to top of lazy chain
+        let hw_updated = sample_hw("32.0.15.9999", false);
+        let plan_changed = ordered_encoder_candidates(&store, &hw_updated);
+        assert!(plan_changed.fingerprint_changed);
+        assert_eq!(plan_changed.candidates, VideoEncoder::ordered_chain());
+
+        // Early/init classification checks
+        let s4_fail = classify_encoder_stderr(
+            VideoEncoder::H264Nvenc,
+            Some(-22),
+            "[vost#0:0/h264_nvenc] Task finished with error code: -22",
+        );
+        assert!(is_early_or_init_encoder_failure(&s4_fail, 12.0));
+
+        let unknown_early = classify_encoder_stderr(VideoEncoder::H264Amf, Some(1), "boom");
+        assert!(is_early_or_init_encoder_failure(&unknown_early, 2.0));
+        assert!(!is_early_or_init_encoder_failure(&unknown_early, 18.0));
+
+        // Runtime fallback writes "Encoder X gagal, mencoba Y", error_events, and fallback history
+        let notice = record_runtime_encoder_fallback(
+            &store,
+            VideoEncoder::H264Amf,
+            Some(VideoEncoder::H264Mf),
+            &s4_fail,
+            Some("job-exp-1"),
+            "0.1.0",
+        )
+        .unwrap();
+        assert_eq!(notice, "Encoder h264_amf gagal, mencoba h264_mf");
+
+        let status = get_encoder_status(&store, &hw).unwrap();
+        assert_eq!(status.fallback_history.len(), 1);
+        assert_eq!(status.fallback_history[0].from, "h264_amf");
+        assert_eq!(status.fallback_history[0].to.as_deref(), Some("h264_mf"));
+
+        let events = store
+            .list_error_events(Some("E_RENDER_FAILED"), 10)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0]
+            .detail_redacted
+            .contains("Encoder h264_amf gagal, mencoba h264_mf"));
     }
 }
