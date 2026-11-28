@@ -2852,4 +2852,61 @@ mod tests {
         assert_eq!(loaded_comp.timeline[0].in_ms, 6_000);
         assert_eq!(loaded_comp.timeline[0].out_ms, 40_000);
     }
+
+    #[tokio::test]
+    async fn test_save_composition_crash_recovery_preserves_last_committed_state() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = security::ensure_workspace_with_root(tmp.path()).unwrap();
+        let store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        let in_use = InUseRegistry::new();
+
+        let src_rel = "cache/source_crash.mp4";
+        std::fs::create_dir_all(ws.join("cache")).unwrap();
+        std::fs::write(ws.join(src_rel), b"ORIG").unwrap();
+
+        let (proj, mut comp) = seed_editor_project(&ws, &store, src_rel, None);
+
+        // First committed edit (autosave succeeds)
+        comp.timeline[0].in_ms = 8_000;
+        comp.timeline[0].out_ms = 32_000;
+        if let crate::composition::CompositionLayout::Fill { ref mut crop } = comp.layout {
+            crop.x = 0.25;
+            crop.y = 0.1;
+            crop.w = 0.2;
+            crop.h = 0.6;
+        }
+        let saved = save_composition_inner(
+            &ws,
+            &store,
+            &proj.id,
+            &serde_json::to_string(&comp).unwrap(),
+            300,
+        )
+        .unwrap();
+
+        // Simulate crash mid-subsequent write: orphan .tmp file on disk + reopened DB handle
+        let proj_dir = ws.join("projects").join(&proj.id);
+        std::fs::write(proj_dir.join("composition.json.tmp"), b"{corrupt partial crash").unwrap();
+        drop(store);
+
+        let reopened_store = LocalStore::open(&ws.join("clipper.db")).unwrap();
+        let restored = resolve_project_media_inner(&ws, &reopened_store, &in_use, &proj.id, 300)
+            .await
+            .unwrap();
+        assert_eq!(
+            restored.composition_hash.as_deref(),
+            Some(saved.composition_hash.as_str())
+        );
+        let restored_comp: CompositionV1 =
+            serde_json::from_str(&restored.composition_json).unwrap();
+        assert_eq!(restored_comp.timeline[0].in_ms, 8_000);
+        assert_eq!(restored_comp.timeline[0].out_ms, 32_000);
+        match restored_comp.layout {
+            crate::composition::CompositionLayout::Fill { crop } => {
+                assert!((crop.x - 0.25).abs() < 1e-6);
+                assert!((crop.w - 0.2).abs() < 1e-6);
+            }
+            _ => panic!("Expected Fill layout"),
+        }
+    }
 }

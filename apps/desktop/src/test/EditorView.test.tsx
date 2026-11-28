@@ -616,4 +616,97 @@ describe('EditorView & EditorTimeline UI', () => {
     );
     expect(screen.getByTestId('filmstrip-status-note')).toHaveTextContent('Filmstrip dihentikan.');
   });
+
+  it('loops playback back to inMs when reaching outMs if loop selection is enabled, and continues when toggled off', async () => {
+    const user = userEvent.setup();
+    render(
+      <EditorView
+        locale="id"
+        project={makeProject()}
+        workspaceRoot={null}
+        onBackHome={vi.fn()}
+        onChangeRange={vi.fn()}
+        onOpenDiagnostics={vi.fn()}
+        onProjectUpdated={vi.fn()}
+      />
+    );
+
+    const video = (await screen.findByTestId('editor-video')) as HTMLVideoElement;
+    const loopBtn = screen.getByTestId('btn-loop-toggle');
+    expect(loopBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // Start playing inside [5000, 20000]
+    await user.click(screen.getByTestId('btn-play-pause'));
+    await act(async () => {
+      vfcCallback?.(100, { mediaTime: 10.0 });
+    });
+    expect(screen.getByTestId('editor-playhead-time')).toHaveTextContent('00:10.000');
+
+    // Reach outMs (20.000s) -> loops back to inMs (5.000s)
+    await act(async () => {
+      vfcCallback?.(200, { mediaTime: 20.1 });
+    });
+    expect(video.currentTime).toBeCloseTo(5.0, 2);
+    expect(screen.getByTestId('editor-playhead-time')).toHaveTextContent('00:05.000');
+
+    // Toggle loop OFF -> reaching 21.000s does NOT wrap back to 5.000s
+    await user.click(loopBtn);
+    expect(loopBtn).toHaveAttribute('aria-pressed', 'false');
+    await act(async () => {
+      vfcCallback?.(300, { mediaTime: 21.0 });
+    });
+    expect(screen.getByTestId('editor-playhead-time')).toHaveTextContent('00:21.000');
+  });
+
+  it('restores saved trim and zoomed crop on reopen and supports preview viewport pan/wheel and O shortcut', async () => {
+    const baseCrop = defaultCropRect(1920, 1080);
+    const savedComp = makeComposition({
+      timeline: [{ id: 'seg-1', sourceId: 'src-1', inMs: 7_500, outMs: 18_500 }],
+      layout: {
+        mode: 'fill',
+        crop: { x: 0.25, y: 0.25, w: baseCrop.w / 2, h: 0.5 },
+      },
+    });
+    vi.mocked(commands.getProjectMedia).mockResolvedValue({
+      status: 'ok',
+      data: makeMedia({
+        composition_json: JSON.stringify(savedComp),
+        composition_hash: 'hash-persisted-1',
+      }),
+    });
+
+    const { unmount } = render(
+      <EditorView
+        locale="id"
+        project={makeProject({ status: 'edited', composition_hash: 'hash-persisted-1' })}
+        workspaceRoot={null}
+        onBackHome={vi.fn()}
+        onChangeRange={vi.fn()}
+        onOpenDiagnostics={vi.fn()}
+        onProjectUpdated={vi.fn()}
+      />
+    );
+
+    // Reopen restores exact saved in/out and 2x crop zoom
+    expect(await screen.findByTestId('editor-in-time')).toHaveTextContent('00:07.500');
+    expect(screen.getByTestId('editor-out-time')).toHaveTextContent('00:18.500');
+    expect((screen.getByTestId('crop-zoom-slider') as HTMLInputElement).value).toBe('2');
+
+    // Pan directly on 9:16 preview viewport + wheel zoom
+    const viewport = screen.getByTestId('editor-preview-viewport');
+    fireEvent.mouseDown(viewport, { button: 0, clientX: 120, clientY: 200 });
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 220 });
+    fireEvent.mouseUp(window);
+    fireEvent.wheel(viewport, { deltaY: -100 });
+    expect(Number((screen.getByTestId('crop-zoom-slider') as HTMLInputElement).value)).toBeGreaterThan(2);
+
+    // O shortcut sets Out at current playhead after stepping +1s
+    fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyDown(window, { key: 'o' });
+    expect(screen.getByTestId('editor-out-time')).toHaveTextContent('00:08.500');
+
+    // Unmount simulates app closing cleanly / flushing dirty state
+    unmount();
+    expect(commands.saveComposition).toHaveBeenCalled();
+  });
 });
