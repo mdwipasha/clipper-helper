@@ -207,6 +207,28 @@ describe('cropMath (9:16 locked aspect, zoom 1x-3x, pan clamping, CSS parity)', 
     expect(safeFromNan.x).toBeGreaterThanOrEqual(0);
     expect(safeFromNan.w).toBeGreaterThan(0);
   });
+
+  it('matches the shared 5-case crop pixel parity table with Rust render.rs', () => {
+    const cases = [
+      { sw: 1920, sh: 1080, crop: { x: 0.341797, y: 0.0, w: 0.316406, h: 1.0 }, expW: 608, expH: 1080 },
+      { sw: 1920, sh: 1080, crop: { x: 0.420898, y: 0.25, w: 0.158203, h: 0.5 }, expW: 304, expH: 540 },
+      { sw: 1280, sh: 720, crop: { x: 0.341797, y: 0.0, w: 0.316406, h: 1.0 }, expW: 404, expH: 720 },
+      { sw: 1080, sh: 1920, crop: { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }, expW: 1080, expH: 1920 },
+      { sw: 1366, sh: 768, crop: { x: 0.341874, y: 0.0, w: 0.316252, h: 1.0 }, expW: 432, expH: 768 },
+    ];
+    for (const c of cases) {
+      const css = cropRectToCssTransform(c.crop, 1080, 1920, c.sw, c.sh);
+      const pxW = Math.round((c.crop.w * c.sw) / 2) * 2;
+      const pxH = Math.round((c.crop.h * c.sh) / 2) * 2;
+      expect(pxW).toBe(c.expW);
+      expect(pxH).toBe(c.expH);
+      // Viewport 1080x1920 maps to exact same normalized rect on uncropped video box
+      expect(1080 / css.videoWidthPx).toBeCloseTo(c.crop.w, 4);
+      expect(1920 / css.videoHeightPx).toBeCloseTo(c.crop.h, 4);
+      expect(-css.translateXPx / css.videoWidthPx).toBeCloseTo(c.crop.x, 4);
+      expect(-css.translateYPx / css.videoHeightPx).toBeCloseTo(c.crop.y, 4);
+    }
+  });
 });
 
 describe('editorState command pattern, coalescing, undo/redo limit & property invariants', () => {
